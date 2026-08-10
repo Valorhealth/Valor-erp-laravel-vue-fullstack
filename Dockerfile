@@ -18,7 +18,7 @@ RUN composer install \
     --optimize-autoloader \
     --ignore-platform-reqs
 
-FROM php:8.3-fpm-bookworm
+FROM php:8.4-fpm-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gettext-base \
@@ -55,6 +55,7 @@ COPY docker/entrypoint.sh /usr/local/bin/valor-entrypoint
 RUN chmod +x /usr/local/bin/valor-entrypoint \
     && rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf \
     && cd /app/backend \
+    && rm -f bootstrap/cache/*.php \
     && php artisan package:discover --ansi
 
 ENV APP_ENV=production \

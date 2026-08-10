@@ -7,6 +7,7 @@
 !**/.env.example
 backend/.secrets
 backend/vendor
+backend/bootstrap/cache/*.php
 backend/storage/app/private/*
 backend/storage/framework/cache/*
 backend/storage/framework/sessions/*
