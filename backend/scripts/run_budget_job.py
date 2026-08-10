@@ -4,28 +4,47 @@ import sys
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
+
+StatusReader = Callable[[], dict]
+StatusWriter = Callable[[dict], None]
+BeforeComplete = Callable[[dict], None]
 
 
 def atomic_json(path: Path, payload: dict) -> None:
-    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    payload = {**payload, "updated_at": datetime.now(timezone.utc).isoformat()}
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     os.replace(temporary, path)
 
 
-def run_job(config_path: Path) -> None:
+def run_job(
+    config_path: Path,
+    status_reader: StatusReader | None = None,
+    status_writer: StatusWriter | None = None,
+    before_complete: BeforeComplete | None = None,
+) -> None:
     config_path = config_path.resolve()
     config = json.loads(config_path.read_text(encoding="utf-8"))
     status_path = Path(config["status_path"])
 
-    def progress(percent: int, message: str) -> None:
+    def read_status() -> dict:
+        if status_reader is not None:
+            return status_reader()
         try:
-            current = json.loads(status_path.read_text(encoding="utf-8"))
+            return json.loads(status_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            current = {}
-        if current.get("status") == "cancelled":
+            return {}
+
+    def write_status(payload: dict) -> None:
+        atomic_json(status_path, payload)
+        if status_writer is not None:
+            status_writer(payload)
+
+    def progress(percent: int, message: str) -> None:
+        if read_status().get("status") == "cancelled":
             raise RuntimeError("งานนี้ถูกยกเลิกเพื่อเริ่มงานใหม่")
-        atomic_json(status_path, {
+        write_status({
             "status": "processing",
             "progress": max(1, min(int(percent), 99)),
             "message": message,
@@ -58,7 +77,10 @@ def run_job(config_path: Path) -> None:
         sheet_names = list(workbook.sheetnames)
         workbook.close()
 
-        atomic_json(status_path, {
+        if before_complete is not None:
+            before_complete(config)
+
+        write_status({
             "status": "completed",
             "progress": 100,
             "message": "วิเคราะห์เสร็จสมบูรณ์",
@@ -71,15 +93,11 @@ def run_job(config_path: Path) -> None:
     except Exception as exception:
         error_path = status_path.with_name("worker-error.log")
         error_path.write_text(traceback.format_exc(), encoding="utf-8")
-        current_status = {}
-        try:
-            current_status = json.loads(status_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            pass
+        current_status = read_status()
         was_cancelled = current_status.get("status") == "cancelled"
-        atomic_json(status_path, {
+        write_status({
             "status": "cancelled" if was_cancelled else "failed",
-            "progress": int(current_status.get("progress", 100)),
+            "progress": int(current_status.get("progress", 0)),
             "message": "งานถูกยกเลิก" if was_cancelled else "วิเคราะห์ไม่สำเร็จ",
             "error": str(exception)[:2000],
         })

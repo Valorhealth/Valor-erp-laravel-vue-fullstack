@@ -75,7 +75,7 @@ class RoleAccessTest extends TestCase
     public function each_role_has_the_exact_streamlit_menu_order(): void
     {
         $this->assertSame(
-            ['สร้างใบเสนอราคา/เปิดบิลใหม่', 'แก้ไขบิล/Draft', 'ใบกำกับภาษี/ใบเสนอราคา', 'ประวัติการเปิดบิลของฉัน', 'ติดตามอนุมัติวงเงิน', 'ตารางงาน'],
+            ['สร้างใบเสนอราคา/เปิดบิลใหม่', 'แก้ไขบิล/Draft(ใบเสนอราคา)', 'ใบเสนอราคา', 'ประวัติการเปิดบิลของฉัน', 'ติดตามอนุมัติวงเงิน', 'ตารางงาน'],
             array_column(RoleAccess::detailsForRole('Sale')['menu'], 'label'),
         );
         $this->assertSame(

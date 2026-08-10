@@ -1,6 +1,7 @@
 import axios from 'axios'
 
-const apiOrigin = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000'
+const apiOrigin = import.meta.env.VITE_API_URL
+  ?? (import.meta.env.PROD ? window.location.origin : 'http://127.0.0.1:8000')
 
 export const api = axios.create({
   baseURL: apiOrigin,

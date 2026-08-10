@@ -2,6 +2,7 @@ import os
 import re
 from functools import lru_cache
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -15,6 +16,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_TAGS_URL = os.getenv("OLLAMA_TAGS_URL", "http://localhost:11434/api/tags")
 DEFAULT_OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))
 MODEL_NAME = os.getenv("REDBOOK_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+EMBEDDING_BACKEND = os.getenv("REDBOOK_EMBEDDING_BACKEND", "transformer").strip().lower()
 
 REDBOOK_OUTPUT_COLUMNS = [
     "agc_name",
@@ -200,22 +202,22 @@ def make_unique_columns(columns):
 
 
 def read_redbook_excel(input_path):
-    excel = pd.ExcelFile(input_path)
     best_df = None
     best_score = -1
 
-    for sheet_name in excel.sheet_names:
-        candidate = read_redbook_sheet(input_path, sheet_name)
-        redbook_cols = count_redbook_columns(candidate.columns)
-        row_count = len(candidate.dropna(how="all"))
-        is_data_dictionary = {"LIST", "FIELD", "DESCRIPTION"}.issubset(set(candidate.columns))
-        score = (redbook_cols * 1000) + min(row_count, 999)
-        if is_data_dictionary:
-            score -= 5000
+    with pd.ExcelFile(input_path) as excel:
+        for sheet_name in excel.sheet_names:
+            candidate = read_redbook_sheet(input_path, sheet_name)
+            redbook_cols = count_redbook_columns(candidate.columns)
+            row_count = len(candidate.dropna(how="all"))
+            is_data_dictionary = {"LIST", "FIELD", "DESCRIPTION"}.issubset(set(candidate.columns))
+            score = (redbook_cols * 1000) + min(row_count, 999)
+            if is_data_dictionary:
+                score -= 5000
 
-        if score > best_score:
-            best_score = score
-            best_df = candidate
+            if score > best_score:
+                best_score = score
+                best_df = candidate
 
     return best_df if best_df is not None else normalize_columns(pd.read_excel(input_path))
 
@@ -379,6 +381,13 @@ def score_budget_items(df, product_desc, progress_callback=None):
 
 
 def score_budget_items_from_embeddings(df, product_desc, vector_model, util, gov_embeds):
+    if util is None:
+        product_embed = vector_model.transform([product_desc])
+        cosine_scores = (gov_embeds @ product_embed.T).toarray().ravel()
+        scored = df.copy()
+        scored["match_score"] = [round(float(score), 4) for score in cosine_scores]
+        return scored
+
     product_embed = vector_model.encode(product_desc, convert_to_tensor=True)
     cosine_scores = util.cos_sim(product_embed, gov_embeds)[0]
 
@@ -480,9 +489,6 @@ def start_analysis_pipeline(
     if df_gov.empty:
         raise ValueError("ไม่พบข้อความในไฟล์ Excel ที่สามารถนำมาวิเคราะห์ได้")
 
-    report_progress(progress_callback, 25, "กำลังโหลดโมเดล Vector Search")
-    vector_model, util = get_vector_tools()
-
     context_codes, unique_contexts = pd.factorize(df_gov["context"].fillna("").astype(str), sort=False)
     unique_contexts = unique_contexts.tolist()
     report_progress(
@@ -491,24 +497,63 @@ def start_analysis_pipeline(
         f"เตรียม Vector embeddings {len(unique_contexts):,} context จากข้อมูล {len(df_gov):,} แถว",
     )
 
-    import torch
+    if EMBEDDING_BACKEND == "tfidf":
+        import pickle
+        from sklearn.feature_extraction.text import TfidfVectorizer
 
-    unique_embeds = None
-    if embedding_cache_path and os.path.isfile(embedding_cache_path):
-        cached = torch.load(embedding_cache_path, map_location=vector_model.device, weights_only=True)
-        if len(cached) == len(unique_contexts):
-            unique_embeds = cached
-            report_progress(progress_callback, 60, "ใช้ Vector cache ของไฟล์นี้สำเร็จ")
+        vector_model = None
+        unique_embeds = None
+        if embedding_cache_path and os.path.isfile(embedding_cache_path):
+            try:
+                with open(embedding_cache_path, "rb") as cache_file:
+                    cached = pickle.load(cache_file)
+                if cached.get("context_count") == len(unique_contexts):
+                    vector_model = cached["vectorizer"]
+                    unique_embeds = cached["embeddings"]
+                    report_progress(progress_callback, 60, "ใช้ TF-IDF Vector cache ของไฟล์นี้สำเร็จ")
+            except (OSError, ValueError, KeyError, pickle.UnpicklingError):
+                vector_model = None
+                unique_embeds = None
 
-    if unique_embeds is None:
-        unique_embeds = encode_contexts_with_progress(vector_model, unique_contexts, progress_callback)
-        if embedding_cache_path:
-            os.makedirs(os.path.dirname(embedding_cache_path), exist_ok=True)
-            temporary_cache = f"{embedding_cache_path}.tmp"
-            torch.save(unique_embeds.cpu(), temporary_cache)
-            os.replace(temporary_cache, embedding_cache_path)
+        if unique_embeds is None:
+            report_progress(progress_callback, 35, "กำลังสร้าง TF-IDF Vector Search แบบประหยัดหน่วยความจำ")
+            vector_model = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 5), dtype=np.float32)
+            unique_embeds = vector_model.fit_transform(unique_contexts)
+            report_progress(progress_callback, 60, f"สร้าง TF-IDF vectors แล้ว {len(unique_contexts):,} context")
+            if embedding_cache_path:
+                os.makedirs(os.path.dirname(embedding_cache_path), exist_ok=True)
+                temporary_cache = f"{embedding_cache_path}.tmp"
+                with open(temporary_cache, "wb") as cache_file:
+                    pickle.dump({
+                        "context_count": len(unique_contexts),
+                        "vectorizer": vector_model,
+                        "embeddings": unique_embeds,
+                    }, cache_file, protocol=pickle.HIGHEST_PROTOCOL)
+                os.replace(temporary_cache, embedding_cache_path)
 
-    gov_embeds = unique_embeds[torch.as_tensor(context_codes, dtype=torch.long, device=unique_embeds.device)]
+        util = None
+        gov_embeds = unique_embeds[context_codes]
+    else:
+        report_progress(progress_callback, 25, "กำลังโหลดโมเดล Vector Search")
+        vector_model, util = get_vector_tools()
+        import torch
+
+        unique_embeds = None
+        if embedding_cache_path and os.path.isfile(embedding_cache_path):
+            cached = torch.load(embedding_cache_path, map_location=vector_model.device, weights_only=True)
+            if len(cached) == len(unique_contexts):
+                unique_embeds = cached
+                report_progress(progress_callback, 60, "ใช้ Vector cache ของไฟล์นี้สำเร็จ")
+
+        if unique_embeds is None:
+            unique_embeds = encode_contexts_with_progress(vector_model, unique_contexts, progress_callback)
+            if embedding_cache_path:
+                os.makedirs(os.path.dirname(embedding_cache_path), exist_ok=True)
+                temporary_cache = f"{embedding_cache_path}.tmp"
+                torch.save(unique_embeds.cpu(), temporary_cache)
+                os.replace(temporary_cache, embedding_cache_path)
+
+        gov_embeds = unique_embeds[torch.as_tensor(context_codes, dtype=torch.long, device=unique_embeds.device)]
 
     missing_model_message = None
     if use_ollama:

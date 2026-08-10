@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
 class PasswordResetController extends Controller
@@ -21,7 +22,7 @@ class PasswordResetController extends Controller
         if (! $user) {
             throw ValidationException::withMessages(['username' => 'Username หรือ Email ไม่ถูกต้อง']);
         }
-        $user->forceFill(['password_hash' => hash('sha256', $data['password'])])->save();
+        $user->forceFill(['password_hash' => Hash::make($data['password'])])->save();
 
         return response()->json(['message' => 'เปลี่ยนรหัสผ่านสำเร็จ']);
     }

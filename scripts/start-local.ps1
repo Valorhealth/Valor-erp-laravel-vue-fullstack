@@ -78,7 +78,7 @@ if (-not $budgetWorkerRunning) {
     $budgetWorker = Start-Process -FilePath $pythonPath `
         -ArgumentList @(
             "`"$(Join-Path $root 'backend\scripts\budget_worker.py')`"",
-            "`"$(Join-Path $root 'backend\storage\app\private\budget')`""
+            "`"$(Join-Path $root 'backend\storage\app\private')`""
         ) `
         -WorkingDirectory (Join-Path $root 'backend') `
         -WindowStyle Hidden `

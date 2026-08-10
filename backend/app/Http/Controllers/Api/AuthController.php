@@ -21,7 +21,7 @@ class AuthController extends Controller
         $credentials = $request->validated();
         $user = User::query()->where('username', $credentials['username'])->first();
         $authenticated = $user !== null
-            && $verifier->verify($credentials['password'], (string) $user->password_hash);
+            && $verifier->verifyAndUpgrade($user, $credentials['password']);
 
         $this->logAttempt($credentials['username'], $authenticated ? 'Success' : 'Failed');
 

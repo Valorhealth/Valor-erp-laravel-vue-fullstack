@@ -1,0 +1,38 @@
+server {
+    listen ${PORT};
+    server_name _;
+    root /app/frontend/dist;
+    index index.html;
+
+    client_max_body_size 110m;
+
+    location = /up {
+        try_files "" @laravel;
+    }
+
+    location ^~ /api/ {
+        try_files "" @laravel;
+    }
+
+    location ^~ /sanctum/ {
+        try_files "" @laravel;
+    }
+
+    location @laravel {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /app/backend/public/index.php;
+        fastcgi_param SCRIPT_NAME /index.php;
+        fastcgi_param HTTP_PROXY "";
+        fastcgi_pass 127.0.0.1:9000;
+        fastcgi_read_timeout 600s;
+        fastcgi_send_timeout 600s;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location ~ \.php$ {
+        return 404;
+    }
+}

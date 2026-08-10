@@ -3,31 +3,34 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\Budget\BudgetStorage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use Throwable;
 
 class BudgetAnalysisController extends Controller
 {
+    public function __construct(private readonly BudgetStorage $storage) {}
+
     public function models(): JsonResponse
     {
         try {
-            $response = Http::timeout(3)->get((string) config('services.budget.ollama_tags_url', 'http://127.0.0.1:11434/api/tags'))->throw();
+            $response = Http::timeout(3)
+                ->get((string) config('services.budget.ollama_tags_url', 'http://127.0.0.1:11434/api/tags'))
+                ->throw();
             $models = collect($response->json('models', []))->pluck('name')->filter()->values();
 
             return response()->json([
                 'data' => $models,
                 'ollama' => [
                     'available' => true,
-                    'message' => $models->isEmpty()
-                        ? 'Ollama เปิดอยู่ แต่ยังไม่มีโมเดลในเครื่อง'
-                        : 'Ollama พร้อมใช้งาน',
+                    'message' => $models->isEmpty() ? 'Ollama เปิดอยู่ แต่ยังไม่มีโมเดลในเครื่อง' : 'Ollama พร้อมใช้งาน',
                 ],
             ]);
         } catch (Throwable $exception) {
@@ -37,7 +40,7 @@ class BudgetAnalysisController extends Controller
                 'data' => [],
                 'ollama' => [
                     'available' => false,
-                    'message' => 'Ollama ยังไม่เปิดใช้งาน ระบบจะวิเคราะห์ด้วย Vector Search โดยไม่ใช้เหตุผล AI',
+                    'message' => 'Ollama ยังไม่พร้อม ระบบจะวิเคราะห์ด้วย Vector Search โดยไม่ใช้เหตุผล AI',
                 ],
             ]);
         }
@@ -54,53 +57,56 @@ class BudgetAnalysisController extends Controller
             'ollama_model' => ['required', 'string', 'max:255'],
             'ollama_timeout' => ['required', 'integer', 'between:30,600'],
         ], [
-            'file.uploaded' => 'อัปโหลดไฟล์ Excel ไม่สำเร็จ กรุณาเปิดระบบใหม่ด้วย scripts/start-local.ps1 แล้วเลือกไฟล์อีกครั้ง',
+            'file.uploaded' => 'อัปโหลดไฟล์ Excel ไม่สำเร็จ กรุณาเลือกไฟล์อีกครั้ง',
             'file.mimes' => 'ไฟล์ที่เลือกต้องเป็น Excel นามสกุล .xlsx',
             'file.max' => 'ไฟล์ Excel ต้องมีขนาดไม่เกิน 100 MB',
         ]);
 
-        $this->cancelActiveAnalyses($request);
+        $userId = $request->user()->getAuthIdentifier();
+        $this->cancelActiveAnalyses($userId);
         $analysisId = (string) Str::uuid();
-        $directory = $this->analysisDirectory($request, $analysisId);
-        File::ensureDirectoryExists($directory);
-        $inputPath = $directory.DIRECTORY_SEPARATOR.'input.xlsx';
-        $outputPath = $directory.DIRECTORY_SEPARATOR.'result.xlsx';
-        $statusPath = $directory.DIRECTORY_SEPARATOR.'status.json';
-        $configPath = $directory.DIRECTORY_SEPARATOR.'job.json';
+        $inputKey = $this->storage->key($userId, $analysisId, 'input.xlsx');
+        $statusKey = $this->storage->key($userId, $analysisId, 'status.json');
+        $jobKey = $this->storage->key($userId, $analysisId, 'job.json');
+        $outputKey = $this->storage->key($userId, $analysisId, 'result.xlsx');
+        $embeddingBackend = (string) config('services.budget.embedding_backend', 'transformer');
+        $cacheKey = 'budget-cache/'.hash_file('sha256', $data['file']->getRealPath()).'.'.$embeddingBackend.'.cache';
+        $queueKey = "budget-queue/{$userId}/{$analysisId}.json";
 
         try {
-            $data['file']->move($directory, 'input.xlsx');
-
-            File::put($statusPath, json_encode([
+            $this->storage->putUploadedFile($inputKey, $data['file']);
+            $this->storage->putJson($statusKey, [
                 'status' => 'queued',
                 'progress' => 1,
-                'message' => 'รับไฟล์แล้ว กำลังเริ่มระบบวิเคราะห์',
+                'message' => 'รับไฟล์แล้ว กำลังรอ Worker เริ่มวิเคราะห์',
                 'updated_at' => now()->toIso8601String(),
-            ], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
-            File::put($configPath, json_encode([
-                'input_path' => $inputPath,
-                'output_path' => $outputPath,
-                'status_path' => $statusPath,
+            ]);
+            $this->storage->putJson($jobKey, [
+                'input_key' => $inputKey,
+                'output_key' => $outputKey,
+                'status_key' => $statusKey,
+                'embedding_cache_key' => $cacheKey,
                 'product_desc' => trim($data['product_desc']),
                 'score_threshold' => (float) $data['score_threshold'],
                 'max_ai_rows' => (int) $data['max_ai_rows'],
                 'ollama_model' => trim($data['ollama_model']),
                 'use_ollama' => (bool) $data['use_ollama'],
                 'ollama_timeout' => (int) $data['ollama_timeout'],
-                'embedding_cache_path' => storage_path(
-                    'app/private/budget-cache/'.hash_file('sha256', $inputPath).'.pt'
-                ),
-            ], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
-
+            ]);
+            $this->storage->putJson($queueKey, [
+                'job_key' => $jobKey,
+                'status_key' => $statusKey,
+            ]);
         } catch (Throwable $exception) {
-            File::deleteDirectory($directory);
-            Log::error('Budget analysis failed unexpectedly', [
-                'type' => $exception::class,
-                'message' => $exception->getMessage(),
-                'python' => config('services.budget.python'),
+            $this->storage->deleteDirectory($this->storage->analysisPrefix($userId, $analysisId));
+            $this->storage->delete($queueKey);
+            Log::error('Budget analysis could not be queued.', [
+                'analysis_id' => $analysisId,
+                'storage_disk' => config('services.budget.storage_disk'),
+                'exception' => $exception,
             ]);
             throw ValidationException::withMessages([
-                'analysis' => 'วิเคราะห์ไม่สำเร็จ: '.Str::limit($exception->getMessage(), 1000),
+                'analysis' => 'บันทึกงานวิเคราะห์ไม่สำเร็จ: '.Str::limit($exception->getMessage(), 1000),
             ]);
         }
 
@@ -108,20 +114,19 @@ class BudgetAnalysisController extends Controller
             'analysis_id' => $analysisId,
             'status' => 'queued',
             'progress' => 1,
-            'message' => 'รับไฟล์แล้ว กำลังเริ่มระบบวิเคราะห์',
+            'message' => 'รับไฟล์แล้ว กำลังรอ Worker เริ่มวิเคราะห์',
         ]], 202);
     }
 
     public function status(Request $request, string $analysisId): JsonResponse
     {
-        abort_unless(Str::isUuid($analysisId), 404);
-        $path = $this->analysisDirectory($request, $analysisId).DIRECTORY_SEPARATOR.'status.json';
-        abort_unless(File::exists($path), 404, 'ไม่พบงานวิเคราะห์นี้');
+        $key = $this->ownedKey($request, $analysisId, 'status.json');
+        abort_unless($this->storage->exists($key), 404, 'ไม่พบงานวิเคราะห์นี้');
 
         try {
-            $status = json_decode(File::get($path), true, flags: JSON_THROW_ON_ERROR);
+            $status = $this->storage->json($key);
         } catch (Throwable $exception) {
-            Log::warning('Budget status file is temporarily unreadable', [
+            Log::warning('Budget status is temporarily unreadable.', [
                 'analysis_id' => $analysisId,
                 'message' => $exception->getMessage(),
             ]);
@@ -142,80 +147,85 @@ class BudgetAnalysisController extends Controller
     public function preview(Request $request, string $analysisId): JsonResponse
     {
         $data = $request->validate(['sheet' => ['required', 'string', 'max:255']]);
-        $path = $this->resultPath($request, $analysisId);
-        abort_unless(File::exists($path), 404, 'ไม่พบไฟล์ผลลัพธ์');
-        $reader = IOFactory::createReaderForFile($path);
-        $reader->setReadDataOnly(true);
-        $workbook = $reader->load($path);
-        abort_unless(in_array($data['sheet'], $workbook->getSheetNames(), true), 404, 'ไม่พบ Sheet ที่เลือก');
-        $preview = array_slice($workbook->getSheetByName($data['sheet'])->toArray(null, true, true, false), 0, 50);
-        $workbook->disconnectWorksheets();
+        $key = $this->ownedKey($request, $analysisId, 'result.xlsx');
+        abort_unless($this->storage->exists($key), 404, 'ไม่พบไฟล์ผลลัพธ์');
+        $path = $this->storage->temporaryCopy($key, '.xlsx');
+
+        try {
+            $reader = IOFactory::createReaderForFile($path);
+            $reader->setReadDataOnly(true);
+            $workbook = $reader->load($path);
+            abort_unless(in_array($data['sheet'], $workbook->getSheetNames(), true), 404, 'ไม่พบ Sheet ที่เลือก');
+            $preview = array_slice($workbook->getSheetByName($data['sheet'])->toArray(null, true, true, false), 0, 50);
+            $workbook->disconnectWorksheets();
+        } finally {
+            @unlink($path);
+        }
 
         return response()->json(['data' => ['sheet' => $data['sheet'], 'preview' => $preview]]);
     }
 
-    public function download(Request $request, string $analysisId): mixed
+    public function download(Request $request, string $analysisId): StreamedResponse
     {
-        $path = $this->resultPath($request, $analysisId);
-        abort_unless(File::exists($path), 404, 'ไม่พบไฟล์ผลลัพธ์');
+        $key = $this->ownedKey($request, $analysisId, 'result.xlsx');
+        abort_unless($this->storage->exists($key), 404, 'ไม่พบไฟล์ผลลัพธ์');
 
-        return response()->download($path, 'สรุปงบประมาณรัฐบาลที่เข้ากับสินค้า.xlsx')->deleteFileAfterSend(false);
+        return response()->streamDownload(function () use ($key): void {
+            $stream = $this->storage->disk()->readStream($key);
+            abort_if($stream === false, 404, 'ไม่สามารถอ่านไฟล์ผลลัพธ์ได้');
+            try {
+                fpassthru($stream);
+            } finally {
+                fclose($stream);
+            }
+        }, 'สรุปงบประมาณรัฐบาลที่เข้ากับสินค้า.xlsx', [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ]);
     }
 
     public function clear(Request $request): JsonResponse
     {
-        $directory = storage_path('app/private/budget/'.$request->user()->getAuthIdentifier());
-        if (File::exists($directory)) {
-            File::deleteDirectory($directory);
-        }
+        $this->storage->deleteDirectory('budget/'.$request->user()->getAuthIdentifier());
+        $this->storage->deleteDirectory('budget-queue/'.$request->user()->getAuthIdentifier());
 
         return response()->json(['data' => ['cleared' => true]]);
     }
 
-    private function resultPath(Request $request, string $analysisId): string
+    private function ownedKey(Request $request, string $analysisId, string $filename): string
     {
         abort_unless(Str::isUuid($analysisId), 404);
 
-        return $this->analysisDirectory($request, $analysisId).DIRECTORY_SEPARATOR.'result.xlsx';
+        return $this->storage->key($request->user()->getAuthIdentifier(), $analysisId, $filename);
     }
 
-    private function analysisDirectory(Request $request, string $analysisId): string
+    private function cancelActiveAnalyses(int|string $userId): void
     {
-        return storage_path('app/private/budget/'.$request->user()->getAuthIdentifier().DIRECTORY_SEPARATOR.$analysisId);
-    }
-
-    private function cancelActiveAnalyses(Request $request): void
-    {
-        $userDirectory = storage_path('app/private/budget/'.$request->user()->getAuthIdentifier());
-        if (! File::isDirectory($userDirectory)) {
-            return;
-        }
-
-        foreach (File::directories($userDirectory) as $directory) {
-            $statusPath = $directory.DIRECTORY_SEPARATOR.'status.json';
-            if (! File::exists($statusPath)) {
+        foreach ($this->storage->files('budget/'.$userId) as $key) {
+            if (! str_ends_with($key, '/status.json')) {
                 continue;
             }
 
             try {
-                $status = json_decode(File::get($statusPath), true, flags: JSON_THROW_ON_ERROR);
+                $status = $this->storage->json($key);
                 if (! in_array($status['status'] ?? null, ['queued', 'processing'], true)) {
                     continue;
                 }
-                File::put($statusPath, json_encode([
+
+                $this->storage->putJson($key, [
                     'status' => 'cancelled',
                     'progress' => (int) ($status['progress'] ?? 0),
-                    'message' => 'ยกเลิกงานเดิมเพื่อเริ่มงานใหม่',
+                    'message' => 'ยกเลิกงานเดิมเพื่อเริ่มงานวิเคราะห์ใหม่',
                     'error' => 'งานนี้ถูกแทนที่ด้วยคำสั่งวิเคราะห์ครั้งล่าสุด',
                     'updated_at' => now()->toIso8601String(),
-                ], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+                ]);
+                $analysisId = basename(dirname($key));
+                $this->storage->delete("budget-queue/{$userId}/{$analysisId}.json");
             } catch (Throwable $exception) {
-                Log::warning('Unable to cancel previous budget job', [
-                    'path' => $statusPath,
+                Log::warning('Unable to cancel a previous budget job.', [
+                    'key' => $key,
                     'message' => $exception->getMessage(),
                 ]);
             }
         }
     }
-
 }

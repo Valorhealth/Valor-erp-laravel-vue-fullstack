@@ -2,13 +2,11 @@
 
 namespace App\Services\Notifications;
 
-use App\Mail\WorkflowNotificationMail;
 use App\Models\BillingRecord;
 use App\Models\CreditRequest;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Throwable;
 
 final class WorkflowEmailNotifier
@@ -16,6 +14,7 @@ final class WorkflowEmailNotifier
     public function __construct(
         private readonly AuditLogger $auditLogger,
         private readonly WorkflowRecipientResolver $recipients,
+        private readonly WorkflowMessageSender $messageSender,
     ) {}
 
     public function billSubmitted(BillingRecord $bill, User $actor): void
@@ -208,7 +207,7 @@ final class WorkflowEmailNotifier
                 throw new \RuntimeException('ไม่พบบัญชีผู้รับที่มีอีเมลสำหรับ Workflow นี้');
             }
 
-            Mail::to($recipients)->send(new WorkflowNotificationMail($subject, $body));
+            $this->messageSender->send($recipients, $subject, $body);
             $successful = true;
         } catch (Throwable $exception) {
             $error = $exception->getMessage();

@@ -8,6 +8,7 @@ use App\Models\CreditRequest;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
 use App\Services\Notifications\WorkflowEmailNotifier;
+use App\Services\Notifications\WorkflowMessageSender;
 use App\Services\Notifications\WorkflowRecipientResolver;
 use Illuminate\Support\Facades\Mail;
 use Mockery;
@@ -55,7 +56,7 @@ class WorkflowEmailNotifierTest extends TestCase
         $recipients->shouldReceive('forUsername')->with('sale-user')->twice()->andReturn([
             'sale-user@gmail.com',
         ]);
-        $notifier = new WorkflowEmailNotifier(app(AuditLogger::class), $recipients);
+        $notifier = new WorkflowEmailNotifier(app(AuditLogger::class), $recipients, app(WorkflowMessageSender::class));
 
         $notifier->billSubmitted($bill, $actor);
         $notifier->billApproved($bill, $actor);

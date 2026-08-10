@@ -7,6 +7,7 @@ use App\Http\Resources\UserResource;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -36,7 +37,7 @@ class UserManagementController extends Controller
         $data = $request->validate($this->rules());
         $user = User::query()->create([
             ...collect($data)->except(['password', 'password_confirmation'])->all(),
-            'password_hash' => hash('sha256', $data['password']),
+            'password_hash' => Hash::make($data['password']),
             'created_at' => now(),
         ]);
 
@@ -48,7 +49,7 @@ class UserManagementController extends Controller
         $data = $request->validate($this->rules($user));
         $updates = collect($data)->except(['password', 'password_confirmation'])->all();
         if (($data['password'] ?? '') !== '') {
-            $updates['password_hash'] = hash('sha256', $data['password']);
+            $updates['password_hash'] = Hash::make($data['password']);
         }
         $user->fill($updates)->save();
 

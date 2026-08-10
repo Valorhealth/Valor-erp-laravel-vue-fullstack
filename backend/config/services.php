@@ -38,6 +38,8 @@ return [
     'budget' => [
         'python' => env('PYTHON_BINARY', 'python'),
         'ollama_tags_url' => env('OLLAMA_TAGS_URL', 'http://127.0.0.1:11434/api/tags'),
+        'storage_disk' => env('BUDGET_STORAGE_DISK', 'local'),
+        'embedding_backend' => env('REDBOOK_EMBEDDING_BACKEND', 'transformer'),
     ],
 
 ];

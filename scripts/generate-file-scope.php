@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 $root = dirname(__DIR__);
 $outputPath = $root.DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'FILE_SCOPE_ALL_FILES.md';
-$folders = ['backend', 'frontend', 'database', 'docs', 'scripts'];
+$folders = ['backend', 'frontend', 'database', 'docs', 'scripts', 'docker'];
 $groups = ['root' => []];
 
 foreach (new DirectoryIterator($root) as $entry) {
@@ -44,8 +44,12 @@ $isImportant = static function (string $path): bool {
 
     if (in_array($normalized, [
         'README.md',
+        'Dockerfile',
+        'render.yaml',
         'backend/.env.example',
         'backend/composer.json',
+        'backend/requirements-budget.txt',
+        'backend/requirements-budget-local-ai.txt',
         'backend/bootstrap/app.php',
         'backend/config/services.php',
         'frontend/package.json',
@@ -57,6 +61,9 @@ $isImportant = static function (string $path): bool {
         'scripts/local-api-router.php',
         'scripts/start-local.ps1',
         'scripts/stop-local.ps1',
+        'docker/entrypoint.sh',
+        'docker/nginx.conf.template',
+        'docker/supervisord.conf',
     ], true)) {
         return true;
     }
@@ -75,6 +82,14 @@ $describe = static function (string $path): string {
 
     if ($normalized === '.gitignore') return 'กำหนดไฟล์และโฟลเดอร์ที่ Git ไม่ต้องติดตาม';
     if ($normalized === 'README.md') return 'คู่มือภาพรวม การติดตั้ง และการเปิดใช้งานโปรเจกต์';
+    if ($normalized === 'Dockerfile') return '⭐ Image หลักสำหรับ build Vue, Laravel, PHP, Nginx และ Python Worker บน Render';
+    if ($normalized === 'render.yaml') return '⭐ Blueprint กำหนด Render Web Service และ Environment Variables';
+    if ($normalized === '.dockerignore') return 'กำหนดไฟล์ที่ไม่ส่งเข้า Docker build เพื่อป้องกัน secret และลดขนาด image';
+    if ($normalized === 'backend/requirements-budget.txt') return '⭐ รายการ Python dependencies ของ Budget Worker และ Receipt OCR';
+    if ($normalized === 'backend/requirements-budget-local-ai.txt') return '⭐ Python dependencies เพิ่มเติมสำหรับ Sentence Transformer บนเครื่อง Local';
+    if ($normalized === 'docker/entrypoint.sh') return '⭐ เตรียม Laravel/Nginx แล้วเริ่มทุก Process ใน Container';
+    if ($normalized === 'docker/nginx.conf.template') return '⭐ ตั้งค่า Nginx ให้ Vue และ Laravel API ใช้ domain เดียวกัน';
+    if ($normalized === 'docker/supervisord.conf') return '⭐ ดูแล PHP-FPM, Nginx และ Budget Worker ให้ทำงานพร้อมกัน';
     if (str_starts_with($normalized, 'backend/vendor/')) return 'ไฟล์ dependency PHP จาก Composer; ไม่ควรแก้โดยตรงและสร้างใหม่ได้จาก composer install';
     if (str_starts_with($normalized, 'frontend/node_modules/')) return 'ไฟล์ dependency Frontend จาก pnpm; ไม่ควรแก้โดยตรงและสร้างใหม่ได้จาก pnpm install';
     if (str_starts_with($normalized, 'frontend/dist/')) return 'ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build';
@@ -147,12 +162,16 @@ foreach ($groups as $files) {
     }
 }
 $generatedAt = date('c');
+$folderCounts = implode(', ', array_map(
+    static fn (string $group): string => "{$group} {$counts[$group]}",
+    array_keys($counts),
+));
 $lines = [
     '# หน้าที่ของทุกไฟล์ใน Valor ERP',
     '',
     "สร้างอัตโนมัติเมื่อ {$generatedAt} โดย `scripts/generate-file-scope.php`",
     '',
-    "รวมทั้งหมด **{$total} ไฟล์**: root {$counts['root']}, backend {$counts['backend']}, frontend {$counts['frontend']}, database {$counts['database']}, docs {$counts['docs']}, scripts {$counts['scripts']}",
+    "รวมทั้งหมด **{$total} ไฟล์**: {$folderCounts}",
     '',
     '> รายการนี้รวม `backend/vendor`, `frontend/node_modules`, build output, cache, log และไฟล์ runtime เพื่อให้ครบทุกไฟล์จริงในโฟลเดอร์ที่ขอ แต่ไฟล์ dependency/generated ระบุไว้ชัดว่าไม่ควรแก้โดยตรง ส่วน `.git`, `.tools`, `.runtime`, `.vscode` อยู่นอกห้าโฟลเดอร์งานและไม่ใช่ source scope จึงไม่รวม',
 ];

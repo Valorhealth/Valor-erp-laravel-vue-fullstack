@@ -1,53 +1,114 @@
 import argparse
 import json
 import sys
+import tempfile
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
-
-def read_status(path: Path) -> dict:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+from budget_storage import make_budget_store
 
 
-def write_status(path: Path, payload: dict) -> None:
-    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(path)
-
-
-def find_next_job(root: Path) -> Path | None:
+def find_next_job(store) -> tuple[str, str, str] | None:
     candidates = []
-    for status_path in root.glob("*/*/status.json"):
-        status = read_status(status_path)
+    for queue_key in store.list_queue_keys():
+        try:
+            queued_job = store.read_json(queue_key)
+            job_key = queued_job["job_key"]
+            status_key = queued_job["status_key"]
+            status = store.read_json(status_key)
+        except Exception:
+            continue
         if status.get("status") == "queued":
-            candidates.append((status_path.stat().st_mtime, status_path.parent / "job.json", status_path))
+            if store.exists(job_key):
+                candidates.append((status.get("updated_at", ""), queue_key, job_key, status_key))
+        elif status.get("status") in {"completed", "failed", "cancelled"}:
+            store.delete(queue_key)
 
-    for _, config_path, status_path in sorted(candidates):
-        if config_path.is_file():
-            write_status(status_path, {
-                "status": "processing",
-                "progress": max(2, int(read_status(status_path).get("progress", 1))),
-                "message": "Worker รับงานแล้ว กำลังเตรียมวิเคราะห์",
+    if not candidates:
+        return None
+
+    _, queue_key, job_key, status_key = sorted(candidates)[0]
+    current = store.read_json(status_key)
+    attempts = int(current.get("attempts", 0))
+    if attempts >= 3:
+        store.write_json(status_key, {
+            "status": "failed",
+            "progress": int(current.get("progress", 0)),
+            "attempts": attempts,
+            "message": "Worker ถูกขัดจังหวะหลายครั้งเกินกำหนด",
+            "error": "กรุณากดเริ่มวิเคราะห์ใหม่ หรือตรวจสอบหน่วยความจำของ Server",
+        })
+        store.delete(queue_key)
+        return None
+    store.write_json(status_key, {
+        "status": "processing",
+        "progress": max(2, int(current.get("progress", 1))),
+        "attempts": attempts + 1,
+        "message": "Worker รับงานแล้ว กำลังเตรียมวิเคราะห์",
+    })
+    return queue_key, job_key, status_key
+
+
+def resume_interrupted_jobs(store) -> None:
+    for queue_key in store.list_queue_keys():
+        try:
+            queued_job = store.read_json(queue_key)
+            status_key = queued_job["status_key"]
+            status = store.read_json(status_key)
+            if status.get("status") == "processing":
+                store.write_json(status_key, {
+                    "status": "queued",
+                    "progress": max(1, int(status.get("progress", 1))),
+                    "attempts": int(status.get("attempts", 1)),
+                    "message": "ระบบกลับมาออนไลน์แล้ว กำลังนำงานเข้าคิวเพื่อทำต่อ",
+                })
+        except Exception:
+            continue
+
+
+def run_stored_job(store, job_key: str, status_key: str, run_job) -> None:
+    remote_job = store.read_json(job_key)
+
+    with tempfile.TemporaryDirectory(prefix="valor-budget-") as temporary:
+        work_dir = Path(temporary)
+        input_path = work_dir / "input.xlsx"
+        output_path = work_dir / "result.xlsx"
+        status_path = work_dir / "status.json"
+        config_path = work_dir / "job.json"
+        cache_path = work_dir / "embedding-cache.pt"
+
+        store.download(remote_job["input_key"], input_path)
+        if remote_job.get("embedding_cache_key") and store.exists(remote_job["embedding_cache_key"]):
+            store.download(remote_job["embedding_cache_key"], cache_path)
+
+        local_job = {
+            **remote_job,
+            "input_path": str(input_path),
+            "output_path": str(output_path),
+            "status_path": str(status_path),
+            "embedding_cache_path": str(cache_path),
+        }
+        config_path.write_text(json.dumps(local_job, ensure_ascii=False), encoding="utf-8")
+        status_path.write_text(json.dumps(store.read_json(status_key), ensure_ascii=False), encoding="utf-8")
+
+        def publish_status(payload: dict) -> None:
+            current = store.read_json(status_key)
+            store.write_json(status_key, {
+                **payload,
+                "attempts": int(current.get("attempts", 1)),
             })
-            return config_path
-    return None
 
+        def publish_artifacts(config: dict) -> None:
+            store.upload(Path(config["output_path"]), remote_job["output_key"])
+            if cache_path.is_file() and remote_job.get("embedding_cache_key"):
+                store.upload(cache_path, remote_job["embedding_cache_key"])
 
-def cancel_interrupted_jobs(root: Path) -> None:
-    for status_path in root.glob("*/*/status.json"):
-        status = read_status(status_path)
-        if status.get("status") == "processing":
-            write_status(status_path, {
-                "status": "failed",
-                "progress": int(status.get("progress", 0)),
-                "message": "งานหยุดเพราะมีการปิดหรือเปิดระบบใหม่",
-                "error": "งานเดิมถูกยกเลิกแล้ว กรุณาเลือกไฟล์และกดเริ่มวิเคราะห์ใหม่",
-            })
+        run_job(
+            config_path,
+            status_reader=lambda: store.read_json(status_key),
+            status_writer=publish_status,
+            before_complete=publish_artifacts,
+        )
 
 
 def main() -> None:
@@ -56,25 +117,37 @@ def main() -> None:
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     args = parser.parse_args()
 
-    queue_root = Path(args.queue_root).resolve()
-    queue_root.mkdir(parents=True, exist_ok=True)
     scripts_dir = Path(__file__).resolve().parent
     sys.path.insert(0, str(scripts_dir))
     from run_budget_job import run_job
 
-    cancel_interrupted_jobs(queue_root)
+    store = make_budget_store(Path(args.queue_root))
+    resume_interrupted_jobs(store)
 
     while True:
-        config_path = find_next_job(queue_root)
-        if config_path is None:
+        next_job = find_next_job(store)
+        if next_job is None:
             time.sleep(max(args.poll_seconds, 0.25))
             continue
 
         try:
-            run_job(config_path)
-        except Exception:
-            # run_job records the full error and failed status for the UI.
-            pass
+            queue_key, job_key, status_key = next_job
+            run_stored_job(store, job_key, status_key, run_job)
+            store.delete(queue_key)
+        except Exception as exception:
+            try:
+                current = store.read_json(status_key)
+                if current.get("status") not in {"failed", "cancelled"}:
+                    store.write_json(status_key, {
+                        "status": "failed",
+                        "progress": int(current.get("progress", 0)),
+                        "attempts": int(current.get("attempts", 1)),
+                        "message": "วิเคราะห์ไม่สำเร็จ",
+                        "error": str(exception)[:2000],
+                    })
+                store.delete(queue_key)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
