@@ -1,0 +1,18 @@
+{
+  "files.exclude": {
+    "**/.git": true,
+    "**/.runtime": true,
+    "**/.tools": true,
+    "**/vendor": true,
+    "**/node_modules": true,
+    "**/dist": true
+  },
+  "search.exclude": {
+    "**/.runtime": true,
+    "**/.tools": true,
+    "**/vendor": true,
+    "**/node_modules": true,
+    "**/dist": true
+  }
+}
+
