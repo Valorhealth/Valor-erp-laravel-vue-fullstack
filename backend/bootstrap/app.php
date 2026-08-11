@@ -15,7 +15,6 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->trustProxies(at: '*');
         $middleware->redirectGuestsTo(null);
-        $middleware->statefulApi();
         $middleware->alias([
             'ability' => EnsureRoleAbility::class,
             'audit' => AuditRequest::class,
