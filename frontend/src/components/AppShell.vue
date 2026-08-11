@@ -27,15 +27,15 @@ async function signOut() {
   <div class="app-layout">
     <aside class="sidebar" :class="{ 'sidebar--open': menuOpen }">
       <div class="sidebar-brand">
-        <span class="sidebar-brand__logo" >
-          <img src="/valorhealth.png" alt="Valor Health">
+        <span class="sidebar-brand__logo">
+          <img src="/valorhealth-removebg.png" alt="Valor Health">
         </span>
+        <!-- <span class="center"><strong>VALOR HEALTH Sale Co</strong></span> -->
       </div>
-        <span><strong>VALOR HEALTH</strong><small>  ERP Workspace</small></span>
 
       <nav class="nav" aria-label="เมนูหลัก">
         <RouterLink class="nav__notice" to="/notice-board" @click="menuOpen = false">
-          <span aria-hidden="true">⌑</span>บอร์ดประกาศ
+          <span aria-hidden="true">📢</span>บอร์ดประกาศ
         </RouterLink>
         <p class="nav__heading">เมนู</p>
         <RouterLink v-for="link in links" :key="link.key" :to="link.path" @click="menuOpen = false">
@@ -61,7 +61,7 @@ async function signOut() {
           <h1>{{ title }}</h1>
           <p v-if="subtitle">{{ subtitle }}</p>
         </div>
-        <div class="environment-badge"><span></span> Local prototype</div>
+        <div class="environment-badge"><span></span> Online </div>
       </header>
       <slot />
 

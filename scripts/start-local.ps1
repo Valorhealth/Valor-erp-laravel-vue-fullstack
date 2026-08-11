@@ -100,9 +100,28 @@ if (-not $vuePortInUse) {
     Set-Content -LiteralPath (Join-Path $runtimeDir 'vue.pid') -Value $vue.Id
 }
 
-Write-Output 'Valor ERP prototype is ready:'
+$healthUrl = 'http://127.0.0.1:8000/api/v1/health'
+$apiHealthy = $false
+for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    try {
+        $health = Invoke-RestMethod -Uri $healthUrl -Headers @{ Accept = 'application/json' } -TimeoutSec 3
+        $apiHealthy = $health.status -eq 'ok' -and $health.database -eq 'connected'
+        if ($apiHealthy) { break }
+    } catch {
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+Write-Output 'Valor ERP local services:'
 Write-Output '  Frontend: http://127.0.0.1:5173'
-Write-Output '  API:      http://127.0.0.1:8000/api/v1/health'
+Write-Output "  API:      $healthUrl"
+if ($apiHealthy) {
+    Write-Output '  Database: connected'
+} else {
+    Write-Warning 'Database connection failed. Local login and data pages will not work.'
+    Write-Warning 'Update DB_URL in backend\.env with the current Supabase connection string, then stop and start Local again.'
+    Write-Output "  Log:      $(Join-Path $root 'backend\storage\logs\laravel.log')"
+}
 Write-Output "  Python:   $pythonPath"
 Write-Output '  Worker:   Budget queue is running'
 Write-Output $(if ($ollamaPortInUse) { '  Ollama:   http://127.0.0.1:11434' } else { '  Ollama:   ไม่พร้อมใช้งาน (Vector Search ยังใช้งานได้)' })

@@ -55,13 +55,13 @@ async function resetPassword() {
     <section class="login-intro">
       <div class="login-brand">
         <span class="login-brand__logo">
-          <img src="/valorhealth.png" alt="Valor Health">
+          <img src="/valorhealth-removebg.png" alt="Valor Health" class="logo-image" />
         </span>
-        <span><strong>VALOR</strong><small>ERP Workspace</small></span>
+        <!-- <span><strong>VALOR</strong><small>ERP Workspace</small></span> -->
       </div>
       <div>
         <p class="eyebrow">ระบบ ERP ฉบับ PHP&SQL</p>
-        <h1>ValorHeath<br>ทำงานได้เร็วขึ้น</h1>
+        <h1>ValorHeath<br>Faster Worker</h1>
         <p class="login-intro__copy">Prototype นี้ใช้ Laravel API + Vue เชื่อมต่อกับฐาน PostgreSQL บน Supabase </p>
       </div>
       <div class="architecture-note"><span></span> Vue UI → Laravel API → Supabase PostgreSQL</div>
@@ -72,7 +72,7 @@ async function resetPassword() {
         <div>
           <p class="eyebrow eyebrow--red">ยินดีต้อนรับ</p>
           <h2>{{ resetMode ? 'รีเซ็ตรหัสผ่านใหม่' : 'เข้าสู่ระบบ' }}</h2>
-          <p class="muted">{{ resetMode ? 'กรอก Username และอีเมลที่ใช้สมัครให้ถูกต้อง' : 'เข้าสู่ระบบด้วยบัญชี Valor ERP ของคุณ' }}</p>
+          <p class="muted">{{ resetMode ? 'กรอก Username และอีเมลที่ใช้สมัครให้ถูกต้อง' : 'เข้าสู่ระบบด้วยบัญชีบริษัท ValorHealth ของคุณ' }}</p>
         </div>
 
         <label>
