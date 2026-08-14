@@ -8,7 +8,7 @@ use App\Services\Authorization\RoleAccess;
 use App\Services\Billing\BillingWorkflow;
 use App\Services\Credit\CustomerCreditResolver;
 use App\Services\Documents\DocumentService;
-use Carbon\Carbon;
+use App\Services\Quotations\QuotationNumberGenerator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -47,6 +47,7 @@ class QuotationController extends Controller
         Request $request,
         CustomerCreditResolver $creditResolver,
         BillingWorkflow $workflow,
+        QuotationNumberGenerator $quotationNumbers,
     ): JsonResponse
     {
         $data = $request->validate([
@@ -75,7 +76,7 @@ class QuotationController extends Controller
             'items.*.sale_discount_unit' => ['nullable', 'numeric', 'min:0'],
         ]);
 
-        $quotation = DB::transaction(function () use ($request, $data, $creditResolver, $workflow): Quotation {
+        $quotation = DB::transaction(function () use ($request, $data, $creditResolver, $workflow, $quotationNumbers): Quotation {
             $items = collect($data['items'])->map(function (array $item): array {
                 $before = round((int) $item['quantity'] * (float) $item['unit_price'], 2);
                 $discount = min((float) ($item['sale_discount_unit'] ?? 0), $before);
@@ -99,7 +100,7 @@ class QuotationController extends Controller
                 'created_at' => now(),
             ]);
             $quotation->forceFill([
-                'qt_no' => 'QT-'.Carbon::parse($data['qt_date'])->format('ym').'-'.str_pad((string) $quotation->qt_id, 4, '0', STR_PAD_LEFT),
+                'qt_no' => $quotationNumbers->nextForDate($data['qt_date']),
             ])->save();
             foreach ($items as $item) {
                 $quotation->items()->create($item);
