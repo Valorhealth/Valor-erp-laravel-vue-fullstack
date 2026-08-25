@@ -367,3 +367,12 @@ select[multiple] { min-height: 130px; }
   .approval-actions--bill label { grid-column: auto; }
   .page-header h1 { font-size: 25px; }
 }
+
+.btn.btn-primary.save-table{
+  background-color: #88E788;
+  color: black;
+  border-radius: 8px;
+}
+.btn.btn-primary , .btn{
+  border-radius: 8px;
+}

@@ -22,6 +22,7 @@ final class RoleAccess
             ['key' => 'sales_documents', 'label' => 'ใบเสนอราคา', 'path' => '/sales-documents', 'icon' => '🧾'],
             ['key' => 'my_billing_history', 'label' => 'ประวัติการเปิดบิลของฉัน', 'path' => '/billing-records/my', 'icon' => '◷'],
             ['key' => 'credit_request_status', 'label' => 'ติดตามอนุมัติวงเงิน', 'path' => '/credit-requests', 'icon' => '💵'],
+            ['key' => 'sales_call_report', 'label' => 'บันทึก Call Sale', 'path' => '/sales-call-report', 'icon' => '☎️'],
             ['key' => 'calendar', 'label' => 'ตารางงาน', 'path' => '/calendar', 'icon' => '📆'],
         ],
         self::GROUP_APPROVE => [
@@ -30,6 +31,7 @@ final class RoleAccess
             ['key' => 'approved_bills', 'label' => 'รายการที่อนุมัติแล้ว', 'path' => '/billing-records/approved', 'icon' => '✅'],
             ['key' => 'rejected_bills', 'label' => 'รายการที่ไม่อนุมัติ', 'path' => '/billing-records/rejected', 'icon' => '❌'],
             ['key' => 'all_bills', 'label' => 'รายการบิลทั้งหมด', 'path' => '/billing-records/all', 'icon' => '▤'],
+            ['key' => 'sales_call_report', 'label' => 'Call Sale Report', 'path' => '/sales-call-report', 'icon' => '📈'],
             ['key' => 'calendar', 'label' => 'ตารางงาน', 'path' => '/calendar', 'icon' => '📆'],
             ['key' => 'budget_analysis', 'label' => 'วิเคราะห์งบประมาณ', 'path' => '/budget-analysis', 'icon' => '💱'],
         ],
@@ -108,10 +110,11 @@ final class RoleAccess
 
         return [
             ...array_slice($sale, 0, 5),
+            $approve[5],
             ...array_slice($admin, 0, 6),
             ...array_slice($approve, 0, 5),
             ['key' => 'audit_logs', 'label' => 'บันทึกกิจกรรมระบบ', 'path' => '/audit-logs', 'icon' => '▤'],
-            $approve[6],
+            $approve[7],
             $admin[7],
         ];
     }

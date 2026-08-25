@@ -10,6 +10,7 @@
 | คิวพิมพ์และ Bplus | `BillingWorkflowController.php`, `Services/Documents/DocumentService.php` | `PrintQueueView.vue`, `SystemAdminView.vue` |
 | PDF / Excel / เอกสาร | `Services/Documents/DocumentService.php` | `DocumentCenterView.vue` |
 | Dashboard | `Services/Dashboard/DashboardService.php`, `DashboardController.php` | `DashboardView.vue` |
+| Call Sale Report | `SalesCallController.php`, `Services/SalesCalls/SalesCallReportService.php`, `Models/SalesCallActivity.php` | `SalesCallReportView.vue` |
 | Audit Log | `Services/Audit/AuditLogger.php`, `AuditLogController.php`, `Middleware/AuditRequest.php` | `AuditLogsView.vue` |
 | เครดิตลูกค้า | `CreditRequestController.php`, `CreditProfileController.php` | `CreditRequestStatusView.vue`, `CreditProfilesView.vue` |
 | Master Data / Users | `MasterDataController.php`, `UserManagementController.php` | `MasterDataView.vue`, `UserManagementView.vue` |
@@ -30,4 +31,3 @@ Backend paths ในตารางอยู่ภายใต้ `backend/app/H
 - `backend/scripts/requirements.txt` — Python dependencies เฉพาะ ERP
 
 `vendor`, `node_modules`, `dist`, `.runtime` และ `.tools` เป็น dependency/build/runtime จึงถูกซ่อนจาก VS Code Explorer และ Search ผ่าน `.vscode/settings.json`
-

@@ -1,7 +1,7 @@
 <?php
 
-use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\AuditLogController;
+use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BillingRecordController;
 use App\Http\Controllers\Api\BillingWorkflowController;
 use App\Http\Controllers\Api\BudgetAnalysisController;
@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\PublicTaxController;
 use App\Http\Controllers\Api\QuotationController;
 use App\Http\Controllers\Api\ReceiptOcrController;
 use App\Http\Controllers\Api\ReferenceDataController;
+use App\Http\Controllers\Api\SalesCallController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\UserManagementController;
 use Illuminate\Support\Facades\Route;
@@ -44,6 +45,13 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/budget/{analysisId}/preview', [BudgetAnalysisController::class, 'preview'])->middleware('ability:budget_analysis');
         Route::get('/budget/{analysisId}/download', [BudgetAnalysisController::class, 'download'])->middleware('ability:budget_analysis');
         Route::delete('/budget', [BudgetAnalysisController::class, 'clear'])->middleware('ability:budget_analysis');
+        Route::get('/sales-calls', [SalesCallController::class, 'index'])->middleware('ability:sales_call_report');
+        Route::get('/sales-calls/dashboard', [SalesCallController::class, 'dashboard'])->middleware('ability:sales_call_report');
+        Route::get('/sales-calls/export.xlsx', [SalesCallController::class, 'exportExcel'])->middleware('ability:sales_call_report');
+        Route::get('/sales-calls/dashboard.pdf', [SalesCallController::class, 'exportDashboard'])->middleware('ability:sales_call_report');
+        Route::get('/sales-calls/history', [SalesCallController::class, 'history'])->middleware('ability:sales_call_report');
+        Route::get('/sales-calls/day', [SalesCallController::class, 'day'])->middleware('ability:sales_call_report');
+        Route::put('/sales-calls/day', [SalesCallController::class, 'saveDay'])->middleware('ability:sales_call_report');
         Route::get('/billing-records', [BillingRecordController::class, 'index'])
             ->middleware('ability:my_billing_history,approved_bills,rejected_bills,all_bills,print_queue,system_admin,document_center');
         Route::get('/catalog/customers', [CatalogController::class, 'customers'])->middleware('ability:master_data');

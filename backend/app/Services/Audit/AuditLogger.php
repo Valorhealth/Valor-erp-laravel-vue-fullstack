@@ -65,6 +65,9 @@ final class AuditLogger
         'BudgetAnalysisController@preview' => ['budget.preview', 'เอกสาร', 'เปิดดูตัวอย่างผลวิเคราะห์งบประมาณ'],
         'BudgetAnalysisController@clear' => ['budget.clear', 'วิเคราะห์งบประมาณ', 'ล้างผลวิเคราะห์งบประมาณ'],
         'DashboardController@report' => ['dashboard.export', 'เอกสาร', 'ส่งออก Sales Report'],
+        'SalesCallController@saveDay' => ['sales_call.save_day', 'Call Sale', 'บันทึกตาราง Call Sale ประจำวัน'],
+        'SalesCallController@exportExcel' => ['sales_call.export_excel', 'เอกสาร', 'ส่งออก Call Sale เป็น Excel'],
+        'SalesCallController@exportDashboard' => ['sales_call.export_dashboard', 'เอกสาร', 'ส่งออก Call Sale Dashboard'],
     ];
 
     /** @var array<int, string> */
@@ -209,6 +212,7 @@ final class AuditLogger
             'bill' => 'bill', 'quotation' => 'quotation', 'creditRequest' => 'credit_request',
             'creditProfile' => 'credit_profile', 'notice' => 'notice', 'task' => 'task',
             'customer' => 'customer', 'salesman' => 'salesman', 'user' => 'user',
+            'salesCall' => 'sales_call',
             'analysisId' => 'budget_analysis', 'document' => 'document',
         ];
 

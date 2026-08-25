@@ -1,12 +1,12 @@
 # หน้าที่ของทุกไฟล์ใน Valor ERP
 
-สร้างอัตโนมัติเมื่อ 2026-08-10T08:02:03+00:00 โดย `scripts/generate-file-scope.php`
+สร้างอัตโนมัติเมื่อ 2026-08-24T11:04:10+07:00 โดย `scripts/generate-file-scope.php`
 
-รวมทั้งหมด **16711 ไฟล์**: root 5, backend 13862, frontend 2828, database 5, docs 4, scripts 4, docker 3
+รวมทั้งหมด **16731 ไฟล์**: root 5, backend 13876, frontend 2831, database 7, docs 5, scripts 4, docker 3
 
 > รายการนี้รวม `backend/vendor`, `frontend/node_modules`, build output, cache, log และไฟล์ runtime เพื่อให้ครบทุกไฟล์จริงในโฟลเดอร์ที่ขอ แต่ไฟล์ dependency/generated ระบุไว้ชัดว่าไม่ควรแก้โดยตรง ส่วน `.git`, `.tools`, `.runtime`, `.vscode` อยู่นอกห้าโฟลเดอร์งานและไม่ใช่ source scope จึงไม่รวม
 
-⭐ = ไฟล์หลักที่มักต้องแก้โดยตรงเมื่อพัฒนาระบบ (รวม 118 ไฟล์) — ค้นหาคำว่า `⭐` เพื่อย่อขอบเขตงาน
+⭐ = ไฟล์หลักที่มักต้องแก้โดยตรงเมื่อพัฒนาระบบ (รวม 126 ไฟล์) — ค้นหาคำว่า `⭐` เพื่อย่อขอบเขตงาน
 
 ## ไฟล์รากโปรเจกต์ (5 ไฟล์)
 
@@ -16,7 +16,7 @@
 - ⭐ `README.md` — คู่มือภาพรวม การติดตั้ง และการเปิดใช้งานโปรเจกต์
 - ⭐ `render.yaml` — ⭐ Blueprint กำหนด Render Web Service และ Environment Variables
 
-## backend (13862 ไฟล์)
+## backend (13876 ไฟล์)
 
 - `backend/.editorconfig` — ไฟล์ประกอบระบบ .editorconfig
 - `backend/.env` — ค่าตั้งค่าจริงของ Backend ในเครื่องนี้; มีข้อมูลลับและไม่ควร commit
@@ -43,6 +43,7 @@
 - ⭐ `backend/app/Http/Controllers/Api/QuotationController.php` — API Controller Quotation รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
 - ⭐ `backend/app/Http/Controllers/Api/ReceiptOcrController.php` — API Controller ReceiptOcr รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
 - ⭐ `backend/app/Http/Controllers/Api/ReferenceDataController.php` — API Controller ReferenceData รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
+- ⭐ `backend/app/Http/Controllers/Api/SalesCallController.php` — API Controller SalesCall รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
 - ⭐ `backend/app/Http/Controllers/Api/TaskController.php` — API Controller Task รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
 - ⭐ `backend/app/Http/Controllers/Api/UserManagementController.php` — API Controller UserManagement รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
 - ⭐ `backend/app/Http/Controllers/Controller.php` — ไฟล์ PHP Controller ที่เป็นส่วนหนึ่งของ Backend
@@ -63,6 +64,7 @@
 - ⭐ `backend/app/Models/Notice.php` — Eloquent Model Notice สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
 - ⭐ `backend/app/Models/Quotation.php` — Eloquent Model Quotation สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
 - ⭐ `backend/app/Models/QuotationItem.php` — Eloquent Model QuotationItem สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
+- ⭐ `backend/app/Models/SalesCallActivity.php` — Eloquent Model SalesCallActivity สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
 - ⭐ `backend/app/Models/Salesman.php` — Eloquent Model Salesman สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
 - ⭐ `backend/app/Models/SalesTask.php` — Eloquent Model SalesTask สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
 - ⭐ `backend/app/Models/User.php` — Eloquent Model User สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
@@ -79,7 +81,9 @@
 - ⭐ `backend/app/Services/Notifications/WorkflowEmailNotifier.php` — Service Notifications/WorkflowEmailNotifier รวม business logic ที่ใช้ซ้ำใน Backend
 - ⭐ `backend/app/Services/Notifications/WorkflowMessageSender.php` — Service Notifications/WorkflowMessageSender รวม business logic ที่ใช้ซ้ำใน Backend
 - ⭐ `backend/app/Services/Notifications/WorkflowRecipientResolver.php` — Service Notifications/WorkflowRecipientResolver รวม business logic ที่ใช้ซ้ำใน Backend
+- ⭐ `backend/app/Services/Quotations/QuotationNumberGenerator.php` — Service Quotations/QuotationNumberGenerator รวม business logic ที่ใช้ซ้ำใน Backend
 - ⭐ `backend/app/Services/Reference/ThaiLocationService.php` — Service Reference/ThaiLocationService รวม business logic ที่ใช้ซ้ำใน Backend
+- ⭐ `backend/app/Services/SalesCalls/SalesCallReportService.php` — Service SalesCalls/SalesCallReportService รวม business logic ที่ใช้ซ้ำใน Backend
 - `backend/artisan` — CLI entry point ของ Laravel สำหรับคำสั่งระบบและการทดสอบ
 - ⭐ `backend/bootstrap/app.php` — ไฟล์ PHP app ที่เป็นส่วนหนึ่งของ Backend
 - `backend/bootstrap/cache/.gitignore` — ไฟล์ประกอบระบบ .gitignore
@@ -166,7 +170,15 @@
 - `backend/storage/framework/cache/data/c1/10/c110982ac3d999ceb5787201eb91a4cbba070995` — Laravel runtime cache ที่สร้างอัตโนมัติ
 - `backend/storage/framework/cache/data/c2/4f/c24f92750673b2169c8cb7bfbc999cfa8457dc7c` — Laravel runtime cache ที่สร้างอัตโนมัติ
 - `backend/storage/framework/sessions/.gitignore` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
-- `backend/storage/framework/sessions/OodF5bPPH8TRxUuksoMryFDxolQTTwZ5SoHKIe92` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/1b8YB1P16QmF4M9Kxpc1bOV8mtAZ9ilVv2zG2vGq` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/8y6qYZFSdzE8bKLEBNB9z6mGQQ6Zwwd9Fa8yBthG` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/C6H6wVrchgxoXmi8fJDN8jZLVXh9tDUB3oEcyNiT` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/IrLT9q7tYkGKBuEjfQQiCdvxgLcdXZHMSWuqRNde` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/KeDoaNogfGR085t1j4unU19sphY9p676NYsdk3jv` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/Oo9vWkwlKXSgKQHW2TypDloG3GdwHOawY6dL0Cxt` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/rU2tRIkvKHUeJN6VavvGxCGCQVrKYm67QRH2WG7D` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/UmXeWbcaoqA3q3u0w4jLwhGEDrG3pHvfOiRFYHgx` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/ym66JiULKkrarZBfg0pwejDRtuLUZB9ANhGlptQq` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
 - `backend/storage/framework/testing/.gitignore` — ไฟล์ประกอบระบบ .gitignore
 - `backend/storage/framework/views/.gitignore` — ไฟล์ประกอบระบบ .gitignore
 - `backend/storage/framework/views/0e6e7aa1c524a7c3709e8268bcfa9d89.php` — ไฟล์ PHP 0e6e7aa1c524a7c3709e8268bcfa9d89 ที่เป็นส่วนหนึ่งของ Backend
@@ -186,7 +198,9 @@
 - `backend/tests/Unit/DocumentServiceTest.php` — ชุดทดสอบอัตโนมัติ DocumentServiceTest สำหรับป้องกัน regression ของ Backend
 - `backend/tests/Unit/EnsureRoleAbilityTest.php` — ชุดทดสอบอัตโนมัติ EnsureRoleAbilityTest สำหรับป้องกัน regression ของ Backend
 - `backend/tests/Unit/LegacyPasswordVerifierTest.php` — ชุดทดสอบอัตโนมัติ LegacyPasswordVerifierTest สำหรับป้องกัน regression ของ Backend
+- `backend/tests/Unit/QuotationNumberGeneratorTest.php` — ชุดทดสอบอัตโนมัติ QuotationNumberGeneratorTest สำหรับป้องกัน regression ของ Backend
 - `backend/tests/Unit/RoleAccessTest.php` — ชุดทดสอบอัตโนมัติ RoleAccessTest สำหรับป้องกัน regression ของ Backend
+- `backend/tests/Unit/SessionMiddlewareTest.php` — ชุดทดสอบอัตโนมัติ SessionMiddlewareTest สำหรับป้องกัน regression ของ Backend
 - `backend/tests/Unit/ThaiBahtTextTest.php` — ชุดทดสอบอัตโนมัติ ThaiBahtTextTest สำหรับป้องกัน regression ของ Backend
 - `backend/tests/Unit/WorkflowEmailNotifierTest.php` — ชุดทดสอบอัตโนมัติ WorkflowEmailNotifierTest สำหรับป้องกัน regression ของ Backend
 - `backend/tests/Unit/WorkflowMessageSenderTest.php` — ชุดทดสอบอัตโนมัติ WorkflowMessageSenderTest สำหรับป้องกัน regression ของ Backend
@@ -13881,16 +13895,17 @@
 - `backend/vendor/voku/portable-ascii/src/voku/helper/data/x1d7.php` — ไฟล์ dependency PHP จาก Composer; ไม่ควรแก้โดยตรงและสร้างใหม่ได้จาก composer install
 - `backend/vendor/voku/portable-ascii/src/voku/helper/data/x1f1.php` — ไฟล์ dependency PHP จาก Composer; ไม่ควรแก้โดยตรงและสร้างใหม่ได้จาก composer install
 
-## frontend (2828 ไฟล์)
+## frontend (2831 ไฟล์)
 
 - `frontend/.env.example` — ไฟล์ประกอบระบบ .env.example
 - `frontend/.gitignore` — ไฟล์ประกอบระบบ .gitignore
 - `frontend/.vscode/extensions.json` — ไฟล์ configuration/metadata extensions.json
-- `frontend/dist/assets/index-CNhqBgJD.css` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
-- `frontend/dist/assets/index-D-Pvff03.js` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
+- `frontend/dist/assets/index-BJtid7qI.js` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
+- `frontend/dist/assets/index-CKkb67wo.css` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
 - `frontend/dist/favicon.svg` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
 - `frontend/dist/icons.svg` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
 - `frontend/dist/index.html` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
+- `frontend/dist/valorhealth-removebg.png` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
 - `frontend/dist/valorhealth.png` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
 - `frontend/dist/valorhealth.svg` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
 - `frontend/index.html` — ไฟล์ประกอบระบบ index.html
@@ -16675,6 +16690,7 @@
 - `frontend/pnpm-lock.yaml` — ล็อกเวอร์ชัน dependency Frontend สำหรับ pnpm
 - `frontend/public/favicon.svg` — Static asset ที่ Vite คัดลอกไปใช้โดยไม่ประมวลผล
 - `frontend/public/icons.svg` — Static asset ที่ Vite คัดลอกไปใช้โดยไม่ประมวลผล
+- `frontend/public/valorhealth-removebg.png` — Static asset ที่ Vite คัดลอกไปใช้โดยไม่ประมวลผล
 - `frontend/public/valorhealth.png` — Static asset ที่ Vite คัดลอกไปใช้โดยไม่ประมวลผล
 - `frontend/public/valorhealth.svg` — Static asset ที่ Vite คัดลอกไปใช้โดยไม่ประมวลผล
 - ⭐ `frontend/src/api/client.ts` — โมดูล API client สำหรับสื่อสารกับ Laravel
@@ -16705,6 +16721,7 @@
 - ⭐ `frontend/src/views/PrintQueueView.vue` — หน้าจอ Vue PrintQueue ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/PublicTaxView.vue` — หน้าจอ Vue PublicTax ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/SaleOrderView.vue` — หน้าจอ Vue SaleOrder ที่ผูก UI กับ API ของฟังก์ชันนั้น
+- ⭐ `frontend/src/views/SalesCallReportView.vue` — หน้าจอ Vue SalesCallReport ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/SystemAdminView.vue` — หน้าจอ Vue SystemAdmin ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/UserManagementView.vue` — หน้าจอ Vue UserManagement ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - `frontend/tsconfig.app.json` — ไฟล์ตั้งค่า tsconfig.app ของเครื่องมือ Frontend
@@ -16712,16 +16729,19 @@
 - `frontend/tsconfig.node.json` — ไฟล์ตั้งค่า tsconfig.node ของเครื่องมือ Frontend
 - ⭐ `frontend/vite.config.ts` — ไฟล์ตั้งค่า vite.config ของเครื่องมือ Frontend
 
-## database (5 ไฟล์)
+## database (7 ไฟล์)
 
 - ⭐ `database/schema/audit_logs.sql` — SQL audit_logs สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/customer_credit_outstanding.sql` — SQL customer_credit_outstanding สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/draft_quotation_updates.sql` — SQL draft_quotation_updates สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
+- ⭐ `database/schema/quotation_monthly_numbering.sql` — SQL quotation_monthly_numbering สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/reporting_draft_numbering.sql` — SQL reporting_draft_numbering สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
+- ⭐ `database/schema/sales_call_reports.sql` — SQL sales_call_reports สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/workflow_updates.sql` — SQL workflow_updates สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 
-## docs (4 ไฟล์)
+## docs (5 ไฟล์)
 
+- ⭐ `docs/CALL_SALE_REPORT.md` — เอกสาร CALL_SALE_REPORT สำหรับอธิบายระบบหรือขั้นตอนการทำงาน
 - ⭐ `docs/file-guide.md` — เอกสาร file-guide สำหรับอธิบายระบบหรือขั้นตอนการทำงาน
 - ⭐ `docs/FILE_SCOPE_ALL_FILES.md` — สารบัญหน้าที่ทุกไฟล์ในโปรเจกต์ที่สร้างจากสคริปต์อัตโนมัติ
 - ⭐ `docs/frontend-customization-guide.md` — เอกสาร frontend-customization-guide สำหรับอธิบายระบบหรือขั้นตอนการทำงาน

@@ -17,6 +17,7 @@ import NoticeBoardView from '../views/NoticeBoardView.vue'
 import PrintQueueView from '../views/PrintQueueView.vue'
 import PublicTaxView from '../views/PublicTaxView.vue'
 import SaleOrderView from '../views/SaleOrderView.vue'
+import SalesCallReportView from '../views/SalesCallReportView.vue'
 import SystemAdminView from '../views/SystemAdminView.vue'
 import UserManagementView from '../views/UserManagementView.vue'
 
@@ -33,6 +34,7 @@ const router = createRouter({
     { path: '/billing-records/my', name: 'my-billing-records', component: BillingRecordsView, props: { pageTitle: 'ประวัติการเปิดบิลของฉัน', ownerOnly: true }, meta: { requiresAuth: true, ability: 'my_billing_history' } },
     { path: '/credit-requests', name: 'credit-requests', component: CreditRequestStatusView, meta: { requiresAuth: true, ability: 'credit_request_status' } },
     { path: '/calendar', name: 'calendar', component: CalendarView, meta: { requiresAuth: true, ability: 'calendar' } },
+    { path: '/sales-call-report', name: 'sales-call-report', component: SalesCallReportView, meta: { requiresAuth: true, ability: 'sales_call_report' } },
     { path: '/dashboard', name: 'dashboard', component: DashboardView, meta: { requiresAuth: true, ability: 'dashboard_stats' } },
     { path: '/audit-logs', name: 'audit-logs', component: AuditLogsView, meta: { requiresAuth: true, ability: 'audit_logs' } },
     { path: '/billing-approvals', name: 'billing-approvals', component: ApprovalsView, meta: { requiresAuth: true, ability: 'approve_bills' } },

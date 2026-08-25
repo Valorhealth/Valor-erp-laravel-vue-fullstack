@@ -220,6 +220,88 @@ export interface Salesman {
   salesman_name: string
 }
 
+export interface SalesCallActivity {
+  call_id: number
+  call_no: number
+  seller_user_id: number
+  seller_username: string
+  activity_date: string
+  activity_time: string | null
+  duration_minutes: number | null
+  customer_id: number | null
+  customer_name: string | null
+  place_of_work: string | null
+  specialty: string | null
+  department: string | null
+  customer_group: string | null
+  product_1: string | null
+  call_detail_objective: string | null
+  call_detail_outcome: string | null
+  sm_comment: string | null
+  contact_name: string | null
+  contact_position: string | null
+  contact_phone: string | null
+  activity_type: string
+  objective: string
+  outcome: string
+  opportunity_stage: string
+  product_interest: string | null
+  estimated_value: string
+  actual_value: string
+  notes: string | null
+  next_action: string | null
+  next_follow_up_date: string | null
+  status: string
+  created_at: string
+  updated_at: string
+  seller?: Pick<User, 'id' | 'username' | 'first_name' | 'last_name' | 'department'>
+}
+
+export interface SalesCallOptions {
+  sellers: Array<Pick<User, 'id' | 'username' | 'first_name' | 'last_name' | 'department'>>
+  specialties: string[]
+  departments: string[]
+  groups: string[]
+  products: string[]
+  objectives: string[]
+  outcomes: string[]
+  stages: string[]
+  statuses: string[]
+}
+
+export interface SalesCallDashboard {
+  summary: {
+    total_activities: number
+    completed_activities: number
+    active_customers: number
+    duration_minutes: number
+    pipeline_value: number
+    won_value: number
+    won_activities: number
+    success_calls: number
+    failure_calls: number
+      no_calls: number
+      working_days: number
+      calls_per_working_day: number
+      conversion_rate: number
+    follow_ups_due: number
+  }
+    by_seller: Array<{ seller_user_id: number; seller_username: string; total: number; success_calls: number; failure_calls: number; no_calls: number; working_days: number; success_rate: number; calls_per_working_day: number; active_customers: number; follow_ups: number; duration_minutes: number; pipeline_value: string; actual_value: string }>
+    performance_matrix: Array<{ seller_username: string; place_of_work: string; total: number; success_calls: number; failure_calls: number; no_calls: number; working_days: number; success_rate: number; calls_per_working_day: number }>
+  by_stage: Array<{ label: string; total: number; value: string }>
+  by_outcome: Array<{ label: string; total: number }>
+    by_activity_type: Array<{ label: string; total: number }>
+    by_objective: Array<{ label: string; total: number; success_calls: number; failure_calls: number; no_calls: number }>
+    by_product: Array<{ label: string; total: number; success_calls: number; customers_called: number; success_rate: number }>
+    by_specialty: Array<{ label: string; total: number; success_calls: number; failure_calls: number; success_rate: number }>
+    product_customer_matrix: Array<{ product: string; place_of_work: string; customer_name: string; total: number; success_calls: number; failure_calls: number; success_rate: number; last_call_date: string }>
+    success_breakdown: Array<{ seller_username: string; product: string; specialty: string; place_of_work: string; total: number }>
+    failure_breakdown: Array<{ seller_username: string; product: string; specialty: string; place_of_work: string; total: number }>
+  daily_trend: Array<{ activity_date: string; total: number; pipeline_value: string }>
+  top_customers: Array<{ customer_name: string; total: number; pipeline_value: string; last_activity_date: string }>
+  upcoming_follow_ups: SalesCallActivity[]
+}
+
 export interface ReferenceData {
   customers: Customer[]
   products: Product[]

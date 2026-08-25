@@ -231,7 +231,7 @@ onMounted(load)
               <h3>เครดิต ส่วนลด และรายละเอียดบิล</h3>
               <div class="approval-info-grid">
                 <div><span>วงเงิน</span><strong>{{ money(bill.credit_limit) }}</strong></div>
-                <div><span>ค้างชำระ</span><strong>{{ money(bill.credit_outstanding) }}</strong></div>
+                <div><span>ยอดชำระล่าสุด</span><strong>{{ money(bill.credit_outstanding) }}</strong></div>
                 <div><span>คงเหลือ</span><strong>{{ money(bill.credit_remain) }}</strong></div>
                 <div><span>Credit Term ในระบบ</span><strong>{{ bill.credit_term || 0 }} วัน</strong></div>
                 <div><span>Credit Term ที่ขอ</span><strong>{{ bill.requested_credit_term || 0 }} วัน</strong></div>
