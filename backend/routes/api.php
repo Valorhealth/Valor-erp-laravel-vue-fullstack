@@ -3,37 +3,45 @@
 use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BillingRecordController;
+use App\Http\Controllers\Api\BillingDocumentController;
 use App\Http\Controllers\Api\BillingWorkflowController;
 use App\Http\Controllers\Api\BudgetAnalysisController;
 use App\Http\Controllers\Api\CatalogController;
 use App\Http\Controllers\Api\CreditProfileController;
 use App\Http\Controllers\Api\CreditRequestController;
+use App\Http\Controllers\Api\CustomerAcceptanceController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\HealthController;
 use App\Http\Controllers\Api\MasterDataController;
 use App\Http\Controllers\Api\NoticeController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\PublicTaxController;
+use App\Http\Controllers\Api\PurchaseOrderScanController;
 use App\Http\Controllers\Api\QuotationController;
 use App\Http\Controllers\Api\ReceiptOcrController;
 use App\Http\Controllers\Api\ReferenceDataController;
 use App\Http\Controllers\Api\SalesCallController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\UserManagementController;
+use App\Http\Controllers\Api\UserSignatureController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->middleware('web')->group(function (): void {
     Route::get('/health', HealthController::class);
     Route::middleware('audit')->group(function (): void {
         Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
-        Route::post('/auth/reset-password', PasswordResetController::class)->middleware('throttle:3,10');
+        Route::post('/auth/forgot-password', [PasswordResetController::class, 'requestLink'])->middleware('throttle:3,10');
+        Route::post('/auth/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:5,10');
         Route::get('/public/tax/{token}', [PublicTaxController::class, 'show']);
         Route::put('/public/tax/{token}', [PublicTaxController::class, 'confirm'])->middleware('throttle:10,1');
         Route::post('/public/tax/{token}/cancel', [PublicTaxController::class, 'cancel'])->middleware('throttle:3,10');
         Route::get('/public/tax/{token}/pdf', [PublicTaxController::class, 'pdf'])->middleware('throttle:10,1');
+        Route::get('/public/quotation/{token}', [CustomerAcceptanceController::class, 'show'])->middleware('throttle:30,1');
+        Route::post('/public/quotation/{token}/accept', [CustomerAcceptanceController::class, 'accept'])->middleware('throttle:5,10');
+        Route::get('/public/quotation/{token}/pdf', [CustomerAcceptanceController::class, 'pdf'])->middleware('throttle:10,1');
     });
 
-    Route::middleware(['auth:sanctum', 'audit'])->group(function (): void {
+    Route::middleware(['auth:sanctum', 'password.current', 'audit'])->group(function (): void {
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
         Route::get('/dashboard', DashboardController::class)->middleware('ability:dashboard_stats');
@@ -62,6 +70,7 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/reference-data/locations', [ReferenceDataController::class, 'locations'])
             ->middleware('ability:create_bill,edit_bill');
         Route::post('/receipt-ocr', ReceiptOcrController::class)->middleware('ability:create_bill');
+        Route::post('/purchase-orders/scan', PurchaseOrderScanController::class)->middleware('ability:create_bill');
 
         Route::get('/notices', [NoticeController::class, 'index']);
         Route::post('/notices', [NoticeController::class, 'store'])->middleware('ability:approve_bills,system_admin');
@@ -88,9 +97,11 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/quotations', [QuotationController::class, 'index'])->middleware('ability:create_bill,sales_documents,document_center');
         Route::post('/quotations', [QuotationController::class, 'store'])->middleware('ability:create_bill');
         Route::get('/quotations/{quotation}', [QuotationController::class, 'show'])->middleware('ability:create_bill,sales_documents,document_center');
-        Route::get('/quotations/{quotation}/pdf', [QuotationController::class, 'pdf'])->middleware('ability:sales_documents,document_center');
+        Route::get('/quotations/{quotation}/revisions', [QuotationController::class, 'revisions'])->middleware('ability:create_bill,sales_documents,document_center');
+        Route::get('/quotations/{quotation}/pdf', [QuotationController::class, 'pdf'])->middleware('ability:sales_documents,document_center,approve_bills');
         Route::post('/quotations/{quotation}/custom-name-pdf', [QuotationController::class, 'customNamePdf'])->middleware('ability:sales_documents,document_center');
         Route::post('/quotations/{quotation}/create-bill', [BillingWorkflowController::class, 'createFromQuotation'])->middleware('ability:create_bill');
+        Route::post('/purchase-orders/create-bill', [BillingWorkflowController::class, 'createFromPurchaseOrder'])->middleware('ability:create_bill');
 
         Route::get('/bills/pending-approval', [BillingWorkflowController::class, 'pendingApproval'])->middleware('ability:approve_bills');
         Route::get('/bills/admin-queue', [BillingWorkflowController::class, 'adminQueue'])->middleware('ability:print_queue');
@@ -101,14 +112,22 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
             ->middleware('ability:edit_bill,my_billing_history,approve_bills,print_queue,system_admin,document_center,sales_documents');
         Route::put('/bills/{bill}', [BillingWorkflowController::class, 'updateBySale'])->middleware('ability:edit_bill');
         Route::post('/bills/{bill}/submit', [BillingWorkflowController::class, 'submitDraft'])->middleware('ability:edit_bill');
+        Route::post('/bills/{bill}/purchase-order', [BillingDocumentController::class, 'store'])->middleware('ability:create_bill,edit_bill');
+        Route::get('/bills/{bill}/purchase-order', [BillingDocumentController::class, 'show'])
+            ->middleware('ability:create_bill,edit_bill,my_billing_history,approve_bills,print_queue,system_admin,document_center,sales_documents');
+        Route::post('/bills/{bill}/signed-quotation', [BillingDocumentController::class, 'storeSignedQuotation'])->middleware('ability:create_bill,edit_bill');
+        Route::get('/bills/{bill}/signed-quotation', [BillingDocumentController::class, 'showSignedQuotation'])
+            ->middleware('ability:create_bill,edit_bill,my_billing_history,approve_bills,print_queue,system_admin,document_center,sales_documents');
         Route::post('/bills/{bill}/approve', [BillingWorkflowController::class, 'approve'])->middleware('ability:approve_bills');
+        Route::get('/bills/{bill}/approval-certificate', [BillingWorkflowController::class, 'approvalCertificate'])
+            ->middleware('ability:edit_bill,my_billing_history,approve_bills,print_queue,system_admin,document_center,sales_documents');
         Route::post('/bills/{bill}/reject', [BillingWorkflowController::class, 'reject'])->middleware('ability:approve_bills');
         Route::post('/bills/{bill}/prepare', [BillingWorkflowController::class, 'prepare'])->middleware('ability:print_queue');
         Route::post('/bills/{bill}/complete', [BillingWorkflowController::class, 'complete'])->middleware('ability:system_admin');
         Route::get('/bills/{bill}/pdf', [BillingWorkflowController::class, 'pdf'])->middleware('ability:sales_documents,document_center,print_queue,system_admin');
         Route::patch('/bills/{bill}/admin-status', [BillingWorkflowController::class, 'adminUpdateStatus'])->middleware('ability:system_admin');
         Route::put('/bills/{bill}/admin', [BillingWorkflowController::class, 'adminUpdate'])->middleware('ability:system_admin');
-        Route::delete('/bills/{bill}', [BillingWorkflowController::class, 'destroy'])->middleware('ability:system_admin');
+        Route::post('/bills/{bill}/cancel', [BillingWorkflowController::class, 'cancel'])->middleware('ability:system_admin');
 
         Route::get('/master-data/customers', [MasterDataController::class, 'customers'])->middleware('ability:master_data');
         Route::post('/master-data/customers', [MasterDataController::class, 'storeCustomer'])->middleware('ability:master_data');
@@ -121,6 +140,8 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/users', [UserManagementController::class, 'index'])->middleware('ability:user_management');
         Route::post('/users', [UserManagementController::class, 'store'])->middleware('ability:user_management');
         Route::put('/users/{user}', [UserManagementController::class, 'update'])->middleware('ability:user_management');
+        Route::post('/users/{user}/signature', [UserSignatureController::class, 'store'])->middleware('ability:user_management');
+        Route::get('/users/{user}/signature', [UserSignatureController::class, 'show'])->middleware('ability:user_management');
         Route::delete('/users/{user}', [UserManagementController::class, 'destroy'])->middleware('ability:user_management');
     });
 });

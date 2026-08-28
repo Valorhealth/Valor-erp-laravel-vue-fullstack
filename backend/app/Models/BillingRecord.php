@@ -24,6 +24,12 @@ class BillingRecord extends Model
             'excel_exported_at' => 'datetime',
             'submitted_at' => 'datetime',
             'issued_at' => 'datetime',
+            'customer_confirmed_at' => 'date:Y-m-d',
+            'quotation_valid_until' => 'date:Y-m-d',
+            'delivery_due_date' => 'date:Y-m-d',
+            'canceled_at' => 'datetime',
+            'customer_acceptance_expires_at' => 'datetime',
+            'customer_acceptance_used_at' => 'datetime',
             'req_tax_invoice' => 'boolean',
             'tax_info_filled' => 'boolean',
             'total_amount' => 'decimal:2',
@@ -38,5 +44,22 @@ class BillingRecord extends Model
     public function items(): HasMany
     {
         return $this->hasMany(BillItem::class, 'bill_id', 'bill_id');
+    }
+
+    public function documents(): HasMany
+    {
+        return $this->hasMany(BillingDocument::class, 'bill_id', 'bill_id')
+            ->where('is_current', true)
+            ->select(['doc_id', 'bill_id', 'document_type', 'file_name', 'mime_type', 'version_no', 'sha256', 'uploaded_by', 'uploaded_at']);
+    }
+
+    public function signatures(): HasMany
+    {
+        return $this->hasMany(DocumentSignature::class, 'bill_id', 'bill_id');
+    }
+
+    public function customerAcceptanceSignatures(): HasMany
+    {
+        return $this->hasMany(CustomerAcceptanceSignature::class, 'bill_id', 'bill_id');
     }
 }

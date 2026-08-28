@@ -3,6 +3,7 @@
 namespace App\Services\Documents;
 
 use App\Models\BillingRecord;
+use App\Models\DocumentSignature;
 use App\Models\Quotation;
 use Dompdf\Dompdf;
 use Dompdf\Options;
@@ -91,6 +92,24 @@ final class DocumentService
         $draft?->loadMissing('items');
         $source = $draft ?? $quotation;
         $sourceItems = $draft?->items ?? $quotation->items;
+        $signature = $draft && $draft->relationLoaded('signatures')
+            ? $draft->signatures
+                ->where('signature_type', 'internal_quotation_approval')
+                ->where('revision_no', max(1, (int) ($source->revision_no ?? 1)))
+                ->whereNull('revoked_at')
+                ->sortByDesc('signed_at')
+                ->first()
+            : null;
+        $customerEvidence = $draft && $draft->relationLoaded('documents')
+            ? $draft->documents->whereIn('document_type', ['customer_po', 'signed_quotation'])->first()
+            : null;
+        $customerAcceptance = $draft && $draft->relationLoaded('customerAcceptanceSignatures')
+            ? $draft->customerAcceptanceSignatures
+                ->where('revision_no', max(1, (int) ($source->revision_no ?? 1)))
+                ->whereNull('revoked_at')
+                ->sortByDesc('accepted_at')
+                ->first()
+            : null;
         $items = $sourceItems->map(function ($item) use ($itemNameOverrides, $revised) {
             $renderItem = clone $item;
             $itemId = (int) ($item->item_id ?? $item->qt_item_id ?? 0);
@@ -108,20 +127,55 @@ final class DocumentService
         return $this->renderPdf(
             title: $revised ? 'ใบเสนอราคา' : 'ใบเสนอราคา',
             englishTitle: $revised ? 'Quotation' : 'Quotation',
-            documentNo: (string) (str_replace('-', '', $quotation->qt_no) ?: 'QT'.str_pad((string) $quotation->qt_id, 5, '0', STR_PAD_LEFT)),
+            documentNo: (string) ((str_replace('-', '', $quotation->qt_no) ?: 'QT'.str_pad((string) $quotation->qt_id, 5, '0', STR_PAD_LEFT)).'/R'.max(1, (int) ($source->revision_no ?? 1))),
             date: (string) (($draft?->bill_date ?? $quotation->qt_date)?->format('d-m-Y') ?? now()->format('d-m-Y')),
             customerName: (string) $source->buyer_name,
             customerCode: (string) ($source->bplus_customer_code ?? ''),
             customerAddress: (string) ($source->address_note ?? ''),
             customerTaxId: (string) ($source->tax_id ?: '-'),
             salesperson: (string) ($source->created_by ?? ''),
-            note: (string) ($source->bill_note ?? '-'),
+            note: $this->quotationNote($source),
             total: (float) $source->total_amount,
             billDiscount: (float) ($source->sale_discount_total ?? 0),
             items: $items,
             copy: $copy,
             canceled: false,
+            approvalEvidence: $signature ? [
+                'name' => $signature->signer_name ?: $signature->signer_username,
+                'role' => $signature->signer_role,
+                'signed_at' => $signature->signed_at?->timezone('Asia/Bangkok')->format('d-m-Y H:i:s'),
+                'hash' => $signature->payload_sha256,
+                'signature_image' => $signature->signature_image_base64,
+                'signature_image_hash' => $signature->signature_image_sha256,
+                'customer_po_no' => $source->customer_po_no,
+                'customer_confirmed_at' => $source->customer_confirmed_at,
+                'customer_evidence_type' => $customerEvidence?->document_type,
+                'customer_evidence_file' => $customerEvidence?->file_name,
+                'customer_signature_image' => $customerAcceptance?->signature_image_base64,
+                'customer_signature_hash' => $customerAcceptance?->signature_image_sha256,
+                'customer_payload_hash' => $customerAcceptance?->payload_sha256,
+                'customer_signer_name' => $customerAcceptance?->signer_name,
+                'customer_signer_position' => $customerAcceptance?->signer_position,
+                'customer_signer_organization' => $customerAcceptance?->signer_organization,
+                'customer_accepted_at' => $customerAcceptance?->accepted_at?->timezone('Asia/Bangkok')->format('d-m-Y H:i:s'),
+            ] : null,
         );
+    }
+
+    private function quotationNote(object $source): string
+    {
+        $details = array_filter([
+            trim((string) ($source->bill_note ?? '')),
+            $source->customer_po_no ? 'PO: '.$source->customer_po_no : null,
+            $source->customer_confirmed_at ? 'ยืนยันเมื่อ: '.(string) $source->customer_confirmed_at : null,
+            $source->customer_contact_name ? 'ผู้ติดต่อ: '.$source->customer_contact_name.($source->customer_contact_channel ? ' ('.$source->customer_contact_channel.')' : '') : null,
+            $source->quotation_valid_until ? 'ใบเสนอราคาหมดอายุ: '.(string) $source->quotation_valid_until : null,
+            $source->payment_terms ? 'ชำระเงิน: '.$source->payment_terms : null,
+            $source->delivery_due_date ? 'กำหนดส่ง: '.(string) $source->delivery_due_date : null,
+            $source->delivery_terms ? 'เงื่อนไขส่ง: '.$source->delivery_terms : null,
+        ]);
+
+        return $details === [] ? '-' : implode(' | ', $details);
     }
 
     /** @param Collection<int, object> $items */
@@ -141,6 +195,7 @@ final class DocumentService
         Collection $items,
         bool $copy,
         bool $canceled,
+        ?array $approvalEvidence = null,
     ): string {
         $fontPath = realpath(resource_path('assets/fonts/THSarabunNew.ttf'));
         $logoPath = realpath(resource_path('assets/images/valorhealth.png'));
@@ -164,6 +219,30 @@ final class DocumentService
 
         $watermark = $canceled ? 'ยกเลิกเอกสาร' : ($copy ? 'สำเนา (COPY)' : '');
         $watermarkClass = $canceled ? ' canceled' : '';
+        $isQuotation = $title === 'ใบเสนอราคา';
+        $documentBranch = $isQuotation ? 'สำนักงานใหญ่<br>สาขา VH000' : 'สาขาที่ออกใบกำกับภาษี<br>สาขา VH000';
+        $leftDocumentText = $isQuotation
+            ? '<div class="received">เงื่อนไขการยืนยัน: ลูกค้าลงนามในเอกสารนี้ หรือออก PO ที่อ้างอิงใบเสนอราคา</div><div class="document-note"><strong>หมายเหตุ:</strong> กรุณาตรวจสอบรายการ ราคา เงื่อนไขชำระเงิน และกำหนดส่งก่อนยืนยัน</div>'
+            : '<div class="received">○ ได้รับสินค้าตามรายการนี้ในสภาพสมบูรณ์และจำนวนครบถ้วน</div><div class="document-note"><strong>หมายเหตุ:</strong> เป็นการยกเลิกใบกำกับภาษีอย่างย่อ<br>และออกใบกำกับภาษีเต็มรูปแบบแทน</div>';
+        $signatureHtml = '';
+        if ($title === 'ใบเสนอราคา') {
+            $signatureImage = ! empty($approvalEvidence['signature_image'])
+                ? '<img class="signature-image" src="data:image/png;base64,'.e($approvalEvidence['signature_image']).'" alt="ลายเซ็นผู้อนุมัติ"><br>'
+                : '';
+            $companyApproval = $approvalEvidence
+                ? '<strong>อนุมัติด้วยลายมือชื่ออิเล็กทรอนิกส์ทั่วไป</strong><br>'.$signatureImage.e($approvalEvidence['name']).' ('.e($approvalEvidence['role']).')<br>'.e($approvalEvidence['signed_at']).'<br><span class="hash">Document SHA-256: '.e($approvalEvidence['hash']).'</span><br><span class="hash">Signature image SHA-256: '.e((string) ($approvalEvidence['signature_image_hash'] ?? '-')).'</span>'
+                : '<span class="signature-line">ลงชื่อ __________________________________</span><br>ผู้มีอำนาจอนุมัติของบริษัท<br>วันที่ __________________';
+            if (! empty($approvalEvidence['customer_signature_image'])) {
+                $customerAcceptance = '<strong>ลูกค้ายืนยันผ่าน Customer Portal</strong><br><img class="signature-image" src="data:image/png;base64,'.e((string) $approvalEvidence['customer_signature_image']).'" alt="ลายเซ็นลูกค้า"><br>'.e((string) $approvalEvidence['customer_signer_name']).' · '.e((string) $approvalEvidence['customer_signer_position']).'<br>'.e((string) $approvalEvidence['customer_signer_organization']).'<br>'.e((string) $approvalEvidence['customer_accepted_at']).'<br><span class="hash">Document SHA-256: '.e((string) $approvalEvidence['customer_payload_hash']).'</span><br><span class="hash">Signature SHA-256: '.e((string) $approvalEvidence['customer_signature_hash']).'</span>';
+            } elseif (($approvalEvidence['customer_evidence_type'] ?? null) === 'signed_quotation') {
+                $customerAcceptance = '<strong>ลูกค้ายืนยันด้วยใบเสนอราคาที่ลงชื่อ</strong><br>'.e((string) $approvalEvidence['customer_evidence_file']).'<br>วันที่ '.e((string) ($approvalEvidence['customer_confirmed_at'] ?: '-')).'<br>ไฟล์ต้นฉบับเก็บแยกในระบบ';
+            } elseif (! empty($approvalEvidence['customer_po_no']) || ($approvalEvidence['customer_evidence_type'] ?? null) === 'customer_po') {
+                $customerAcceptance = '<strong>ลูกค้ายืนยันด้วย PO</strong><br>เลขที่ '.e((string) ($approvalEvidence['customer_po_no'] ?: '-')).'<br>วันที่ '.e((string) ($approvalEvidence['customer_confirmed_at'] ?: '-')).'<br>PO ต้นฉบับเก็บแยกในระบบ';
+            } else {
+                $customerAcceptance = '<span class="signature-line">ลงชื่อ __________________________________</span><br>ผู้มีอำนาจของลูกค้า / ผู้ยืนยันคำสั่งซื้อ<br>ชื่อ __________________ วันที่ __________________';
+            }
+            $signatureHtml = '<table class="signature-table"><tr><td>'.$companyApproval.'</td><td>'.$customerAcceptance.'</td></tr></table><div class="signature-note">หลักฐานอิเล็กทรอนิกส์ผูกกับ Revision และค่า SHA-256 โปรดตรวจสอบรายละเอียดจากใบรับรองการอนุมัติในระบบ</div>';
+        }
         $logo = $logoUrl ? '<div class="logo-wrap"><img class="logo" src="'.e($logoUrl).'" alt="Valor Health"></div>' : '';
         $html = '<!doctype html><html lang="th"><head><meta charset="utf-8"><style>
             @page{margin:24px 27px 30px}
@@ -176,23 +255,58 @@ final class DocumentService
             .after-items{width:100%;border-collapse:collapse;margin-top:-1px;table-layout:fixed}.after-items>tbody>tr>td{padding:0;vertical-align:top}.after-left{width:56%;padding:7px 10px 0 5px!important}.after-right{width:44%}.words{text-align:center;font-weight:bold;margin-bottom:12px}.received{margin:0 0 18px}.document-note{line-height:1.25}
             .summary{width:100%;border-collapse:collapse}.summary td{border:1px solid #222;padding:5px 6px;height:29px;vertical-align:middle}.summary .label{width:64%}.summary .value{width:36%;text-align:right}
             .footer{text-align:center;color:#e3202f;font-size:14px;line-height:1.3;margin-top:16px}.watermark{position:fixed;top:43%;left:12%;font-size:86px;color:rgba(100,100,100,.16);transform:rotate(-35deg);z-index:-1}.watermark.canceled{color:rgba(220,0,0,.18)}
+            .signature-table{width:100%;border-collapse:collapse;margin-top:13px;table-layout:fixed}.signature-table td{width:50%;border:1px solid #222;padding:8px;text-align:center;vertical-align:middle;height:66px}.signature-line{line-height:2}.hash{font-size:9px;word-break:break-all}.signature-note{text-align:center;font-size:11px;margin-top:4px;color:#555}
+            .signature-image{display:inline-block;max-width:150px;max-height:55px;object-fit:contain;margin:3px auto}
         </style></head><body>'.($watermark ? '<div class="watermark'.$watermarkClass.'">'.e($watermark).'</div>' : '').$logo.'
         <table class="header"><tr>
             <td class="company-cell"><div class="company header-line">บริษัท เวเลอร์ เฮลธ์ จำกัด (สำนักงานใหญ่)</div><div class="header-line">2/22 อาคารไอยรา ถ.จันทน์ แขวงทุ่งวัดดอน เขตสาทร</div><div class="header-line">จ.กรุงเทพมหานคร 10120</div><div class="header-line">โทรศัพท์ +66-655219785</div><div>เลขผู้เสียภาษี 0105558041179</div></td>
             <td class="title-cell"><div class="document-title">'.e($title).'<br><span>'.e($englishTitle).'</span></div></td>
-            <td class="document-cell">สาขาที่ออกใบกำกับภาษี<br>สาขา VH000<br><br>เลขที่ '.e($documentNo).'<br>วันที่ '.e($date).'</td>
+            <td class="document-cell">'.$documentBranch.'<br><br>เลขที่ '.e($documentNo).'<br>วันที่ '.e($date).'</td>
         </tr></table>
         <table class="customer"><tr>
             <td class="customer-left"><div class="customer-line"><strong>ชื่อลูกค้า:</strong> '.e($customerName).'</div><div class="customer-line"><strong>ที่อยู่:</strong> '.e($customerAddress).'</div><div><strong>เลขที่ผู้เสียภาษี:</strong> '.e($customerTaxId).'</div><div><strong>หมายเหตุ:</strong> '.e($note).'</div></td>
             <td class="customer-right"><div class="customer-line"><strong>รหัสลูกค้า:</strong> '.e($customerCode).'</div><div style="height:35px"></div><div><strong>พนักงานขาย:</strong> '.e($salesperson).'</div></td>
         </tr></table>
         <table class="items"><thead><tr><th style="width:13%"><strong>รหัสสินค้า</strong><br>Product ID</th><th style="width:35%"><strong>รายการ</strong><br>Description</th><th style="width:8%"><strong>จำนวน</strong><br>Quantity</th><th style="width:13%"><strong>ราคาต่อหน่วย</strong><br>Unit Price</th><th style="width:11%"><strong>ส่วนลด</strong><br>Discount</th><th style="width:20%"><strong>จำนวนเงิน</strong><br>Amount (Baht)</th></tr></thead><tbody>'.$rows.'</tbody></table>
-        <table class="after-items"><tr><td class="after-left"><div class="words">-'.e($this->bahtText->convert($total)).'-</div><div class="received">○ ได้รับสินค้าตามรายการนี้ในสภาพสมบูรณ์และจำนวนครบถ้วน</div><div class="document-note"><strong>หมายเหตุ:</strong> เป็นการยกเลิกใบกำกับภาษีอย่างย่อ<br>และออกใบกำกับภาษีเต็มรูปแบบแทน</div></td><td class="after-right">
+        <table class="after-items"><tr><td class="after-left"><div class="words">-'.e($this->bahtText->convert($total)).'-</div>'.$leftDocumentText.'</td><td class="after-right">
             <table class="summary"><tr><td class="label">มูลค่าราคารวมทั้งสิ้น (Total Amount)</td><td class="value">'.number_format($subtotal, 2).'</td></tr><tr><td class="label">รวมส่วนลดทั้งหมด (Total Discount)</td><td class="value">'.number_format($lineDiscount + $billDiscount, 2).'</td></tr><tr><td class="label">จำนวนภาษีมูลค่าเพิ่ม (VAT)</td><td class="value">'.number_format($vat, 2).'</td></tr><tr><td class="label">จำนวนเงินรวมทั้งสิ้น (Grand Total)</td><td class="value">'.number_format($total, 2).'</td></tr></table>
         </td></tr></table>
-        <div class="footer">เอกสารนี้ได้จัดทำและส่งข้อมูลให้แก่กรมสรรพากรด้วยวิธีการทางอิเล็กทรอนิกส์<br>ทางบริษัทฯ ขอสงวนสิทธิ์ในการแก้ไข เปลี่ยนแปลง หรือยกเลิกเอกสารฉบับนี้ ภายใน 7 วัน นับจากวันที่ระบุในเอกสาร</div>
+        '.$signatureHtml.'
+        <div class="footer">'.($isQuotation
+            ? 'ใบเสนอราคานี้ไม่ใช่ใบกำกับภาษี และใช้ตามเงื่อนไข/ระยะเวลาที่ระบุในเอกสาร'
+            : 'เอกสารนี้ได้จัดทำและส่งข้อมูลให้แก่กรมสรรพากรด้วยวิธีการทางอิเล็กทรอนิกส์<br>ทางบริษัทฯ ขอสงวนสิทธิ์ในการแก้ไข เปลี่ยนแปลง หรือยกเลิกเอกสารฉบับนี้ ภายใน 7 วัน นับจากวันที่ระบุในเอกสาร').'</div>
         </body></html>';
+        return $this->dompdfOutput($html);
+    }
 
+    public function approvalCertificatePdf(BillingRecord $bill, DocumentSignature $signature): string
+    {
+        $bill->loadMissing('documents');
+        $documentRows = $bill->documents->map(fn ($document): string => '<tr><td>'.e($document->document_type).'</td><td>'.e($document->file_name).'</td><td>v'.e((string) $document->version_no).'</td><td class="hash">'.e((string) ($document->sha256 ?: '-')).'</td></tr>')->implode('');
+        $signedDocumentRows = collect(data_get($signature->payload_snapshot, 'evidence_documents', []))
+            ->map(fn (array $document): string => '<tr><td>'.e((string) ($document['document_type'] ?? '-')).'</td><td>'.e((string) ($document['file_name'] ?? '-')).'</td><td>v'.e((string) ($document['version_no'] ?? '-')).'</td><td class="hash">'.e((string) ($document['sha256'] ?? '-')).'</td></tr>')
+            ->implode('');
+        $fontPath = realpath(resource_path('assets/fonts/THSarabunNew.ttf'));
+        $fontUrl = $fontPath !== false ? $this->fileUrl($fontPath) : '';
+        $fontFamily = $fontUrl !== '' ? 'THSarabun,DejaVu Sans,sans-serif' : 'DejaVu Sans,sans-serif';
+        $documentLabel = $bill->workflow_type === 'customer_po_direct'
+            ? 'รายการเปิดบิลจาก PO ลูกค้า Bill #'.e((string) $bill->bill_id)
+            : 'ใบเสนอราคาอ้างอิง Bill #'.e((string) $bill->bill_id).' / Revision R'.e((string) $signature->revision_no);
+        $html = '<!doctype html><html lang="th"><head><meta charset="utf-8"><style>@page{margin:32px}body{font-family:'.$fontFamily.';font-size:17px;color:#172033}h1{color:#b82032;margin:0 0 5px}.sub{color:#687084}.box{border:1px solid #ccd1d9;padding:12px;margin-top:14px}table{width:100%;border-collapse:collapse;margin-top:10px}td,th{border:1px solid #ccd1d9;padding:6px;text-align:left;vertical-align:top}.hash{font-family:monospace;font-size:9px;word-break:break-all}.notice{margin-top:16px;padding:10px;background:#fff4f5;border-left:4px solid #b82032;font-size:14px}</style></head><body>
+            <h1>ใบรับรองหลักฐานการอนุมัติอิเล็กทรอนิกส์</h1><div class="sub">Electronic Approval Evidence Certificate</div>
+            <div class="box"><strong>เอกสาร:</strong> '.$documentLabel.'<br><strong>ลูกค้า:</strong> '.e((string) $bill->buyer_name).'<br><strong>ยอดรวม:</strong> '.number_format((float) $bill->total_amount, 2).' บาท</div>
+            <table><tr><th>ผู้แสดงเจตนา</th><td>'.(! empty($signature->signature_image_base64) ? '<img style="max-width:170px;max-height:65px" src="data:image/png;base64,'.e($signature->signature_image_base64).'" alt="ลายเซ็น"><br>' : '').e((string) ($signature->signer_name ?: $signature->signer_username)).' ('.e((string) $signature->signer_role).')</td></tr><tr><th>บัญชี / อีเมล</th><td>'.e((string) $signature->signer_username).' / '.e((string) ($signature->signer_email ?: '-')).'</td></tr><tr><th>วันเวลาลงนาม</th><td>'.e((string) $signature->signed_at?->timezone('Asia/Bangkok')->format('d-m-Y H:i:s')).' (Asia/Bangkok)</td></tr><tr><th>เจตนา</th><td>'.e((string) $signature->intent_text).'</td></tr><tr><th>วิธีการ</th><td>ภาพลายเซ็น Version ที่ผูกกับบัญชี + ยืนยันบัญชีและกรอกรหัสผ่านซ้ำ (ลายมือชื่ออิเล็กทรอนิกส์ทั่วไป)</td></tr><tr><th>SHA-256 ของภาพลายเซ็น</th><td class="hash">'.e((string) ($signature->signature_image_sha256 ?: '-')).'</td></tr><tr><th>IP / User Agent</th><td>'.e((string) ($signature->ip_address ?: '-')).'<br>'.e((string) ($signature->user_agent ?: '-')).'</td></tr><tr><th>SHA-256 ของข้อมูลที่อนุมัติ</th><td class="hash">'.e((string) $signature->payload_sha256).'</td></tr></table>
+            <h3>ไฟล์หลักฐานที่อยู่ใน Snapshot ขณะอนุมัติ</h3><table><tr><th>ชนิด</th><th>ชื่อไฟล์</th><th>รุ่น</th><th>SHA-256</th></tr>'.($signedDocumentRows ?: '<tr><td colspan="4">ไม่มีไฟล์หลักฐานลูกค้าในขณะบริษัทอนุมัติ</td></tr>').'</table>
+            <h3>ไฟล์ยืนยันจากลูกค้าปัจจุบัน (อาจได้รับหลังบริษัทอนุมัติ)</h3><table><tr><th>ชนิด</th><th>ชื่อไฟล์</th><th>รุ่น</th><th>SHA-256</th></tr>'.($documentRows ?: '<tr><td colspan="4">ยังไม่มีไฟล์หลักฐานลูกค้า</td></tr>').'</table>
+            <div class="notice">เอกสารนี้เป็นหลักฐานของลายมือชื่ออิเล็กทรอนิกส์ทั่วไปตามกระบวนการภายในระบบ ไม่ใช่ลายมือชื่อดิจิทัลแบบ PKI และไม่ใช่ใบรับรองจากผู้ให้บริการออกใบรับรอง</div></body></html>';
+
+        return $this->dompdfOutput($html);
+    }
+
+    private function dompdfOutput(string $html): string
+    {
+        $fontPath = realpath(resource_path('assets/fonts/THSarabunNew.ttf'));
+        $fontUrl = $fontPath !== false ? $this->fileUrl($fontPath) : '';
         $dompdfDirectory = storage_path('app/private/dompdf');
         $fontDirectory = $dompdfDirectory.DIRECTORY_SEPARATOR.'fonts';
         File::ensureDirectoryExists($fontDirectory);

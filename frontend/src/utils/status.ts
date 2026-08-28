@@ -30,7 +30,7 @@ export function statusTone(value: string | null | undefined): StatusTone {
   ])) return 'success'
 
   if (containsAny(status, ['เตรียมส่งออก', 'พร้อมส่งออก', 'พร้อมจัดส่ง'])) return 'ready'
-  if (containsAny(status, ['รอแอดมินตรวจสอบ', 'กำลังทำ', 'กำลังดำเนินการ', 'processing', 'in progress'])) return 'info'
+  if (containsAny(status, ['รอลูกค้ายืนยัน', 'รอแอดมินตรวจสอบ', 'กำลังทำ', 'กำลังดำเนินการ', 'processing', 'in progress'])) return 'info'
   if (containsAny(status, ['รออนุมัติ', 'รอหัวหน้า', 'รออนุมัติวงเงิน', 'รอดำเนินการ', 'pending'])) return 'warning'
 
   return 'neutral'

@@ -17,16 +17,19 @@ final class AuditLogger
     private const EVENT_MAP = [
         'AuthController@login' => ['auth.login', 'การเข้าสู่ระบบ', 'เข้าสู่ระบบ'],
         'AuthController@logout' => ['auth.logout', 'การเข้าสู่ระบบ', 'ออกจากระบบ'],
-        'PasswordResetController@__invoke' => ['auth.reset_password', 'การเข้าสู่ระบบ', 'เปลี่ยนรหัสผ่าน'],
+        'PasswordResetController@requestLink' => ['auth.password_reset_request', 'การเข้าสู่ระบบ', 'ขอลิงก์ตั้งรหัสผ่านใหม่'],
+        'PasswordResetController@reset' => ['auth.reset_password', 'การเข้าสู่ระบบ', 'เปลี่ยนรหัสผ่านด้วย Token'],
         'QuotationController@store' => ['quotation.create', 'ใบเสนอราคา', 'สร้างใบเสนอราคา'],
         'QuotationController@show' => ['quotation.view', 'ใบเสนอราคา', 'เปิดดูรายละเอียดใบเสนอราคา'],
         'QuotationController@pdf' => ['quotation.print', 'เอกสาร', 'เปิดหรือพิมพ์ใบเสนอราคา'],
         'QuotationController@customNamePdf' => ['quotation.custom_name_print', 'เอกสาร', 'สร้างใบเสนอราคาที่เปลี่ยนชื่อสินค้า'],
         'BillingWorkflowController@createFromQuotation' => ['bill.create_from_quotation', 'บิล', 'สร้างบิลจากใบเสนอราคา'],
+        'BillingWorkflowController@createFromPurchaseOrder' => ['bill.create_from_purchase_order', 'บิล', 'สร้างรายการเปิดบิลจาก PO โดยตรง'],
         'BillingWorkflowController@show' => ['bill.view', 'บิล', 'เปิดดูรายละเอียดบิล'],
         'BillingWorkflowController@updateBySale' => ['bill.sale_update', 'บิล', 'Sale แก้ไขข้อมูลบิล'],
         'BillingWorkflowController@submitDraft' => ['bill.submit', 'อนุมัติบิล', 'ส่งบิลเพื่อขออนุมัติ'],
         'BillingWorkflowController@approve' => ['bill.approve', 'อนุมัติบิล', 'อนุมัติบิล'],
+        'BillingWorkflowController@approvalCertificate' => ['bill.approval_evidence_download', 'เอกสาร', 'ดาวน์โหลดใบรับรองหลักฐานการอนุมัติ'],
         'BillingWorkflowController@reject' => ['bill.reject', 'อนุมัติบิล', 'ตีกลับบิล'],
         'BillingWorkflowController@prepare' => ['bill.prepare', 'จัดเตรียมบิล', 'Admin จัดเตรียมบิล'],
         'BillingWorkflowController@adminUpdate' => ['bill.admin_update', 'จัดเตรียมบิล', 'แก้ไขข้อมูลส่วนกลางของบิล'],
@@ -35,7 +38,11 @@ final class AuditLogger
         'BillingWorkflowController@completeAll' => ['bill.complete_all', 'จัดเตรียมบิล', 'ปิดงานบิลทั้งหมด'],
         'BillingWorkflowController@export' => ['bill.export', 'เอกสาร', 'ส่งออกข้อมูลบิล'],
         'BillingWorkflowController@pdf' => ['bill.print', 'เอกสาร', 'เปิดหรือพิมพ์เอกสารบิล'],
-        'BillingWorkflowController@destroy' => ['bill.delete', 'บิล', 'ลบบิล'],
+        'BillingWorkflowController@cancel' => ['bill.cancel', 'บิล', 'ยกเลิกบิลโดยเก็บเอกสารเดิม'],
+        'BillingDocumentController@store' => ['bill.purchase_order_upload', 'เอกสาร', 'แนบหรือเปลี่ยนไฟล์ PO ลูกค้า'],
+        'BillingDocumentController@show' => ['bill.purchase_order_download', 'เอกสาร', 'เปิดไฟล์ PO ลูกค้า'],
+        'BillingDocumentController@storeSignedQuotation' => ['bill.signed_quotation_upload', 'เอกสาร', 'แนบใบเสนอราคาที่ลูกค้าลงชื่อ'],
+        'BillingDocumentController@showSignedQuotation' => ['bill.signed_quotation_download', 'เอกสาร', 'เปิดใบเสนอราคาที่ลูกค้าลงชื่อ'],
         'CreditRequestController@store' => ['credit.create', 'วงเงินเครดิต', 'สร้างคำขอวงเงินเครดิต'],
         'CreditRequestController@approve' => ['credit.approve', 'วงเงินเครดิต', 'อนุมัติวงเงินเครดิต'],
         'CreditRequestController@reject' => ['credit.reject', 'วงเงินเครดิต', 'ไม่อนุมัติวงเงินเครดิต'],
@@ -55,11 +62,17 @@ final class AuditLogger
         'UserManagementController@store' => ['user.create', 'ผู้ใช้งาน', 'สร้างบัญชีผู้ใช้'],
         'UserManagementController@update' => ['user.update', 'ผู้ใช้งาน', 'แก้ไขบัญชีผู้ใช้'],
         'UserManagementController@destroy' => ['user.delete', 'ผู้ใช้งาน', 'ลบบัญชีผู้ใช้'],
+        'UserSignatureController@store' => ['user.signature_upload', 'ผู้ใช้งาน', 'เพิ่ม Version ลายเซ็นประจำบัญชี'],
+        'UserSignatureController@show' => ['user.signature_view', 'ผู้ใช้งาน', 'เปิดดูตัวอย่างลายเซ็นประจำบัญชี'],
         'PublicTaxController@confirm' => ['public_tax.confirm', 'ข้อมูลภาษี', 'ลูกค้ายืนยันข้อมูลภาษี'],
         'PublicTaxController@show' => ['public_tax.view', 'ข้อมูลภาษี', 'ลูกค้าเปิดหน้าตรวจสอบข้อมูลภาษี'],
         'PublicTaxController@cancel' => ['public_tax.cancel', 'ข้อมูลภาษี', 'ลูกค้ายกเลิกการยืนยันข้อมูลภาษี'],
         'PublicTaxController@pdf' => ['public_tax.print', 'เอกสาร', 'ลูกค้าเปิดหรือพิมพ์เอกสารภาษี'],
+        'CustomerAcceptanceController@show' => ['customer_acceptance.view', 'ลายมือชื่ออิเล็กทรอนิกส์', 'ลูกค้าเปิดใบเสนอราคาเพื่อยืนยัน'],
+        'CustomerAcceptanceController@accept' => ['customer_acceptance.sign', 'ลายมือชื่ออิเล็กทรอนิกส์', 'ลูกค้ายืนยันและลงลายมือชื่อใบเสนอราคา'],
+        'CustomerAcceptanceController@pdf' => ['customer_acceptance.print', 'เอกสาร', 'ลูกค้าดาวน์โหลดใบเสนอราคาที่ลงนาม'],
         'ReceiptOcrController@__invoke' => ['receipt.scan', 'ใบเสร็จ', 'สแกนข้อมูลใบเสร็จ'],
+        'PurchaseOrderScanController@__invoke' => ['purchase_order.scan', 'เอกสาร', 'ใช้ AI อ่านและช่วยกรอกใบ PO'],
         'BudgetAnalysisController@analyze' => ['budget.analyze', 'วิเคราะห์งบประมาณ', 'วิเคราะห์ไฟล์งบประมาณ'],
         'BudgetAnalysisController@download' => ['budget.download', 'เอกสาร', 'ดาวน์โหลดผลวิเคราะห์งบประมาณ'],
         'BudgetAnalysisController@preview' => ['budget.preview', 'เอกสาร', 'เปิดดูตัวอย่างผลวิเคราะห์งบประมาณ'],
@@ -73,7 +86,7 @@ final class AuditLogger
     /** @var array<int, string> */
     private const SENSITIVE_KEYS = [
         'password', 'password_confirmation', 'token', 'secret', 'authorization',
-        'cookie', 'tax_qr_token', 'file_bytes',
+        'cookie', 'tax_qr_token', 'customer_acceptance_token', 'file_bytes', 'signature_image', 'signature_image_base64',
     ];
 
     public function shouldLog(Request $request): bool
@@ -234,7 +247,7 @@ final class AuditLogger
         if ($this->handler($request) === 'AuthController@login') {
             return Str::limit((string) $request->input('username'), 255, '');
         }
-        if (str_starts_with((string) $request->route()?->uri(), 'api/v1/public/tax/')) {
+        if (str_starts_with((string) $request->route()?->uri(), 'api/v1/public/')) {
             return 'Customer Portal';
         }
 

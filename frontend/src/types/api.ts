@@ -15,6 +15,7 @@ export interface User {
   email: string | null
   department: string | null
   role: string | null
+  quotation_signing_authorized: boolean
   role_group: RoleGroup
   abilities: string[]
   menu: MenuItem[]
@@ -88,6 +89,34 @@ export interface BillingRecord {
   excel_exported_by?: string | null
   submitted_at?: string | null
   issued_at?: string | null
+  customer_po_no?: string | null
+  customer_confirmed_at?: string | null
+  customer_contact_name?: string | null
+  customer_contact_channel?: string | null
+  quotation_valid_until?: string | null
+  payment_terms?: string | null
+  delivery_due_date?: string | null
+  delivery_terms?: string | null
+  revision_no?: number
+  canceled_at?: string | null
+  canceled_by?: string | null
+  cancellation_reason?: string | null
+  customer_acceptance_token?: string | null
+  customer_acceptance_expires_at?: string | null
+  customer_acceptance_used_at?: string | null
+  documents?: BillingDocument[]
+}
+
+export interface BillingDocument {
+  doc_id: number
+  bill_id: number
+  document_type: string
+  file_name: string
+  mime_type: string | null
+  version_no?: number
+  sha256?: string | null
+  uploaded_by: string
+  uploaded_at: string
 }
 
 export interface QuotationItem {
@@ -129,6 +158,15 @@ export interface Quotation {
   requested_credit_term: number | null
   quotation_printed_at?: string | null
   quotation_printed_by?: string | null
+  customer_po_no?: string | null
+  customer_confirmed_at?: string | null
+  customer_contact_name?: string | null
+  customer_contact_channel?: string | null
+  quotation_valid_until?: string | null
+  payment_terms?: string | null
+  delivery_due_date?: string | null
+  delivery_terms?: string | null
+  revision_no?: number
   items_count?: number
   items?: QuotationItem[]
   billing_record?: {
@@ -138,6 +176,11 @@ export interface Quotation {
     status: string | null
     buyer_name?: string | null
     total_amount?: string | null
+    internal_approval_exists?: boolean
+    customer_acceptance_token?: string | null
+    customer_acceptance_expires_at?: string | null
+    customer_acceptance_used_at?: string | null
+    documents?: BillingDocument[]
   } | null
 }
 

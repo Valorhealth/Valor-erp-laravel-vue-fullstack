@@ -275,6 +275,15 @@ input[type="checkbox"] { accent-color: var(--brand); box-shadow: none; }
 .approval-items-table td { vertical-align: top; }
 .approval-actions--bill { display: grid; grid-template-columns: max-content max-content minmax(280px, 1fr); align-items: end; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
 .approval-actions--bill label { min-width: 0; }
+.approval-signature-confirmation { grid-column: 1 / -1; padding: 14px; border: 1px solid #f1bdc4; border-radius: 12px; background: #fff7f8; }
+.approval-signature-confirmation > p { margin: 5px 0 10px; color: var(--text); }
+.approval-signature-confirmation small { display: block; margin-top: 8px; color: var(--muted); }
+.approval-signature-confirmation .approval-consent { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+.approval-signature-confirmation .approval-consent input { width: auto; margin-top: 2px; }
+.evidence-upload { display: grid; gap: 6px; width: min(360px, 70vw); margin-top: 8px; padding: 9px; border: 1px solid #f1bdc4; border-radius: 10px; background: #fff7f8; }
+.signature-management { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #fafbfc; }
+.signature-management input[type="file"] { margin: 8px 8px 0 0; }
+.signature-preview { width: 220px; height: 90px; object-fit: contain; border: 1px dashed #c9ced6; border-radius: 8px; background: #fff; }
 .risk-banner { padding: 12px; margin: 12px 0; border-radius: 9px; background: #edf8f2; color: var(--success); font-size: 12px; }
 .risk-banner--success { background: #edf8f2; color: var(--success); }
 .risk-banner--warning { background: #fff7df; color: #885d06; }
@@ -287,6 +296,7 @@ select[multiple] { min-height: 130px; }
 .public-page { min-height: 100vh; padding: 28px 18px 60px; background: #f5f6f8; }
 .public-header, .public-card { width: min(960px, 100%); margin-left: auto; margin-right: auto; }
 .public-header { margin-bottom: 22px; }.public-header .portal-brand small { color: var(--muted); }
+.acceptance-page{max-width:1050px}.legal-summary,.intent-box{margin-top:18px;padding:14px 16px;border-left:4px solid var(--brand);background:#fff4f5;border-radius:8px;line-height:1.55}.acceptance-terms{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;margin-top:16px}.signature-methods{display:flex;gap:22px;flex-wrap:wrap}.signature-methods label{display:flex;align-items:center;gap:8px}.signature-pad-wrap{position:relative;border:2px dashed #aeb5c0;border-radius:12px;background:#fff;overflow:hidden}.signature-pad{display:block;width:100%;height:220px;touch-action:none;cursor:crosshair}.signature-pad-wrap>span{position:absolute;left:12px;bottom:8px;color:#98a1ae;font-size:12px;pointer-events:none}.signature-preview{display:block;max-width:320px;max-height:150px;margin-top:12px;padding:8px;border:1px solid #d5d9e0;border-radius:10px;background:#fff}@media(max-width:700px){.acceptance-terms{grid-template-columns:1fr}.signature-pad{height:190px}}
 .public-card { padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: #fff; box-shadow: var(--shadow); }
 .public-card h1 { margin-bottom: 18px; font-size: clamp(25px, 4vw, 38px); }
 .public-state-card { text-align: center; }

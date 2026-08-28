@@ -35,10 +35,12 @@ final class DashboardService
 
         $totalBills = (clone $filtered)->count();
         $successful = (clone $filtered)->whereIn('status', self::SUCCESS_STATUSES);
-        $totalRevenue = (clone $filtered)->sum('total_amount');
+        // Canceled documents remain in the legal/audit count, but never contribute to financial totals.
+        $financial = (clone $filtered)->where('status', '!=', 'ยกเลิกบิล');
+        $totalRevenue = (clone $financial)->sum('total_amount');
         $recognizedRevenue = (clone $successful)->sum('total_amount');
         $recognizedBills = (clone $successful)->count();
-        $activeCustomers = (int) ((clone $filtered)
+        $activeCustomers = (int) ((clone $financial)
             ->toBase()
             ->selectRaw("COUNT(DISTINCT COALESCE(NULLIF(BTRIM(bplus_customer_code), ''), LOWER(BTRIM(buyer_name)))) AS total")
             ->first()?->total ?? 0);
@@ -53,11 +55,11 @@ final class DashboardService
         $needsRevision = $countStatuses(self::NEEDS_REVISION_STATUSES);
         $readyExport = $countStatuses(self::READY_EXPORT_STATUSES);
         $completedBills = $countStatuses(self::COMPLETED_STATUSES);
-        $salesByPerson = (clone $filtered)
+        $salesByPerson = (clone $financial)
             ->selectRaw('created_by, COALESCE(SUM(total_amount), 0) AS total')->groupBy('created_by')->orderByDesc('total')->get();
-        $dailySales = (clone $filtered)
+        $dailySales = (clone $financial)
             ->selectRaw('bill_date, COALESCE(SUM(total_amount), 0) AS total')->groupBy('bill_date')->orderBy('bill_date')->get();
-        $topCustomers = (clone $filtered)
+        $topCustomers = (clone $financial)
             ->selectRaw("COALESCE(NULLIF(BTRIM(bplus_customer_code), ''), LOWER(BTRIM(buyer_name))) AS customer_key, MAX(buyer_name) AS buyer_name, COUNT(*) AS bills, COALESCE(SUM(total_amount), 0) AS total")
             ->groupByRaw("COALESCE(NULLIF(BTRIM(bplus_customer_code), ''), LOWER(BTRIM(buyer_name)))")
             ->orderByDesc('total')
@@ -75,6 +77,7 @@ final class DashboardService
             ->when($statuses !== [], fn ($query) => $query->whereIn('bills.status', $statuses))
             ->when($dateFrom, fn ($query) => $query->whereDate('bills.bill_date', '>=', $dateFrom))
             ->when($dateTo, fn ($query) => $query->whereDate('bills.bill_date', '<=', $dateTo));
+        $filteredItems->where('bills.status', '!=', 'ยกเลิกบิล');
         $grossExpression = 'COALESCE(items.line_total_before_discount, items.quantity * items.unit_price, 0)';
         $lineNetExpression = 'COALESCE(items.line_total, items.quantity * items.unit_price, 0)';
         $allocatedBillDiscount = "CASE WHEN COALESCE(item_totals.bill_line_total, 0) > 0 THEN COALESCE(bills.sale_discount_total, 0) * {$lineNetExpression} / item_totals.bill_line_total ELSE 0 END";
@@ -88,7 +91,7 @@ final class DashboardService
             ->limit(10)
             ->get();
         $grossSales = round((float) ($itemMetrics?->gross_amount ?? 0), 2);
-        $adminBillDiscount = (float) (clone $filtered)->sum('admin_discount_final');
+        $adminBillDiscount = (float) (clone $financial)->sum('admin_discount_final');
         $adminItemDiscount = (float) (clone $filteredItems)->sum('items.admin_disocount_unit');
 
         return [

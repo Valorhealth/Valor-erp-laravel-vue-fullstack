@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\AuditRequest;
+use App\Http\Middleware\EnsurePasswordIsCurrent;
 use App\Http\Middleware\EnsureRoleAbility;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -18,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'ability' => EnsureRoleAbility::class,
             'audit' => AuditRequest::class,
+            'password.current' => EnsurePasswordIsCurrent::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

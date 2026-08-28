@@ -33,6 +33,7 @@ class AuthController extends Controller
 
         Auth::guard('web')->login($user);
         $request->session()->regenerate();
+        $request->session()->put('password_authenticated_at', now()->getTimestamp());
 
         return response()->json(['data' => new UserResource($user)]);
     }

@@ -13,7 +13,6 @@ const errorMessage = ref('')
 const submitting = ref(false)
 const resetMode = ref(false)
 const email = ref('')
-const passwordConfirmation = ref('')
 const successMessage = ref('')
 
 async function submit() {
@@ -35,17 +34,15 @@ async function submit() {
   }
 }
 
-async function resetPassword() {
+async function requestResetLink() {
   errorMessage.value = ''; successMessage.value = ''
-  if (password.value !== passwordConfirmation.value) { errorMessage.value = 'รหัสผ่านใหม่ไม่ตรงกัน'; return }
   submitting.value = true
   try {
     await api.get('/sanctum/csrf-cookie')
-    await api.post('/api/v1/auth/reset-password', { username: username.value.trim(), email: email.value.trim(), password: password.value, password_confirmation: passwordConfirmation.value })
-    successMessage.value = 'เปลี่ยนรหัสผ่านสำเร็จ กรุณาเข้าสู่ระบบด้วยรหัสผ่านใหม่'
-    resetMode.value = false; password.value = ''; passwordConfirmation.value = ''
+    const response = await api.post('/api/v1/auth/forgot-password', { email: email.value.trim() })
+    successMessage.value = response.data?.message || 'หากมีบัญชีนี้ ระบบจะส่งลิงก์ให้ทางอีเมล'
   } catch (error) {
-    errorMessage.value = axios.isAxiosError(error) ? (error.response?.data?.message || 'Username หรือ Email ไม่ถูกต้อง') : 'เปลี่ยนรหัสผ่านไม่สำเร็จ'
+    errorMessage.value = axios.isAxiosError(error) ? (error.response?.data?.message || 'ส่งคำขอไม่สำเร็จ') : 'ส่งคำขอไม่สำเร็จ'
   } finally { submitting.value = false }
 }
 </script>
@@ -68,14 +65,14 @@ async function resetPassword() {
     </section>
 
     <section class="login-panel">
-      <form class="login-card" @submit.prevent="resetMode ? resetPassword() : submit()">
+      <form class="login-card" @submit.prevent="resetMode ? requestResetLink() : submit()">
         <div>
           <p class="eyebrow eyebrow--red">ยินดีต้อนรับ</p>
-          <h2>{{ resetMode ? 'รีเซ็ตรหัสผ่านใหม่' : 'เข้าสู่ระบบ' }}</h2>
-          <p class="muted">{{ resetMode ? 'กรอก Username และอีเมลที่ใช้สมัครให้ถูกต้อง' : 'เข้าสู่ระบบด้วยบัญชีบริษัท ValorHealth ของคุณ' }}</p>
+          <h2>{{ resetMode ? 'ขอลิงก์ตั้งรหัสผ่านใหม่' : 'เข้าสู่ระบบ' }}</h2>
+          <p class="muted">{{ resetMode ? 'ระบบจะส่งลิงก์ใช้ครั้งเดียวไปยังอีเมลของบัญชี' : 'เข้าสู่ระบบด้วยบัญชีบริษัท ValorHealth ของคุณ' }}</p>
         </div>
 
-        <label>
+        <label v-if="!resetMode">
           <span>Username</span>
           <input v-model="username" name="username" autocomplete="username" required autofocus placeholder="กรอกชื่อผู้ใช้">
         </label>
@@ -85,17 +82,15 @@ async function resetPassword() {
           <input v-model="email" name="email" type="email" autocomplete="email" required placeholder="name@company.com">
         </label>
 
-        <label>
-          <span>{{ resetMode ? 'รหัสผ่านใหม่' : 'Password' }}</span>
-          <input v-model="password" name="password" type="password" :autocomplete="resetMode ? 'new-password' : 'current-password'" minlength="4" required :placeholder="resetMode ? 'อย่างน้อย 4 ตัวอักษร' : 'กรอกรหัสผ่าน'">
+        <label v-if="!resetMode">
+          <span>Password</span>
+          <input v-model="password" name="password" type="password" autocomplete="current-password" required placeholder="กรอกรหัสผ่าน">
         </label>
-
-        <label v-if="resetMode"><span>ยืนยันรหัสผ่านใหม่</span><input v-model="passwordConfirmation" type="password" autocomplete="new-password" minlength="4" required></label>
 
         <p v-if="errorMessage" class="form-error" role="alert">{{ errorMessage }}</p>
         <p v-if="successMessage" class="success-message">{{ successMessage }}</p>
         <button class="primary-button" type="submit" :disabled="submitting">
-          {{ submitting ? 'กำลังตรวจสอบ…' : (resetMode ? 'บันทึกรหัสผ่านใหม่' : 'เข้าสู่ระบบ') }}
+          {{ submitting ? 'กำลังดำเนินการ…' : (resetMode ? 'ส่งลิงก์ไปที่อีเมล' : 'เข้าสู่ระบบ') }}
         </button>
         <button class="login-link" type="button" @click="resetMode = !resetMode; errorMessage = ''; successMessage = ''">{{ resetMode ? '← กลับไปหน้าล็อกอิน' : 'ลืมรหัสผ่าน?' }}</button>
       </form>

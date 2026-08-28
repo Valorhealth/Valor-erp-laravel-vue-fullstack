@@ -12,7 +12,7 @@ use Illuminate\Validation\Rule;
 class BillingRecordController extends Controller
 {
     private const STATUS_GROUPS = [
-        'approved' => ['รอแอดมินตรวจสอบ', 'อนุมัติแล้ว', 'เตรียมส่งออก', 'ดำเนินการเสร็จสิ้น'],
+        'approved' => ['รอลูกค้ายืนยัน', 'รอแอดมินตรวจสอบ', 'อนุมัติแล้ว', 'เตรียมส่งออก', 'ดำเนินการเสร็จสิ้น'],
         'rejected' => ['รอแก้ไข', 'ไม่อนุมัติ'],
     ];
 

@@ -20,7 +20,12 @@ class QuotationController extends Controller
         $search = trim((string) $request->query('search', ''));
         $availableForBilling = $request->boolean('available_for_billing');
         $quotations = Quotation::query()
-            ->with(['billingRecord:bill_id,ref_qt_id,bill_date,status,buyer_name,total_amount'])
+            ->with(['billingRecord' => fn ($query) => $query
+                ->select(['bill_id', 'ref_qt_id', 'bill_date', 'status', 'buyer_name', 'total_amount', 'customer_acceptance_token', 'customer_acceptance_expires_at', 'customer_acceptance_used_at'])
+                ->with(['documents'])
+                ->withExists(['signatures as internal_approval_exists' => fn ($signatures) => $signatures
+                    ->where('signature_type', 'internal_quotation_approval')
+                    ->whereNull('revoked_at')])])
             ->withCount('items')
             ->when(RoleAccess::mustUseOwnBillingRecords($request->user()->role), fn ($query) => $query->where('created_by', $request->user()->username))
             ->when($availableForBilling, fn ($query) => $query->where(fn ($available) => $available
@@ -41,6 +46,17 @@ class QuotationController extends Controller
         $this->authorizeQuotation($request, $quotation);
 
         return response()->json(['data' => $quotation->load('items')]);
+    }
+
+    public function revisions(Request $request, Quotation $quotation): JsonResponse
+    {
+        $this->authorizeQuotation($request, $quotation);
+        $revisions = DB::table('quotation_revisions')
+            ->where('qt_id', $quotation->qt_id)
+            ->orderByDesc('revision_no')
+            ->get(['revision_id', 'qt_id', 'bill_id', 'revision_no', 'changed_by', 'change_note', 'created_at']);
+
+        return response()->json(['data' => $revisions]);
     }
 
     public function store(
@@ -67,9 +83,18 @@ class QuotationController extends Controller
             'sale_discount_note' => ['nullable', 'string', 'max:2000'],
             'requested_credit_term' => ['nullable', 'integer', 'min:0'],
             'workflow_type' => ['nullable', 'in:existing_customer,credit_first'],
+            'customer_po_no' => ['nullable', 'string', 'max:255'],
+            'customer_confirmed_at' => ['nullable', 'date'],
+            'customer_contact_name' => ['nullable', 'string', 'max:500'],
+            'customer_contact_channel' => ['nullable', 'string', 'max:255'],
+            'quotation_valid_until' => ['nullable', 'date', 'after_or_equal:qt_date'],
+            'payment_terms' => ['nullable', 'string', 'max:5000'],
+            'delivery_due_date' => ['nullable', 'date'],
+            'delivery_terms' => ['nullable', 'string', 'max:5000'],
             'items' => ['required', 'array', 'min:1', 'max:100'],
             'items.*.main_category' => ['required', 'string', 'max:255'],
             'items.*.sub_category' => ['required', 'string', 'max:2000'],
+            'items.*.customer_product_name' => ['nullable', 'string', 'max:2000'],
             'items.*.unit_type' => ['required', 'string', 'max:255'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
             'items.*.unit_price' => ['required', 'numeric', 'min:0'],
@@ -123,7 +148,7 @@ class QuotationController extends Controller
         $copy = $request->boolean('copy');
         $revised = $request->boolean('revised');
         abort_if($copy && $revised, 422, 'กรุณาเลือกประเภทเอกสารเพียงประเภทเดียว');
-        $draft = $quotation->billingRecord()->with('items')->first();
+        $draft = $quotation->billingRecord()->with(['items', 'signatures', 'documents', 'customerAcceptanceSignatures'])->first();
         $bytes = $documents->quotationPdf($quotation, $copy, $draft, $revised);
         $quotation->forceFill(['quotation_printed_at' => now(), 'quotation_printed_by' => $request->user()->username])->save();
         $filename = $documents->quotationDownloadName($quotation, $copy, $revised);

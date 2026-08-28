@@ -3,6 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import StatusPill from '../components/StatusPill.vue'
+import { auth } from '../stores/auth'
 import type { BillingRecord, CreditRequest, Paginated } from '../types/api'
 import { apiError, money, shortDate } from '../utils/format'
 
@@ -14,6 +15,12 @@ const error = ref('')
 const message = ref('')
 const rejectBillReasons = reactive<Record<number, string>>({})
 const rejectCreditReasons = reactive<Record<number, string>>({})
+const approvalPasswords = reactive<Record<number, string>>({})
+const approvalConsents = reactive<Record<number, boolean>>({})
+const quotationApprovalIntent = 'ข้าพเจ้าได้ตรวจสอบใบเสนอราคา Revision นี้และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว'
+const poDirectApprovalIntent = 'ข้าพเจ้าได้ตรวจสอบใบสั่งซื้อของลูกค้าและข้อมูลเปิดบิลรายการนี้แล้ว และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว'
+const approvalIntent = (bill: BillingRecord) => bill.workflow_type === 'customer_po_direct' ? poDirectApprovalIntent : quotationApprovalIntent
+const canSignQuotation = () => Boolean(auth.user.value?.quotation_signing_authorized)
 
 async function load(creditPageNumber = creditPage.value?.current_page || 1) {
   loading.value = true
@@ -47,6 +54,16 @@ async function action(url: string, data: unknown, success: string) {
   }
 }
 
+async function approveBill(bill: BillingRecord) {
+  await action(
+    `/api/v1/bills/${bill.bill_id}/approve`,
+    { password: approvalPasswords[bill.bill_id], intent: approvalIntent(bill) },
+    `อนุมัติและบันทึกหลักฐานอิเล็กทรอนิกส์ของบิล #${bill.bill_id} แล้ว`,
+  )
+  approvalPasswords[bill.bill_id] = ''
+  approvalConsents[bill.bill_id] = false
+}
+
 function display(value: unknown): string {
   const text = String(value ?? '').trim()
   return text || '-'
@@ -55,6 +72,7 @@ function display(value: unknown): string {
 function workflowLabel(workflow?: string | null): string {
   if (workflow === 'credit_first') return 'ขอเปิดวงเงินก่อนขาย'
   if (workflow === 'existing_customer') return 'ขายจากใบเสนอราคา'
+  if (workflow === 'customer_po_direct') return 'เปิดบิลจาก PO โดยตรง'
   return display(workflow)
 }
 
@@ -204,8 +222,24 @@ onMounted(load)
                 <div><span>เลขผู้เสียภาษี</span><strong>{{ display(bill.tax_id) }}</strong></div>
                 <div><span>วันที่บิล</span><strong>{{ shortDate(bill.bill_date) }}</strong></div>
                 <div><span>ใบเสนอราคาอ้างอิง</span><strong>{{ bill.ref_qt_id ? `#${bill.ref_qt_id}` : '-' }}</strong></div>
+                <div><span>Revision</span><strong>R{{ bill.revision_no || 1 }}</strong></div>
                 <div><span>รูปแบบการขาย</span><strong>{{ workflowLabel(bill.workflow_type) }}</strong></div>
               </div>
+            </section>
+
+            <section class="approval-detail-section">
+              <h3>การยืนยันจากลูกค้า</h3>
+              <div class="approval-info-grid">
+                <div><span>เลขที่ PO</span><strong>{{ display(bill.customer_po_no) }}</strong></div>
+                <div><span>วันที่ยืนยัน</span><strong>{{ shortDate(bill.customer_confirmed_at) }}</strong></div>
+                <div><span>ผู้ติดต่อ</span><strong>{{ display(bill.customer_contact_name) }}</strong></div>
+                <div><span>ช่องทางยืนยัน</span><strong>{{ display(bill.customer_contact_channel) }}</strong></div>
+                <div><span>ใบเสนอราคาหมดอายุ</span><strong>{{ shortDate(bill.quotation_valid_until) }}</strong></div>
+                <div><span>กำหนดส่งสินค้า</span><strong>{{ shortDate(bill.delivery_due_date) }}</strong></div>
+                <div class="approval-info-grid__wide"><span>เงื่อนไขชำระเงิน</span><strong>{{ display(bill.payment_terms) }}</strong></div>
+                <div class="approval-info-grid__wide"><span>เงื่อนไขส่งสินค้า</span><strong>{{ display(bill.delivery_terms) }}</strong></div>
+              </div>
+              <button v-if="bill.documents?.length" class="secondary-button" @click="downloadFile(`/api/v1/bills/${bill.bill_id}/purchase-order`, bill.documents[0].file_name)">ดาวน์โหลด PO / หลักฐานยืนยัน</button>
             </section>
 
             <section class="approval-detail-section">
@@ -289,10 +323,38 @@ onMounted(load)
 
             <div class="approval-actions approval-actions--bill">
               <button
-                class="primary-button"
-                @click="action(`/api/v1/bills/${bill.bill_id}/approve`, {}, `อนุมัติบิล #${bill.bill_id} แล้ว`)"
+                v-if="bill.ref_qt_id"
+                class="secondary-button"
+                type="button"
+                @click="downloadFile(`/api/v1/quotations/${bill.ref_qt_id}/pdf`)"
               >
-                อนุมัติบิลนี้
+                ตรวจใบเสนอราคา Revision นี้
+              </button>
+              <div class="approval-signature-confirmation">
+                <strong>ยืนยันลายมือชื่ออิเล็กทรอนิกส์ทั่วไป</strong>
+                <p v-if="!canSignQuotation()" class="form-error">บัญชีนี้ยังไม่ได้รับการกำหนดสิทธิ์ลงนาม โปรดให้ Super Admin ตรวจหนังสือมอบอำนาจและเปิดสิทธิ์ในเมนูจัดการผู้ใช้งาน</p>
+                <p>{{ approvalIntent(bill) }}</p>
+                <label class="approval-consent">
+                  <input v-model="approvalConsents[bill.bill_id]" type="checkbox">
+                  <span>ยืนยันว่าข้าพเจ้าเป็นเจ้าของบัญชีและประสงค์แสดงเจตนาตามข้อความข้างต้น</span>
+                </label>
+                <label>
+                  <span>กรอกรหัสผ่านของบัญชีอีกครั้ง</span>
+                  <input
+                    v-model="approvalPasswords[bill.bill_id]"
+                    type="password"
+                    autocomplete="current-password"
+                    placeholder="รหัสผ่านสำหรับยืนยันตัวตน"
+                  >
+                </label>
+                <small>ระบบจะเก็บผู้อนุมัติ เวลา IP Revision และ SHA-256 ของข้อมูลที่อนุมัติ ไม่ใช่ Digital Signature แบบ PKI</small>
+              </div>
+              <button
+                class="primary-button"
+                :disabled="!canSignQuotation() || !approvalConsents[bill.bill_id] || !approvalPasswords[bill.bill_id]"
+                @click="approveBill(bill)"
+              >
+                ยืนยันและอนุมัติบิลนี้
               </button>
               <button
                 class="danger-button"

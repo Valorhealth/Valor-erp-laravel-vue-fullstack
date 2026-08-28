@@ -94,6 +94,69 @@ final class WorkflowEmailNotifier
         );
     }
 
+    public function billAwaitingCustomer(BillingRecord $bill, User $actor): void
+    {
+        $this->send(
+            $actor,
+            $this->recipients->forUsername($bill->created_by),
+            "✍️ ใบเสนอราคาอนุมัติแล้ว รอหลักฐานลูกค้า (ลูกค้า: {$bill->buyer_name})",
+            $this->lines([
+                "เรียน {$bill->created_by},",
+                '',
+                "ผู้อนุมัติ {$actor->username} อนุมัติใบเสนอราคา Revision R{$bill->revision_no} แล้ว",
+                "เลขที่รายการ: {$bill->bill_id}",
+                "ลูกค้า: {$bill->buyer_name}",
+                '',
+                'กรุณาส่งใบเสนอราคาให้ลูกค้า แล้วแนบใบเสนอราคาที่ลูกค้าลงชื่อหรือ PO ต้นฉบับในศูนย์จัดการเอกสาร เพื่อส่งต่อ Admin ครับ',
+            ]),
+            'bill',
+            (string) $bill->bill_id,
+        );
+    }
+
+    public function customerEvidenceReceived(BillingRecord $bill, User $actor): void
+    {
+        $this->send(
+            $actor,
+            $this->recipients->forTarget('admin'),
+            "✅ ได้รับหลักฐานยืนยันจากลูกค้า: {$bill->buyer_name}",
+            $this->lines([
+                'เรียน ผู้ดูแลระบบ,',
+                '',
+                "Sale {$actor->username} แนบหลักฐานยืนยันจากลูกค้าแล้ว",
+                "เลขที่รายการ: {$bill->bill_id}",
+                "ลูกค้า: {$bill->buyer_name}",
+                'ยอดรวม: '.$this->money($bill->total_amount).' บาท',
+                '',
+                'กรุณาเข้าสู่ระบบเพื่อตรวจเอกสารต้นฉบับและดำเนินการขั้นตอน Admin ต่อไปครับ',
+            ]),
+            'bill',
+            (string) $bill->bill_id,
+        );
+    }
+
+    public function customerAcceptedQuotation(BillingRecord $bill, User $sale, string $signerName): void
+    {
+        $this->send(
+            $sale,
+            $this->recipients->forTarget('admin'),
+            "✅ ลูกค้ายืนยันใบเสนอราคาแล้ว: {$bill->buyer_name}",
+            $this->lines([
+                'เรียน ผู้ดูแลระบบ,',
+                '',
+                "ลูกค้าลงลายมือชื่ออิเล็กทรอนิกส์ผ่าน Customer Portal โดย {$signerName}",
+                "เลขที่รายการ: {$bill->bill_id}",
+                "ลูกค้า: {$bill->buyer_name}",
+                "Sale เจ้าของรายการ: {$bill->created_by}",
+                'ยอดรวม: '.$this->money($bill->total_amount).' บาท',
+                '',
+                'กรุณาเข้าสู่ระบบเพื่อตรวจใบเสนอราคาที่ลงนามและดำเนินการขั้นตอน Admin ต่อไปครับ',
+            ]),
+            'bill',
+            (string) $bill->bill_id,
+        );
+    }
+
     public function billRejected(BillingRecord $bill, User $actor, string $reason): void
     {
         $this->send(

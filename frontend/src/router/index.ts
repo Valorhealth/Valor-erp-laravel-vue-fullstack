@@ -12,10 +12,12 @@ import DashboardView from '../views/DashboardView.vue'
 import DocumentCenterView from '../views/DocumentCenterView.vue'
 import EditBillView from '../views/EditBillView.vue'
 import LoginView from '../views/LoginView.vue'
+import ResetPasswordView from '../views/ResetPasswordView.vue'
 import MasterDataView from '../views/MasterDataView.vue'
 import NoticeBoardView from '../views/NoticeBoardView.vue'
 import PrintQueueView from '../views/PrintQueueView.vue'
 import PublicTaxView from '../views/PublicTaxView.vue'
+import CustomerQuotationAcceptanceView from '../views/CustomerQuotationAcceptanceView.vue'
 import SaleOrderView from '../views/SaleOrderView.vue'
 import SalesCallReportView from '../views/SalesCallReportView.vue'
 import SystemAdminView from '../views/SystemAdminView.vue'
@@ -25,7 +27,9 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', name: 'login', component: LoginView },
+    { path: '/reset-password', name: 'reset-password', component: ResetPasswordView },
     { path: '/tax/:token', name: 'public-tax', component: PublicTaxView },
+    { path: '/quotation/accept/:token', name: 'customer-quotation-acceptance', component: CustomerQuotationAcceptanceView },
     { path: '/', redirect: '/notice-board' },
     { path: '/notice-board', name: 'notice-board', component: NoticeBoardView, meta: { requiresAuth: true, ability: 'notice_board' } },
     { path: '/bills/new', name: 'create-bill', component: SaleOrderView, meta: { requiresAuth: true, ability: 'create_bill' } },

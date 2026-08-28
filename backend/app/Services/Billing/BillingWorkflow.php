@@ -8,6 +8,9 @@ use App\Models\EditLog;
 use App\Models\Quotation;
 use App\Models\User;
 use App\Services\Credit\CustomerCreditResolver;
+use App\Services\Documents\ElectronicSignatureService;
+use App\Services\Documents\BillingDocumentStorage;
+use App\Services\Quotations\QuotationRevisionService;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -21,6 +24,7 @@ final class BillingWorkflow
         self::DRAFT_STATUS,
         'รออนุมัติ',
         'รอหัวหน้าอนุมัติ',
+        'รอลูกค้ายืนยัน',
         'รอแอดมินตรวจสอบ',
         'รอแก้ไข',
         'อนุมัติแล้ว',
@@ -32,7 +36,12 @@ final class BillingWorkflow
 
     public const SALE_EDITABLE_STATUSES = [self::DRAFT_STATUS, 'รอแก้ไข'];
 
-    public function __construct(private readonly CustomerCreditResolver $creditResolver) {}
+    public function __construct(
+        private readonly CustomerCreditResolver $creditResolver,
+        private readonly QuotationRevisionService $revisions,
+        private readonly ElectronicSignatureService $electronicSignatures,
+        private readonly BillingDocumentStorage $documentStorage,
+    ) {}
 
     /** @param array<string, mixed> $payload */
     public function createFromQuotation(User $user, Quotation $quotation, array $payload): BillingRecord
@@ -62,12 +71,10 @@ final class BillingWorkflow
             $creditLimit = (float) ($creditProfile?->credit_limit ?? $quotation->credit_limit ?? 0);
             $creditTerm = (int) ($creditProfile?->credit_term ?? $quotation->credit_term ?? 0);
             $creditOutstanding = (float) ($creditProfile?->credit_outstanding ?? 0);
+            // Credit rules are decision support only. A commercial quotation must
+            // still receive an identifiable human approval/e-signature.
             $initialStatus = 'รอหัวหน้าอนุมัติ';
             $autoReason = null;
-            if ($quotation->workflow_type === 'credit_first' && $quotation->status === 'เปิดวงเงินแล้ว' && (float) $quotation->total_amount <= $creditLimit) {
-                $initialStatus = 'รอแอดมินตรวจสอบ';
-                $autoReason = 'เปิดวงเงินอนุมัติแล้ว และยอดบิลไม่เกินวงเงิน';
-            }
 
             $bill = BillingRecord::query()->create([
                 ...Arr::only($quotation->getAttributes(), [
@@ -75,6 +82,8 @@ final class BillingWorkflow
                     'zipcode', 'address_note', 'shipping_type', 'shipping_text', 'bill_note',
                     'bplus_customer_code', 'workflow_type', 'sale_discount_total', 'sale_discount_note',
                     'credit_limit', 'credit_term', 'requested_credit_term',
+                    'customer_po_no', 'customer_confirmed_at', 'customer_contact_name', 'customer_contact_channel',
+                    'quotation_valid_until', 'payment_terms', 'delivery_due_date', 'delivery_terms', 'revision_no',
                 ]),
                 ...Arr::only($payload, ['bill_date', 'shipping_type', 'shipping_text', 'bill_note']),
                 'created_by' => $user->username,
@@ -89,16 +98,80 @@ final class BillingWorkflow
                 'credit_limit' => $creditLimit,
                 'credit_term' => $creditTerm,
                 'tax_qr_token' => Str::random(48),
+                'customer_acceptance_token' => Str::random(64),
+                'customer_acceptance_expires_at' => now()->addDays(30),
             ]);
 
             foreach ($quotation->items as $item) {
                 $bill->items()->create(Arr::only($item->getAttributes(), [
                     'main_category', 'sub_category', 'unit_type', 'quantity', 'unit_price',
-                    'sale_discount_unit', 'line_total_before_discount', 'line_total',
+                    'customer_product_name', 'sale_discount_unit', 'line_total_before_discount', 'line_total',
                 ]));
             }
 
-            return $bill->load('items');
+            $this->revisions->record($bill, $user->username, 'สร้างฉบับร่างเริ่มต้น');
+
+            return $bill->load(['items', 'documents']);
+        });
+    }
+
+    /** @param array<string, mixed> $payload */
+    public function createFromPurchaseOrder(User $user, array $payload, \Illuminate\Http\UploadedFile $purchaseOrder): BillingRecord
+    {
+        return DB::transaction(function () use ($user, $payload, $purchaseOrder): BillingRecord {
+            $items = collect($payload['items'])->map(function (array $item): array {
+                $before = round((int) $item['quantity'] * (float) $item['unit_price'], 2);
+                $discount = min((float) ($item['sale_discount_unit'] ?? 0), $before);
+
+                return [
+                    ...Arr::only($item, ['main_category', 'sub_category', 'customer_product_name', 'unit_type', 'quantity', 'unit_price']),
+                    'sale_discount_unit' => $discount,
+                    'line_total_before_discount' => $before,
+                    'line_total' => round($before - $discount, 2),
+                ];
+            });
+            $gross = (float) $items->sum('line_total');
+            $tailDiscount = min((float) ($payload['sale_discount_total'] ?? 0), $gross);
+            $credit = $this->creditResolver->resolve($payload['bplus_customer_code'], $payload['buyer_name']);
+            $creditLimit = (float) ($credit?->credit_limit ?? 0);
+            $creditOutstanding = (float) ($credit?->credit_outstanding ?? 0);
+
+            $bill = BillingRecord::query()->create([
+                ...Arr::only($payload, [
+                    'bill_date', 'buyer_name', 'tax_id', 'province', 'district', 'sub_district', 'zipcode',
+                    'address_note', 'shipping_type', 'shipping_text', 'bill_note', 'bplus_customer_code',
+                    'sale_discount_note', 'requested_credit_term', 'customer_po_no', 'customer_confirmed_at',
+                    'customer_contact_name', 'customer_contact_channel', 'payment_terms', 'delivery_due_date', 'delivery_terms',
+                ]),
+                'total_amount' => max(round($gross - $tailDiscount, 2), 0),
+                'sale_discount_total' => $tailDiscount,
+                'workflow_type' => 'customer_po_direct',
+                'credit_limit' => $creditLimit,
+                'credit_outstanding' => $creditOutstanding,
+                'credit_remain' => max($creditLimit - $creditOutstanding, 0),
+                'credit_term' => (int) ($credit?->credit_term ?? 0),
+                'requested_credit_term' => $payload['requested_credit_term'] ?? $credit?->credit_term ?? 0,
+                'created_by' => $user->username,
+                'created_at' => now(),
+                'submitted_at' => now(),
+                'status' => 'รอหัวหน้าอนุมัติ',
+                'req_tax_invoice' => true,
+                'ref_qt_id' => null,
+                'tax_qr_token' => Str::random(48),
+            ]);
+
+            foreach ($items as $item) {
+                $bill->items()->create($item);
+            }
+            $this->documentStorage->storeUpload($bill, 'customer_po', $purchaseOrder, $user->username);
+            EditLog::query()->create([
+                'bill_id' => $bill->bill_id,
+                'edited_by' => $user->username,
+                'edit_time' => now(),
+                'edit_summary' => 'สร้างรายการเปิดบิลจาก PO โดยตรง (ไม่ออกเลขใบเสนอราคา)',
+            ]);
+
+            return $bill->fresh(['items', 'documents']);
         });
     }
 
@@ -118,6 +191,8 @@ final class BillingWorkflow
                 'bill_date', 'buyer_name', 'tax_id', 'total_amount', 'address_note', 'province',
                 'district', 'sub_district', 'zipcode', 'shipping_type', 'shipping_text', 'bill_note',
                 'sale_discount_total', 'sale_discount_note',
+                'customer_po_no', 'customer_confirmed_at', 'customer_contact_name', 'customer_contact_channel',
+                'quotation_valid_until', 'payment_terms', 'delivery_due_date', 'delivery_terms',
             ]);
             $billFields = Arr::only($payload, array_keys($before));
             unset($billFields['total_amount']);
@@ -188,7 +263,9 @@ final class BillingWorkflow
                 ]);
             }
 
-            return $bill->fresh('items');
+            $this->revisions->record($bill, $user->username, implode(' | ', $changes ?: ['แก้ไขรายการสินค้า']), true);
+
+            return $bill->fresh(['items', 'documents']);
         });
     }
 
@@ -232,17 +309,20 @@ final class BillingWorkflow
                 ]);
             }
             $creditLimit = (float) ($bill->credit_limit ?? 0);
-            $autoApproved = $bill->workflow_type === 'credit_first'
+            $creditPrechecked = $bill->workflow_type === 'credit_first'
                 && $quotationStatus === 'เปิดวงเงินแล้ว'
                 && $creditLimit > 0
                 && (float) $bill->total_amount <= $creditLimit;
-            $autoReason = $autoApproved ? 'เปิดวงเงินอนุมัติแล้ว และยอดบิลไม่เกินวงเงิน' : null;
+            $autoReason = $creditPrechecked ? 'ผ่านเงื่อนไขวงเงินเบื้องต้น แต่ยังต้องมีผู้อนุมัติลงนาม' : null;
 
             $bill->forceFill([
-                'status' => $autoApproved ? 'รอแอดมินตรวจสอบ' : 'รอหัวหน้าอนุมัติ',
+                'status' => 'รอหัวหน้าอนุมัติ',
                 'submitted_at' => now(),
                 'auto_approved_reason' => $autoReason,
                 'reject_reason' => null,
+                'customer_acceptance_token' => $bill->ref_qt_id ? Str::random(64) : null,
+                'customer_acceptance_expires_at' => $bill->ref_qt_id ? now()->addDays(30) : null,
+                'customer_acceptance_used_at' => null,
             ])->save();
             EditLog::query()->create([
                 'bill_id' => $bill->bill_id,
@@ -255,12 +335,73 @@ final class BillingWorkflow
         });
     }
 
-    public function approve(User $user, BillingRecord $bill): BillingRecord
+    public function approve(
+        User $user,
+        BillingRecord $bill,
+        string $password,
+        string $intent,
+        ?string $ipAddress,
+        ?string $userAgent,
+    ): BillingRecord
     {
-        return $this->transition($bill, 'รอหัวหน้าอนุมัติ', [
-            'status' => 'รอแอดมินตรวจสอบ',
-            'reject_reason' => null,
-        ]);
+        return DB::transaction(function () use ($user, $bill, $password, $intent, $ipAddress, $userAgent): BillingRecord {
+            $bill = BillingRecord::query()->lockForUpdate()->with('items')->findOrFail($bill->bill_id);
+            if ($bill->status !== 'รอหัวหน้าอนุมัติ') {
+                throw ValidationException::withMessages(['status' => "สถานะปัจจุบันคือ {$bill->status} ไม่ใช่ รอหัวหน้าอนุมัติ"]);
+            }
+            $this->electronicSignatures->signInternalApproval(
+                $user,
+                $bill,
+                $password,
+                $intent,
+                $ipAddress,
+                $userAgent,
+            );
+            $hasCustomerEvidence = DB::table('billing_documents')
+                ->where('bill_id', $bill->bill_id)
+                ->where('is_current', true)
+                ->whereIn('document_type', ['customer_po', 'signed_quotation'])
+                ->exists();
+            $bill->forceFill([
+                'status' => $hasCustomerEvidence ? 'รอแอดมินตรวจสอบ' : 'รอลูกค้ายืนยัน',
+                'reject_reason' => null,
+            ])->save();
+
+            return $bill->fresh(['items', 'documents']);
+        });
+    }
+
+    public function confirmCustomerEvidence(User $user, BillingRecord $bill): BillingRecord
+    {
+        return DB::transaction(function () use ($user, $bill): BillingRecord {
+            $bill = BillingRecord::query()->lockForUpdate()->findOrFail($bill->bill_id);
+            if ($bill->created_by !== $user->username) {
+                abort(403, 'คุณไม่มีสิทธิ์ยืนยันหลักฐานลูกค้าของรายการนี้');
+            }
+            if ($bill->status !== 'รอลูกค้ายืนยัน') {
+                return $bill->fresh(['items', 'documents']);
+            }
+            $hasEvidence = DB::table('billing_documents')
+                ->where('bill_id', $bill->bill_id)
+                ->where('is_current', true)
+                ->whereIn('document_type', ['customer_po', 'signed_quotation'])
+                ->exists();
+            if (! $hasEvidence) {
+                throw ValidationException::withMessages(['evidence' => 'กรุณาแนบ PO หรือใบเสนอราคาที่ลูกค้าลงชื่อก่อนส่งต่อ Admin']);
+            }
+            $bill->forceFill([
+                'status' => 'รอแอดมินตรวจสอบ',
+                'customer_confirmed_at' => $bill->customer_confirmed_at ?: today(),
+            ])->save();
+            EditLog::query()->create([
+                'bill_id' => $bill->bill_id,
+                'edited_by' => $user->username,
+                'edit_time' => now(),
+                'edit_summary' => 'แนบหลักฐานยืนยันจากลูกค้าและส่งต่อ Admin',
+            ]);
+
+            return $bill->fresh(['items', 'documents']);
+        });
     }
 
     public function reject(User $user, BillingRecord $bill, string $reason): BillingRecord

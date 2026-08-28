@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { api } from '../api/client'
+import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import StatusPill from '../components/StatusPill.vue'
 import type { BillingRecord, CreditProfile, Paginated, ReferenceData, ThaiLocations } from '../types/api'
@@ -11,6 +11,7 @@ const route = useRoute()
 const tab = ref<'bill' | 'credit'>('bill'); const billId = ref<number | null>(null); const bill = ref<BillingRecord | null>(null); const drafts = ref<BillingRecord[]>([]); const draftPage = ref<Paginated<BillingRecord> | null>(null); const refs = ref<ReferenceData | null>(null); const locations = ref<ThaiLocations>({}); const error = ref(''); const success = ref(''); const saving = ref(false)
 const creditCode = ref(''); const creditProfile = computed(() => refs.value?.credit_profiles.find((item) => item.ar_code === creditCode.value) || null)
 const creditForm = reactive({ requested_credit_limit: 0, requested_credit_term: 0, justification: '' })
+const purchaseOrderFile = ref<File | null>(null)
 const totalItems = computed(() => bill.value?.items?.reduce((sum, item) => sum + Math.max(Number(item.quantity) * Number(item.unit_price) - Number(item.sale_discount_unit || 0), 0), 0) || 0)
 const netTotal = computed(() => Math.max(totalItems.value - Number(bill.value?.sale_discount_total || 0), 0))
 
@@ -50,6 +51,20 @@ async function saveBill() {
   try { await persistBill(); success.value = bill.value?.status === 'ฉบับร่าง' ? 'บันทึก Draft เรียบร้อยแล้ว ยังไม่ได้ส่งให้หัวหน้า' : 'บันทึกการแก้ไขและประวัติ Edit Log เรียบร้อยแล้ว'; await loadDrafts() }
   catch (cause) { error.value = apiError(cause) } finally { saving.value = false }
 }
+function onPurchaseOrder(event: Event) { purchaseOrderFile.value = (event.target as HTMLInputElement).files?.[0] || null }
+async function uploadPurchaseOrder() {
+  if (!bill.value || !purchaseOrderFile.value) return
+  try {
+    const payload = new FormData(); payload.append('file', purchaseOrderFile.value)
+    await api.post(`/api/v1/bills/${bill.value.bill_id}/purchase-order`, payload)
+    await searchBill(); purchaseOrderFile.value = null; success.value = 'บันทึกไฟล์ PO / หลักฐานยืนยันแล้ว'
+  } catch (cause) { error.value = apiError(cause) }
+}
+async function downloadPurchaseOrder() {
+  if (!bill.value?.documents?.length) return
+  try { await downloadFile(`/api/v1/bills/${bill.value.bill_id}/purchase-order`, bill.value.documents[0].file_name) }
+  catch (cause) { error.value = apiError(cause) }
+}
 function chooseCredit(profile: CreditProfile | null) { creditForm.requested_credit_limit = Number(profile?.credit_limit || 0); creditForm.requested_credit_term = Number(profile?.credit_term || 0) }
 async function submitCreditChange() {
   if (!creditProfile.value) return; error.value = ''; success.value = ''; saving.value = true
@@ -81,7 +96,10 @@ onMounted(async () => {
         <div class="span-2 form-section-block"><div class="section-heading"><h2>2. รายการสินค้า</h2><button v-if="bill.status === 'ฉบับร่าง'" class="secondary-button" type="button" @click="addDraftItem">+ เพิ่มรายการ</button></div><article v-for="(item, index) in bill.items" :key="item.item_id || `new-${index}`" class="line-item"><label class="line-item__product"><span>สินค้าตามระบบ</span><select :value="item.main_category" required @change="selectProduct(index, ($event.target as HTMLSelectElement).value)"><option value="">-- เลือกสินค้า --</option><option v-for="product in refs?.products" :key="product.sku_code" :value="product.sku_code">{{ product.sku_code }} | {{ product.sku_name }}</option></select></label><label class="line-item__product"><span>ชื่อสินค้าตามที่ รพ. ต้องการ</span><input v-model.trim="item.customer_product_name" maxlength="2000" :placeholder="item.sub_category || 'กรอกชื่อที่ต้องการแสดงในใบเสนอราคา'"></label><label><span>หน่วย</span><select v-model="item.unit_type"><option v-for="unit in refs?.units" :key="unit">{{ unit }}</option></select></label><label><span>จำนวน</span><input v-model.number="item.quantity" type="number" min="1"></label><label><span>ราคา</span><input v-model="item.unit_price" type="number" min="0" step="0.01"></label><label><span>ส่วนลด</span><input v-model="item.sale_discount_unit" type="number" min="0" step="0.01"></label><div class="line-total"><span>รวม</span><strong>{{ money(Math.max(Number(item.quantity) * Number(item.unit_price) - Number(item.sale_discount_unit || 0), 0)) }}</strong></div><button v-if="bill.status === 'ฉบับร่าง' && (bill.items?.length || 0) > 1" class="remove-line" type="button" @click="bill.items?.splice(index, 1)">×</button></article></div>
         <!-- <label><span>ส่วนลดท้ายบิล</span><input v-model="bill.sale_discount_total" type="number" min="0" step="0.01"></label><label><span>หมายเหตุส่วนลด</span><input v-model="bill.sale_discount_note"></label> -->
         <div class="span-2 total-summary"><span>รวมสินค้า {{ money(totalItems) }}</span><strong>ยอดสุทธิ {{ money(netTotal) }}</strong></div>
-        <div class="span-2 form-section-title"><h2>3. ที่อยู่และการจัดส่ง</h2></div><label class="span-2"><span>ที่อยู่และจุดสังเกต</span><textarea v-model="bill.address_note" required></textarea></label><label><span>จังหวัด</span><select v-model="bill.province" required @change="selectBillProvince"><option v-for="province in Object.keys(locations)" :key="province">{{ province }}</option></select></label><label><span>อำเภอ/เขต</span><select v-model="bill.district" required @change="selectBillDistrict"><option value="">-- เลือกอำเภอ --</option><option v-for="district in Object.keys(locations[bill.province || ''] || {})" :key="district">{{ district }}</option></select></label><label><span>ตำบล/แขวง</span><select v-model="bill.sub_district" required @change="selectBillSubDistrict"><option value="">-- เลือกตำบล --</option><option v-for="sub in Object.keys(locations[bill.province || '']?.[bill.district || ''] || {})" :key="sub">{{ sub }}</option></select></label><label><span>รหัสไปรษณีย์</span><input v-model="bill.zipcode" readonly></label><label><span>หมายเหตุจัดส่ง</span><input v-model="bill.shipping_text"></label><label><span>รายละเอียดบิล</span><textarea v-model="bill.bill_note"></textarea></label>
+        <div class="span-2 form-section-title"><h2>3. ข้อมูลยืนยันการซื้อขาย · Revision {{ bill.revision_no || 1 }}</h2></div>
+        <label><span>เลขที่ PO / หนังสือสั่งซื้อ</span><input v-model="bill.customer_po_no"></label><label><span>วันที่ลูกค้ายืนยัน</span><input v-model="bill.customer_confirmed_at" type="date"></label><label><span>ผู้ติดต่อ</span><input v-model="bill.customer_contact_name"></label><label><span>ช่องทางยืนยัน</span><input v-model="bill.customer_contact_channel"></label><label><span>วันหมดอายุใบเสนอราคา</span><input v-model="bill.quotation_valid_until" type="date"></label><label><span>กำหนดส่งสินค้า</span><input v-model="bill.delivery_due_date" type="date"></label><label class="span-2"><span>เงื่อนไขการชำระเงิน</span><textarea v-model="bill.payment_terms"></textarea></label><label class="span-2"><span>เงื่อนไขการส่งสินค้า</span><textarea v-model="bill.delivery_terms"></textarea></label>
+        <div class="span-2 actions"><button v-if="bill.documents?.length" class="secondary-button" type="button" @click="downloadPurchaseOrder">ดาวน์โหลด {{ bill.documents[0].file_name }}</button><label><span>แนบ/เปลี่ยนไฟล์ PO</span><input type="file" accept=".pdf,.png,.jpg,.jpeg,.xlsx" @change="onPurchaseOrder"></label><button class="secondary-button" type="button" :disabled="!purchaseOrderFile" @click="uploadPurchaseOrder">อัปโหลดไฟล์</button></div>
+        <div class="span-2 form-section-title"><h2>4. ที่อยู่และการจัดส่ง</h2></div><label class="span-2"><span>ที่อยู่และจุดสังเกต</span><textarea v-model="bill.address_note" required></textarea></label><label><span>จังหวัด</span><select v-model="bill.province" required @change="selectBillProvince"><option v-for="province in Object.keys(locations)" :key="province">{{ province }}</option></select></label><label><span>อำเภอ/เขต</span><select v-model="bill.district" required @change="selectBillDistrict"><option value="">-- เลือกอำเภอ --</option><option v-for="district in Object.keys(locations[bill.province || ''] || {})" :key="district">{{ district }}</option></select></label><label><span>ตำบล/แขวง</span><select v-model="bill.sub_district" required @change="selectBillSubDistrict"><option value="">-- เลือกตำบล --</option><option v-for="sub in Object.keys(locations[bill.province || '']?.[bill.district || ''] || {})" :key="sub">{{ sub }}</option></select></label><label><span>รหัสไปรษณีย์</span><input v-model="bill.zipcode" readonly></label><label><span>หมายเหตุจัดส่ง</span><input v-model="bill.shipping_text"></label><label><span>รายละเอียดบิล</span><textarea v-model="bill.bill_note"></textarea></label>
         <div class="span-2 actions"><button class="primary-button" type="button" :disabled="saving" @click="saveBill">{{ saving ? 'กำลังบันทึก…' : 'บันทึก Draft' }}</button><span class="muted">เมื่อตกลงข้อมูลเรียบร้อยแล้ว ให้ส่งอนุมัติจากเมนู “สร้างใบเสนอราคา/เปิดบิลใหม่”</span></div>
       </form>
     </template>

@@ -18,13 +18,15 @@ const saving = ref(false)
 const statusSaving = ref(false)
 const persistedStatus = ref('')
 
-const statuses = ['ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอแอดมินตรวจสอบ', 'รอแก้ไข', 'อนุมัติแล้ว', 'เตรียมส่งออก', 'ดำเนินการเสร็จสิ้น', 'ไม่อนุมัติ', 'ยกเลิกบิล']
+const statuses = ['ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอลูกค้ายืนยัน', 'รอแอดมินตรวจสอบ', 'รอแก้ไข', 'อนุมัติแล้ว', 'เตรียมส่งออก', 'ดำเนินการเสร็จสิ้น', 'ไม่อนุมัติ', 'ยกเลิกบิล']
 const editableFields = [
   'bill_date', 'buyer_name', 'tax_id', 'address_note', 'province', 'district', 'sub_district',
   'zipcode', 'shipping_type', 'shipping_text', 'bill_note', 'sale_discount_total',
   'sale_discount_note', 'admin_branch', 'admin_dept', 'admin_project', 'admin_discount_final',
   'bplus_customer_code', 'bplus_salesman_code', 'warehouse_code', 'credit_limit',
   'credit_outstanding', 'credit_remain', 'credit_term', 'requested_credit_term', 'reject_reason',
+  'customer_po_no', 'customer_confirmed_at', 'customer_contact_name', 'customer_contact_channel',
+  'quotation_valid_until', 'payment_terms', 'delivery_due_date', 'delivery_terms',
 ] as const
 const fieldLabels: Record<(typeof editableFields)[number], string> = {
   bill_date: 'วันที่บิล', buyer_name: 'ชื่อลูกค้า', tax_id: 'เลขผู้เสียภาษี',
@@ -37,9 +39,14 @@ const fieldLabels: Record<(typeof editableFields)[number], string> = {
   warehouse_code: 'รหัสคลังสินค้า', credit_limit: 'วงเงินเครดิต', credit_outstanding: 'เครดิตค้างชำระ',
   credit_remain: 'เครดิตคงเหลือ', credit_term: 'Credit Term ระบบ',
   requested_credit_term: 'Credit Term ที่ขอ', reject_reason: 'เหตุผลตีกลับ/ไม่อนุมัติ',
+  customer_po_no: 'เลขที่ PO / หนังสือสั่งซื้อ', customer_confirmed_at: 'วันที่ลูกค้ายืนยัน',
+  customer_contact_name: 'ผู้ติดต่อ', customer_contact_channel: 'ช่องทางยืนยัน',
+  quotation_valid_until: 'วันหมดอายุใบเสนอราคา', payment_terms: 'เงื่อนไขการชำระเงิน',
+  delivery_due_date: 'กำหนดส่งสินค้า', delivery_terms: 'เงื่อนไขการส่งสินค้า',
 }
 const numericFields = new Set(['sale_discount_total', 'admin_discount_final', 'credit_limit', 'credit_outstanding', 'credit_remain', 'credit_term', 'requested_credit_term'])
-const textAreaFields = new Set(['address_note', 'shipping_text', 'bill_note', 'sale_discount_note', 'reject_reason'])
+const textAreaFields = new Set(['address_note', 'shipping_text', 'bill_note', 'sale_discount_note', 'reject_reason', 'payment_terms', 'delivery_terms'])
+const dateFields = new Set(['bill_date', 'customer_confirmed_at', 'quotation_valid_until', 'delivery_due_date'])
 const totalReady = computed(() => ready.value.reduce((sum, bill) => sum + Number(bill.total_amount || 0), 0))
 const itemSubtotal = computed(() => selected.value?.items?.reduce((sum, item) => sum + Math.max(Number(item.quantity || 0) * Number(item.unit_price || 0) - Number(item.sale_discount_unit || 0), 0), 0) || 0)
 const calculatedTotal = computed(() => Math.max(itemSubtotal.value - Number(selected.value?.sale_discount_total || 0), 0))
@@ -119,11 +126,14 @@ async function saveStatus() {
   finally { statusSaving.value = false }
 }
 
-async function removeBill() {
-  if (!selected.value || !confirm(`ลบบิล #${selected.value.bill_id} รวมใบเสนอราคาและรายการสินค้าถาวรหรือไม่?`)) return
+async function cancelBill() {
+  if (!selected.value) return
+  const reason = prompt(`ระบุเหตุผลยกเลิกบิล #${selected.value.bill_id} (ระบบจะเก็บเอกสารและประวัติทั้งหมดไว้)`)?.trim()
+  if (!reason || !confirm(`ยืนยันยกเลิกบิล #${selected.value.bill_id} โดยไม่ลบข้อมูลถาวรหรือไม่?`)) return
   try {
-    await api.delete(`/api/v1/bills/${selected.value.bill_id}`)
-    message.value = 'ลบบิลแล้ว'; selected.value = null; selectedId.value = null; persistedStatus.value = ''; await load()
+    const response = await api.post<{ data: BillingRecord }>(`/api/v1/bills/${selected.value.bill_id}/cancel`, { reason })
+    selected.value = response.data.data; persistedStatus.value = selected.value.status || ''
+    message.value = 'ยกเลิกบิลแล้ว โดยเก็บเอกสาร รายการสินค้า และเหตุผลไว้ครบ'; await load()
   } catch (cause) { error.value = apiError(cause) }
 }
 
@@ -135,7 +145,7 @@ onMounted(() => load(1))
     <div class="tabs">
       <button :class="{ active: tab === 'export' }" @click="tab = 'export'">ศูนย์ Export</button>
       <button :class="{ active: tab === 'history' }" @click="tab = 'history'">ประวัติทั้งหมด</button>
-      <button :class="{ active: tab === 'edit' }" @click="tab = 'edit'">แก้ไข / ลบ</button>
+      <button :class="{ active: tab === 'edit' }" @click="tab = 'edit'">แก้ไข / ยกเลิก</button>
     </div>
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="message" class="success-message">{{ message }}</p>
@@ -164,10 +174,11 @@ onMounted(() => load(1))
         <button class="primary-button primary-button--compact" :disabled="!selectedId" @click="loadSelected">โหลดบิล</button>
       </div>
       <form v-if="selected" class="content-card form-grid section-gap" @submit.prevent="saveAdmin">
-        <div class="span-2 section-heading"><div><h2>แก้ไขบิล #{{ selected.bill_id }}</h2><p class="muted">Backend จะคำนวณยอดรายการและยอดสุทธิใหม่ทุกครั้ง</p></div><button class="danger-button" type="button" @click="removeBill">ลบบิลถาวร</button></div>
+        <div class="span-2 section-heading"><div><h2>แก้ไขบิล #{{ selected.bill_id }}</h2><p class="muted">การยกเลิกจะเก็บเอกสารและ Audit Log ไว้ ไม่ลบข้อมูลทางบัญชี</p></div><button class="danger-button" type="button" :disabled="selected.status === 'ยกเลิกบิล'" @click="cancelBill">ยกเลิกบิล</button></div>
+        <p v-if="selected.status === 'ยกเลิกบิล'" class="span-2 form-error">ยกเลิกโดย {{ selected.canceled_by || '-' }} · เหตุผล: {{ selected.cancellation_reason || '-' }}</p>
         <div class="span-2 admin-status-editor">
           <div class="admin-status-editor__current"><span>สถานะปัจจุบัน</span><StatusPill :status="persistedStatus" /></div>
-          <label><span>เปลี่ยนสถานะเป็น</span><select v-model="selected.status"><option v-for="status in statuses" :key="status">{{ status }}</option></select></label>
+          <label><span>เปลี่ยนสถานะเป็น</span><select v-model="selected.status"><option v-for="status in statuses" :key="status" :disabled="status === 'ยกเลิกบิล'">{{ status }}</option></select></label>
           <button class="primary-button primary-button--compact" type="button" :disabled="statusSaving || selected.status === persistedStatus" @click="saveStatus">
             {{ statusSaving ? 'กำลังบันทึก…' : 'บันทึกสถานะบิล' }}
           </button>
@@ -176,7 +187,7 @@ onMounted(() => load(1))
         <label v-for="field in editableFields" :key="field">
           <span>{{ fieldLabels[field] }}</span>
           <textarea v-if="textAreaFields.has(field)" v-model="selected[field]"></textarea>
-          <input v-else-if="field === 'bill_date'" v-model="selected[field]" type="date">
+          <input v-else-if="dateFields.has(field)" v-model="selected[field]" type="date">
           <input v-else-if="numericFields.has(field)" v-model="selected[field]" type="number" min="0" step="0.01">
           <input v-else v-model="selected[field]">
         </label>
@@ -201,7 +212,7 @@ onMounted(() => load(1))
           </article>
         </div>
         <div class="span-2 total-summary"><span>รวมสินค้า {{ money(itemSubtotal) }}</span><strong>ยอดสุทธิหลังส่วนลดท้ายบิล {{ money(calculatedTotal) }}</strong></div>
-        <button class="primary-button span-2" :disabled="saving">{{ saving ? 'กำลังตรวจสอบและคำนวณ…' : 'บันทึกการแก้ไขทั้งหมด' }}</button>
+        <button class="primary-button span-2" :disabled="saving || selected.status === 'ยกเลิกบิล'">{{ saving ? 'กำลังตรวจสอบและคำนวณ…' : 'บันทึกการแก้ไขทั้งหมด' }}</button>
       </form>
     </section>
   </AppShell>

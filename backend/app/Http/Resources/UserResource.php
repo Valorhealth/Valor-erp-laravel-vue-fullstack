@@ -21,6 +21,7 @@ class UserResource extends JsonResource
             'email' => $this->email,
             'department' => $this->department,
             'role' => $this->role,
+            'quotation_signing_authorized' => (bool) $this->quotation_signing_authorized,
             ...$roleAccess,
         ];
     }

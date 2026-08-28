@@ -7,8 +7,10 @@ use App\Models\BillingRecord;
 use App\Models\Quotation;
 use App\Services\Authorization\RoleAccess;
 use App\Services\Billing\BillingWorkflow;
+use App\Services\Billing\BillingCancellationService;
 use App\Services\Credit\CustomerCreditResolver;
 use App\Services\Documents\DocumentService;
+use App\Services\Documents\ElectronicSignatureService;
 use App\Services\Notifications\WorkflowEmailNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -35,11 +37,52 @@ class BillingWorkflowController extends Controller
         return response()->json(['data' => $bill], 201);
     }
 
+    public function createFromPurchaseOrder(Request $request, BillingWorkflow $workflow, WorkflowEmailNotifier $notifier): JsonResponse
+    {
+        $data = $request->validate([
+            'bill_date' => ['required', 'date'],
+            'buyer_name' => ['required', 'string', 'max:1000'],
+            'tax_id' => ['nullable', 'string', 'max:30'],
+            'bplus_customer_code' => ['required', 'string', 'max:255'],
+            'province' => ['required', 'string', 'max:255'],
+            'district' => ['required', 'string', 'max:255'],
+            'sub_district' => ['required', 'string', 'max:255'],
+            'zipcode' => ['required', 'string', 'max:20'],
+            'address_note' => ['required', 'string', 'max:5000'],
+            'shipping_type' => ['required', 'string', 'max:255'],
+            'shipping_text' => ['nullable', 'string', 'max:2000'],
+            'bill_note' => ['nullable', 'string', 'max:5000'],
+            'sale_discount_total' => ['nullable', 'numeric', 'min:0'],
+            'sale_discount_note' => ['nullable', 'string', 'max:2000'],
+            'requested_credit_term' => ['nullable', 'integer', 'min:0'],
+            'customer_po_no' => ['required', 'string', 'max:255'],
+            'customer_confirmed_at' => ['required', 'date'],
+            'customer_contact_name' => ['nullable', 'string', 'max:500'],
+            'customer_contact_channel' => ['nullable', 'string', 'max:255'],
+            'payment_terms' => ['nullable', 'string', 'max:5000'],
+            'delivery_due_date' => ['nullable', 'date'],
+            'delivery_terms' => ['nullable', 'string', 'max:5000'],
+            'purchase_order' => ['required', 'file', 'max:10240', 'mimes:pdf,png,jpg,jpeg,xlsx'],
+            'items' => ['required', 'array', 'min:1', 'max:100'],
+            'items.*.main_category' => ['required', 'string', 'max:255'],
+            'items.*.sub_category' => ['required', 'string', 'max:2000'],
+            'items.*.customer_product_name' => ['nullable', 'string', 'max:2000'],
+            'items.*.unit_type' => ['required', 'string', 'max:255'],
+            'items.*.quantity' => ['required', 'integer', 'min:1'],
+            'items.*.unit_price' => ['required', 'numeric', 'min:0'],
+            'items.*.sale_discount_unit' => ['nullable', 'numeric', 'min:0'],
+        ]);
+        $bill = $workflow->createFromPurchaseOrder($request->user(), $data, $data['purchase_order']);
+        $notifier->billSubmitted($bill, $request->user());
+
+        return response()->json(['data' => $bill], 201);
+    }
+
     public function show(Request $request, BillingRecord $bill): JsonResponse
     {
         $this->authorizeBillRead($request, $bill);
 
-        return response()->json(['data' => $bill->load('items')]);
+        return response()->json(['data' => $bill->load(['items', 'documents'])]);
     }
 
     public function updateBySale(Request $request, BillingRecord $bill, BillingWorkflow $workflow): JsonResponse
@@ -59,6 +102,14 @@ class BillingWorkflowController extends Controller
             'bill_note' => ['nullable', 'string', 'max:5000'],
             'sale_discount_total' => ['nullable', 'numeric', 'min:0'],
             'sale_discount_note' => ['nullable', 'string', 'max:2000'],
+            'customer_po_no' => ['nullable', 'string', 'max:255'],
+            'customer_confirmed_at' => ['nullable', 'date'],
+            'customer_contact_name' => ['nullable', 'string', 'max:500'],
+            'customer_contact_channel' => ['nullable', 'string', 'max:255'],
+            'quotation_valid_until' => ['nullable', 'date'],
+            'payment_terms' => ['nullable', 'string', 'max:5000'],
+            'delivery_due_date' => ['nullable', 'date'],
+            'delivery_terms' => ['nullable', 'string', 'max:5000'],
             'items' => ['required', 'array', 'min:1'],
             'items.*.item_id' => ['nullable', 'integer'],
             'items.*.main_category' => ['required', 'string'],
@@ -86,7 +137,7 @@ class BillingWorkflowController extends Controller
 
     public function pendingApproval(CustomerCreditResolver $creditResolver): JsonResponse
     {
-        $bills = BillingRecord::query()->with('items')->where('status', 'รอหัวหน้าอนุมัติ')->orderBy('created_at')->get();
+        $bills = BillingRecord::query()->with(['items', 'documents'])->where('status', 'รอหัวหน้าอนุมัติ')->orderBy('created_at')->get();
         $this->applyCurrentCreditProfiles($bills, $creditResolver);
 
         return response()->json(['data' => $bills]);
@@ -94,10 +145,44 @@ class BillingWorkflowController extends Controller
 
     public function approve(Request $request, BillingRecord $bill, BillingWorkflow $workflow, WorkflowEmailNotifier $notifier): JsonResponse
     {
-        $bill = $workflow->approve($request->user(), $bill);
-        $notifier->billApproved($bill, $request->user());
+        $data = $request->validate([
+            'password' => ['required', 'string', 'max:255'],
+            'intent' => ['required', 'string', Rule::in([
+                ElectronicSignatureService::APPROVAL_INTENT,
+                ElectronicSignatureService::PO_DIRECT_APPROVAL_INTENT,
+            ])],
+        ]);
+        $bill = $workflow->approve(
+            $request->user(),
+            $bill,
+            $data['password'],
+            $data['intent'],
+            $request->ip(),
+            $request->userAgent(),
+        );
+        if ($bill->status === 'รอแอดมินตรวจสอบ') {
+            $notifier->billApproved($bill, $request->user());
+        } else {
+            $notifier->billAwaitingCustomer($bill, $request->user());
+        }
 
         return response()->json(['data' => $bill]);
+    }
+
+    public function approvalCertificate(Request $request, BillingRecord $bill, DocumentService $documents): mixed
+    {
+        $this->authorizeBillRead($request, $bill);
+        $signature = $bill->signatures()
+            ->where('signature_type', 'internal_quotation_approval')
+            ->whereNull('revoked_at')
+            ->latest('signed_at')
+            ->firstOrFail();
+        $bytes = $documents->approvalCertificatePdf($bill, $signature);
+
+        return response($bytes, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => $documents->attachmentDisposition("Approval_Evidence_Bill_{$bill->bill_id}_R{$signature->revision_no}.pdf"),
+        ]);
     }
 
     public function reject(Request $request, BillingRecord $bill, BillingWorkflow $workflow, WorkflowEmailNotifier $notifier): JsonResponse
@@ -220,6 +305,8 @@ class BillingWorkflowController extends Controller
             'admin_discount_final', 'bplus_customer_code', 'bplus_salesman_code', 'bplus_sale_type_code',
             'warehouse_code', 'credit_limit', 'credit_outstanding', 'credit_remain', 'credit_term',
             'requested_credit_term', 'reject_reason',
+            'customer_po_no', 'customer_confirmed_at', 'customer_contact_name', 'customer_contact_channel',
+            'quotation_valid_until', 'payment_terms', 'delivery_due_date', 'delivery_terms',
         ];
         $data = $request->validate([
             'bill' => ['required', 'array'],
@@ -251,6 +338,14 @@ class BillingWorkflowController extends Controller
             'bill.credit_term' => ['nullable', 'integer', 'min:0'],
             'bill.requested_credit_term' => ['nullable', 'integer', 'min:0'],
             'bill.reject_reason' => ['nullable', 'string', 'max:5000'],
+            'bill.customer_po_no' => ['nullable', 'string', 'max:255'],
+            'bill.customer_confirmed_at' => ['nullable', 'date'],
+            'bill.customer_contact_name' => ['nullable', 'string', 'max:500'],
+            'bill.customer_contact_channel' => ['nullable', 'string', 'max:255'],
+            'bill.quotation_valid_until' => ['nullable', 'date'],
+            'bill.payment_terms' => ['nullable', 'string', 'max:5000'],
+            'bill.delivery_due_date' => ['nullable', 'date'],
+            'bill.delivery_terms' => ['nullable', 'string', 'max:5000'],
             'items' => ['nullable', 'array'],
             'items.*.item_id' => ['required', 'integer'],
             'items.*.main_category' => ['required', 'string', 'max:255'],
@@ -266,6 +361,7 @@ class BillingWorkflowController extends Controller
             'items.*.admin_disocount_unit' => ['nullable', 'numeric', 'min:0'],
             'items.*.admin_weight_unit' => ['nullable', 'numeric', 'min:0'],
         ]);
+        abort_if(($data['bill']['status'] ?? null) === 'ยกเลิกบิล', 422, 'กรุณาใช้ปุ่ม “ยกเลิกบิล” และระบุเหตุผล เพื่อเก็บหลักฐานให้ครบ');
         $result = DB::transaction(function () use ($bill, $data, $billFields, $creditResolver): BillingRecord {
             $bill = BillingRecord::query()->lockForUpdate()->with('items')->findOrFail($bill->bill_id);
             $bill->fill(Arr::only($data['bill'], $billFields));
@@ -321,6 +417,7 @@ class BillingWorkflowController extends Controller
         $data = $request->validate([
             'status' => ['required', Rule::in(BillingWorkflow::ALL_STATUSES)],
         ]);
+        abort_if($data['status'] === 'ยกเลิกบิล', 422, 'กรุณาใช้ปุ่ม “ยกเลิกบิล” และระบุเหตุผล เพื่อเก็บหลักฐานให้ครบ');
 
         $result = DB::transaction(function () use ($bill, $data): BillingRecord {
             $lockedBill = BillingRecord::query()->lockForUpdate()->findOrFail($bill->bill_id);
@@ -332,19 +429,11 @@ class BillingWorkflowController extends Controller
         return response()->json(['data' => $result]);
     }
 
-    public function destroy(BillingRecord $bill): JsonResponse
+    public function cancel(Request $request, BillingRecord $bill, BillingCancellationService $cancellation): JsonResponse
     {
-        DB::transaction(function () use ($bill): void {
-            $reference = $bill->ref_qt_id;
-            $bill->items()->delete();
-            $bill->delete();
-            if ($reference) {
-                Quotation::query()->find($reference)?->items()->delete();
-                Quotation::query()->whereKey($reference)->delete();
-            }
-        });
+        $data = $request->validate(['reason' => ['required', 'string', 'min:3', 'max:5000']]);
 
-        return response()->json(status: 204);
+        return response()->json(['data' => $cancellation->cancel($request->user(), $bill, $data['reason'])]);
     }
 
     private function authorizeBillRead(Request $request, BillingRecord $bill): void
