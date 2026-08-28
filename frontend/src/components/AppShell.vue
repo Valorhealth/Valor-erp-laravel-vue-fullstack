@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { auth } from '../stores/auth'
 
 defineProps<{ title: string; subtitle?: string }>()
 
 const router = useRouter()
-const menuOpen = ref(false)
+const desktopMenuQuery = window.matchMedia('(min-width: 761px)')
+const menuOpen = ref(desktopMenuQuery.matches)
 const links = computed(() => auth.user.value?.menu ?? [])
 const roleGroupLabels = {
   super_admin: 'ผู้ดูแลระบบสูงสุด',
@@ -17,6 +18,17 @@ const roleGroupLabels = {
 }
 const roleGroupLabel = computed(() => roleGroupLabels[auth.user.value?.role_group ?? 'default'])
 
+function syncMenuWithViewport(event: MediaQueryListEvent) {
+  menuOpen.value = event.matches
+}
+
+function closeMenuOnMobile() {
+  if (!desktopMenuQuery.matches) menuOpen.value = false
+}
+
+onMounted(() => desktopMenuQuery.addEventListener('change', syncMenuWithViewport))
+onBeforeUnmount(() => desktopMenuQuery.removeEventListener('change', syncMenuWithViewport))
+
 async function signOut() {
   await auth.logout()
   await router.replace({ name: 'login' })
@@ -24,26 +36,28 @@ async function signOut() {
 </script>
 
 <template>
-  <div class="app-layout">
+  <div class="app-layout" :class="{ 'app-layout--sidebar-open': menuOpen }">
     <aside class="sidebar" :class="{ 'sidebar--open': menuOpen }">
-      <div class="sidebar-brand">
-        <span class="sidebar-brand__logo">
-          <img src="/valorhealth-removebg.png" alt="Valor Health">
-        </span>
-        <!-- <span class="center"><strong>VALOR HEALTH Sale Co</strong></span> -->
+      <div class="menu-scroll-area">
+        <div class="sidebar-brand">
+          <span class="sidebar-brand__logo">
+            <img src="/valorhealth-removebg.png" alt="Valor Health">
+          </span>
+          <!-- <span class="center"><strong>VALOR HEALTH Sale Co</strong></span> -->
+        </div>
+
+        <nav class="nav" aria-label="เมนูหลัก">
+          <RouterLink class="nav__notice" to="/notice-board" @click="closeMenuOnMobile">
+            <span aria-hidden="true">📢</span>บอร์ดประกาศ
+          </RouterLink>
+          <p class="nav__heading">เมนู</p>
+          <RouterLink v-for="link in links" :key="link.key" :to="link.path" @click="closeMenuOnMobile">
+            <span aria-hidden="true">{{ link.icon }}</span>{{ link.label }}
+          </RouterLink>
+        </nav>
       </div>
 
-      <nav class="nav" aria-label="เมนูหลัก">
-        <RouterLink class="nav__notice" to="/notice-board" @click="menuOpen = false">
-          <span aria-hidden="true">📢</span>บอร์ดประกาศ
-        </RouterLink>
-        <p class="nav__heading">เมนู</p>
-        <RouterLink v-for="link in links" :key="link.key" :to="link.path" @click="menuOpen = false">
-          <span aria-hidden="true">{{ link.icon }}</span>{{ link.label }}
-        </RouterLink>
-      </nav>
-
-      <div class="profile">
+      <div class="profile account-fixed-bottom">
         <div class="profile__avatar">{{ auth.user.value?.username?.slice(0, 1).toUpperCase() }}</div>
         <div class="profile__text">
           <strong>{{ auth.user.value?.first_name || auth.user.value?.username }}</strong>
@@ -56,7 +70,13 @@ async function signOut() {
 
     <main class="main-content">
       <header class="page-header">
-        <button class="menu-button" type="button" aria-label="เปิดเมนู" @click="menuOpen = !menuOpen">☰</button>
+        <button
+          class="menu-button"
+          type="button"
+          :aria-label="menuOpen ? 'ปิดเมนู' : 'เปิดเมนู'"
+          :aria-expanded="menuOpen"
+          @click="menuOpen = !menuOpen"
+        >☰</button>
         <div>
           <h1>{{ title }}</h1>
           <p v-if="subtitle">{{ subtitle }}</p>
