@@ -50,8 +50,7 @@
 - `SaleOrderView.vue` หน้าเปิดบิล/ใบเสนอราคา
 - `EditBillView.vue` หน้าแก้ไขบิล
 - `DocumentCenterView.vue` หน้าดาวน์โหลด PDF
-- `PrintQueueView.vue` หน้า Admin เตรียม Bplus และข้อมูลคลัง
-- `SystemAdminView.vue` หน้า Export/ปิดงาน/แก้ข้อมูลต้นทาง
+- `SystemAdminView.vue` หน้า Admin สำหรับ Export Bplus/PDF, ปิดงาน และแก้ข้อมูลต้นทาง
 - `ApprovalsView.vue` หน้า Approve
 - `DashboardView.vue` หน้า Dashboard
 - `PublicTaxView.vue` หน้า Customer Portal

@@ -53,6 +53,11 @@ final class SalesCallReportService
             $query->whereIn('seller_user_id', $filters['seller_ids']);
         }
 
+        if ($manager && ($filters['seller_departments'] ?? []) !== []) {
+            $query->whereHas('seller', fn (Builder $sellerQuery) => $sellerQuery
+                ->whereIn('department', $filters['seller_departments']));
+        }
+
         return $query
             ->when($filters['date_from'] ?? null, fn (Builder $q, string $date) => $q->whereDate('activity_date', '>=', $date))
             ->when($filters['date_to'] ?? null, fn (Builder $q, string $date) => $q->whereDate('activity_date', '<=', $date))
@@ -70,6 +75,12 @@ final class SalesCallReportService
     public function dashboard(User $actor, array $filters): array
     {
         $base = $this->filteredQuery($actor, $filters)->without('seller');
+        $bySellerDepartment = (clone $base)
+            ->leftJoin('users as call_sellers', 'call_sellers.id', '=', 'sales_call_activities.seller_user_id')
+            ->selectRaw("COALESCE(NULLIF(BTRIM(call_sellers.department), ''), 'ไม่ระบุแผนก') AS department, COUNT(*) AS total, SUM(CASE WHEN outcome = 'Success' AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS success_calls, SUM(CASE WHEN outcome = 'Failure' AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS failure_calls, SUM(CASE WHEN outcome = 'No Call' AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS no_calls, COUNT(DISTINCT CASE WHEN status = 'ทำงาน' THEN activity_date END) AS working_days, ROUND(CASE WHEN COUNT(*) > 0 THEN SUM(CASE WHEN outcome = 'Success' AND status = 'ทำงาน' THEN 1 ELSE 0 END)::numeric * 100 / COUNT(*) ELSE 0 END, 2) AS success_rate, ROUND(CASE WHEN COUNT(DISTINCT CASE WHEN status = 'ทำงาน' THEN activity_date END) > 0 THEN COUNT(*)::numeric / COUNT(DISTINCT CASE WHEN status = 'ทำงาน' THEN activity_date END) ELSE 0 END, 2) AS calls_per_working_day")
+            ->groupByRaw("COALESCE(NULLIF(BTRIM(call_sellers.department), ''), 'ไม่ระบุแผนก')")
+            ->orderByDesc('total')
+            ->get();
         $total = (clone $base)->count();
         $completed = (clone $base)->where('status', 'ทำงาน')->count();
         $won = (clone $base)->where('opportunity_stage', 'ชนะการขาย')->count();
@@ -78,6 +89,7 @@ final class SalesCallReportService
         $noCall = (clone $base)->where('outcome', 'No Call')->where('status', 'ทำงาน')->count();
         $workingDays = (int) ((clone $base)->where('status', 'ทำงาน')->distinct('activity_date')->count('activity_date'));
         $today = now()->toDateString();
+        $hospitalExpression = "COALESCE(NULLIF(BTRIM(place_of_work), ''), NULLIF(BTRIM(customer_name), ''))";
 
         return [
             'summary' => [
@@ -97,6 +109,7 @@ final class SalesCallReportService
                 'follow_ups_due' => (clone $base)->whereNotNull('next_follow_up_date')->whereDate('next_follow_up_date', '<=', $today)->where('status', 'ทำงาน')->count(),
             ],
             'by_seller' => (clone $base)->selectRaw("seller_user_id, seller_username, COUNT(*) AS total, SUM(CASE WHEN outcome = 'Success' AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS success_calls, SUM(CASE WHEN outcome = 'Failure' AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS failure_calls, SUM(CASE WHEN outcome = 'No Call' AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS no_calls, COUNT(DISTINCT CASE WHEN status = 'ทำงาน' THEN activity_date END) AS working_days, ROUND(CASE WHEN COUNT(*) > 0 THEN SUM(CASE WHEN outcome = 'Success' AND status = 'ทำงาน' THEN 1 ELSE 0 END)::numeric * 100 / COUNT(*) ELSE 0 END, 2) AS success_rate, ROUND(CASE WHEN COUNT(DISTINCT CASE WHEN status = 'ทำงาน' THEN activity_date END) > 0 THEN COUNT(*)::numeric / COUNT(DISTINCT CASE WHEN status = 'ทำงาน' THEN activity_date END) ELSE 0 END, 2) AS calls_per_working_day, COUNT(DISTINCT NULLIF(LOWER(BTRIM(customer_name)), '')) AS active_customers, SUM(CASE WHEN next_follow_up_date IS NOT NULL THEN 1 ELSE 0 END) AS follow_ups, COALESCE(SUM(duration_minutes), 0) AS duration_minutes, COALESCE(SUM(estimated_value), 0) AS pipeline_value, COALESCE(SUM(actual_value), 0) AS actual_value")->groupBy('seller_user_id', 'seller_username')->orderByDesc('total')->get(),
+            'by_seller_department' => $bySellerDepartment,
             'performance_matrix' => (clone $base)->selectRaw("seller_username, COALESCE(NULLIF(BTRIM(place_of_work), ''), '-') AS place_of_work, COUNT(*) AS total, SUM(CASE WHEN outcome = 'Success' AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS success_calls, SUM(CASE WHEN outcome = 'Failure' AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS failure_calls, SUM(CASE WHEN outcome = 'No Call' AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS no_calls, COUNT(DISTINCT CASE WHEN status = 'ทำงาน' THEN activity_date END) AS working_days, ROUND(CASE WHEN COUNT(*) > 0 THEN SUM(CASE WHEN outcome = 'Success' AND status = 'ทำงาน' THEN 1 ELSE 0 END)::numeric * 100 / COUNT(*) ELSE 0 END, 2) AS success_rate, ROUND(CASE WHEN COUNT(DISTINCT CASE WHEN status = 'ทำงาน' THEN activity_date END) > 0 THEN COUNT(*)::numeric / COUNT(DISTINCT CASE WHEN status = 'ทำงาน' THEN activity_date END) ELSE 0 END, 2) AS calls_per_working_day")->groupBy('seller_username', 'place_of_work')->orderBy('seller_username')->orderByDesc('total')->get(),
             'by_stage' => (clone $base)->selectRaw('opportunity_stage AS label, COUNT(*) AS total, COALESCE(SUM(estimated_value), 0) AS value')->groupBy('opportunity_stage')->orderByDesc('total')->get(),
             'by_outcome' => (clone $base)->selectRaw('outcome AS label, COUNT(*) AS total')->groupBy('outcome')->orderByDesc('total')->get(),
@@ -105,6 +118,17 @@ final class SalesCallReportService
             'by_product' => (clone $base)->selectRaw("COALESCE(product_1, '-') AS label, COUNT(*) AS total, SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END) AS success_calls, COUNT(DISTINCT NULLIF(LOWER(BTRIM(customer_name)), '')) AS customers_called, ROUND(CASE WHEN COUNT(*) > 0 THEN SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END)::numeric * 100 / COUNT(*) ELSE 0 END, 2) AS success_rate")->groupBy('product_1')->orderByDesc('total')->get(),
             'by_specialty' => (clone $base)->selectRaw("COALESCE(specialty, '-') AS label, COUNT(*) AS total, SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END) AS success_calls, SUM(CASE WHEN outcome = 'Failure' THEN 1 ELSE 0 END) AS failure_calls, ROUND(CASE WHEN COUNT(*) > 0 THEN SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END)::numeric * 100 / COUNT(*) ELSE 0 END, 2) AS success_rate")->groupBy('specialty')->orderByDesc('total')->get(),
             'product_customer_matrix' => (clone $base)->selectRaw("COALESCE(product_1, '-') AS product, COALESCE(NULLIF(BTRIM(place_of_work), ''), '-') AS place_of_work, COALESCE(NULLIF(BTRIM(customer_name), ''), '-') AS customer_name, COUNT(*) AS total, SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END) AS success_calls, SUM(CASE WHEN outcome = 'Failure' THEN 1 ELSE 0 END) AS failure_calls, ROUND(CASE WHEN COUNT(*) > 0 THEN SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END)::numeric * 100 / COUNT(*) ELSE 0 END, 2) AS success_rate, MAX(activity_date) AS last_call_date")->groupBy('product', 'place_of_work', 'customer_name')->orderByDesc('total')->limit(100)->get(),
+            'hospital_purchase_ranking' => (clone $base)
+                ->where('status', 'ทำงาน')
+                ->where('outcome', 'Success')
+                ->whereRaw("{$hospitalExpression} IS NOT NULL")
+                ->selectRaw("{$hospitalExpression} AS hospital_name, COUNT(*) AS purchase_calls, COUNT(DISTINCT NULLIF(BTRIM(product_1), '')) AS products_count, COUNT(DISTINCT NULLIF(LOWER(BTRIM(customer_name)), '')) AS contacts_count, COALESCE(SUM(actual_value), 0) AS actual_value, MAX(activity_date) AS last_purchase_date")
+                ->groupByRaw($hospitalExpression)
+                ->orderByDesc('actual_value')
+                ->orderByDesc('purchase_calls')
+                ->orderBy('hospital_name')
+                ->limit(20)
+                ->get(),
             'success_breakdown' => (clone $base)->where('outcome', 'Success')->selectRaw("seller_username, COALESCE(product_1, '-') AS product, COALESCE(specialty, '-') AS specialty, COALESCE(NULLIF(BTRIM(place_of_work), ''), '-') AS place_of_work, COUNT(*) AS total")->groupBy('seller_username', 'product', 'specialty', 'place_of_work')->orderByDesc('total')->get(),
             'failure_breakdown' => (clone $base)->where('outcome', 'Failure')->selectRaw("seller_username, COALESCE(product_1, '-') AS product, COALESCE(specialty, '-') AS specialty, COALESCE(NULLIF(BTRIM(place_of_work), ''), '-') AS place_of_work, COUNT(*) AS total")->groupBy('seller_username', 'product', 'specialty', 'place_of_work')->orderByDesc('total')->get(),
             'daily_trend' => (clone $base)->selectRaw('activity_date, COUNT(*) AS total, COALESCE(SUM(estimated_value), 0) AS pipeline_value')->groupBy('activity_date')->orderBy('activity_date')->get(),
@@ -124,6 +148,7 @@ final class SalesCallReportService
 
         return [
             'sellers' => $sellers->values(),
+            'seller_departments' => $sellers->pluck('department')->filter()->unique()->sort()->values(),
             'specialties' => self::SPECIALTIES,
             'departments' => self::DEPARTMENTS,
             'groups' => self::GROUPS,
@@ -167,29 +192,51 @@ final class SalesCallReportService
             $row++;
         }
         $summary->getStyle('A9:H9')->applyFromArray($this->headerStyle());
+        $row += 2;
+        $summary->setCellValue("A{$row}", 'ผลการทำงานแยกตามแผนกของ Sale');
+        $row++;
+        $summary->fromArray(['Department', 'Total Call', 'Success', 'Failure', 'No Call', 'Success Rate', 'Working Day', 'Call / Day'], null, "A{$row}");
+        $summary->getStyle("A{$row}:H{$row}")->applyFromArray($this->headerStyle());
+        $row++;
+        foreach ($dashboard['by_seller_department'] ?? [] as $record) {
+            $summary->fromArray([$record->department, $record->total, $record->success_calls, $record->failure_calls, $record->no_calls, ((float) $record->success_rate) / 100, $record->working_days, $record->calls_per_working_day], null, "A{$row}");
+            $summary->getStyle("F{$row}")->getNumberFormat()->setFormatCode('0.0%');
+            $row++;
+        }
+        $row += 2;
+        $summary->setCellValue("A{$row}", 'อันดับโรงพยาบาลที่ซื้อสินค้า (อิง Success Call)');
+        $row++;
+        $summary->fromArray(['Rank', 'Hospital / Place of Work', 'Success Purchase', 'Products', 'Contacts', 'Actual Value', 'Last Purchase'], null, "A{$row}");
+        $summary->getStyle("A{$row}:G{$row}")->applyFromArray($this->headerStyle());
+        $row++;
+        foreach ($dashboard['hospital_purchase_ranking'] ?? [] as $index => $record) {
+            $summary->fromArray([$index + 1, $record->hospital_name, $record->purchase_calls, $record->products_count, $record->contacts_count, $record->actual_value, $record->last_purchase_date], null, "A{$row}");
+            $summary->getStyle("F{$row}")->getNumberFormat()->setFormatCode('#,##0.00');
+            $row++;
+        }
         foreach (range('A', 'H') as $column) {
             $summary->getColumnDimension($column)->setWidth(20);
         }
 
         $raw = $book->createSheet();
         $raw->setTitle('Raw Data');
-        $headers = ['Sale', 'Call No.', 'Date', 'PLACE OF WORK', 'CUSTOMER NAME', 'SPECIALTY', 'DEPARTMENT', 'GROUP', 'PRODUCT-1', 'CALL OBJECTIVE', 'CALL DETAIL (Obj)', 'CALL OUTCOME', 'CALL DETAIL (Out)', 'F/U DATE', 'NOTE', 'SM Comment', 'Status'];
+        $headers = ['Sale', 'SALE DEPARTMENT', 'Call No.', 'Date', 'PLACE OF WORK', 'CUSTOMER NAME', 'SPECIALTY', 'DEPARTMENT', 'GROUP', 'PRODUCT-1', 'CALL OBJECTIVE', 'CALL DETAIL (Obj)', 'CALL OUTCOME', 'CALL DETAIL (Out)', 'F/U DATE', 'NOTE', 'SM Comment', 'Status'];
         $raw->fromArray($headers, null, 'A1');
-        $raw->getStyle('A1:Q1')->applyFromArray($this->headerStyle());
+        $raw->getStyle('A1:R1')->applyFromArray($this->headerStyle());
         $row = 2;
         foreach ($activities as $activity) {
-            $values = [$activity->seller_username, $activity->call_no, $activity->activity_date?->format('Y-m-d'), $activity->place_of_work, $activity->customer_name, $activity->specialty, $activity->department, $activity->customer_group, $activity->product_1, $activity->objective, $activity->call_detail_objective, $activity->outcome, $activity->call_detail_outcome, $activity->next_follow_up_date?->format('Y-m-d'), $activity->notes, $activity->sm_comment, $activity->status];
+            $values = [$activity->seller_username, $activity->seller?->department, $activity->call_no, $activity->activity_date?->format('Y-m-d'), $activity->place_of_work, $activity->customer_name, $activity->specialty, $activity->department, $activity->customer_group, $activity->product_1, $activity->objective, $activity->call_detail_objective, $activity->outcome, $activity->call_detail_outcome, $activity->next_follow_up_date?->format('Y-m-d'), $activity->notes, $activity->sm_comment, $activity->status];
             $raw->fromArray($values, null, "A{$row}");
-            foreach (range('A', 'Q') as $column) {
+            foreach (range('A', 'R') as $column) {
                 $value = $raw->getCell("{$column}{$row}")->getValue();
                 $raw->setCellValueExplicit("{$column}{$row}", $value === null ? '' : (string) $value, DataType::TYPE_STRING);
             }
             $row++;
         }
         $last = max($row - 1, 2);
-        $raw->setAutoFilter("A1:Q{$last}");
+        $raw->setAutoFilter("A1:R{$last}");
         $raw->freezePane('A2');
-        foreach (range('A', 'Q') as $column) {
+        foreach (range('A', 'R') as $column) {
             $raw->getColumnDimension($column)->setAutoSize(true);
         }
         $book->setActiveSheetIndex(0);

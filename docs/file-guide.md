@@ -7,7 +7,7 @@
 | Login / Role / Sidebar | `app/Http/Controllers/Api/AuthController.php`, `app/Services/Authorization/RoleAccess.php` | `src/stores/auth.ts`, `src/components/AppShell.vue` |
 | เปิดบิลและใบเสนอราคา | `QuotationController.php`, `BillingWorkflowController.php`, `Services/Billing/BillingWorkflow.php` | `SaleOrderView.vue`, `EditBillView.vue` |
 | อนุมัติและตีกลับ | `BillingWorkflowController.php` | `ApprovalsView.vue`, `BillingRecordsView.vue` |
-| คิวพิมพ์และ Bplus | `BillingWorkflowController.php`, `Services/Documents/DocumentService.php` | `PrintQueueView.vue`, `SystemAdminView.vue` |
+| Export Bplus และใบเสนอราคา PDF | `BillingWorkflowController.php`, `Services/Documents/DocumentService.php` | `SystemAdminView.vue` |
 | PDF / Excel / เอกสาร | `Services/Documents/DocumentService.php` | `DocumentCenterView.vue` |
 | Dashboard | `Services/Dashboard/DashboardService.php`, `DashboardController.php` | `DashboardView.vue` |
 | Call Sale Report | `SalesCallController.php`, `Services/SalesCalls/SalesCallReportService.php`, `Models/SalesCallActivity.php` | `SalesCallReportView.vue` |

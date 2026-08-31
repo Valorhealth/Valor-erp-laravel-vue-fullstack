@@ -1,8 +1,8 @@
 # หน้าที่ของทุกไฟล์ใน Valor ERP
 
-สร้างอัตโนมัติเมื่อ 2026-08-27T09:04:58+00:00 โดย `scripts/generate-file-scope.php`
+สร้างอัตโนมัติเมื่อ 2026-08-31T04:11:24+00:00 โดย `scripts/generate-file-scope.php`
 
-รวมทั้งหมด **16818 ไฟล์**: root 5, backend 13906, frontend 2885, database 8, docs 6, scripts 5, docker 3
+รวมทั้งหมด **16832 ไฟล์**: root 5, backend 13920, frontend 2884, database 9, docs 6, scripts 5, docker 3
 
 > รายการนี้รวม `backend/vendor`, `frontend/node_modules`, build output, cache, log และไฟล์ runtime เพื่อให้ครบทุกไฟล์จริงในโฟลเดอร์ที่ขอ แต่ไฟล์ dependency/generated ระบุไว้ชัดว่าไม่ควรแก้โดยตรง ส่วน `.git`, `.tools`, `.runtime`, `.vscode` อยู่นอกห้าโฟลเดอร์งานและไม่ใช่ source scope จึงไม่รวม
 
@@ -16,7 +16,7 @@
 - ⭐ `README.md` — คู่มือภาพรวม การติดตั้ง และการเปิดใช้งานโปรเจกต์
 - ⭐ `render.yaml` — ⭐ Blueprint กำหนด Render Web Service และ Environment Variables
 
-## backend (13906 ไฟล์)
+## backend (13920 ไฟล์)
 
 - `backend/.editorconfig` — ไฟล์ประกอบระบบ .editorconfig
 - `backend/.env` — ค่าตั้งค่าจริงของ Backend ในเครื่องนี้; มีข้อมูลลับและไม่ควร commit
@@ -196,11 +196,25 @@
 - `backend/storage/framework/cache/data/44/d1/44d142505dd1a3b497197e2f459d2aec779e9ed6` — Laravel runtime cache ที่สร้างอัตโนมัติ
 - `backend/storage/framework/cache/data/55/0c/550ce1e2ca218a07f0b5510ffbbe305408378efb` — Laravel runtime cache ที่สร้างอัตโนมัติ
 - `backend/storage/framework/cache/data/63/4e/634e84587192d2ee2d49b17aa770db9e93ac5e52` — Laravel runtime cache ที่สร้างอัตโนมัติ
+- `backend/storage/framework/cache/data/c1/1b/c11b7766912fe844d36569f005f08e2e2799e6c3` — Laravel runtime cache ที่สร้างอัตโนมัติ
 - `backend/storage/framework/cache/data/c1/10/c110982ac3d999ceb5787201eb91a4cbba070995` — Laravel runtime cache ที่สร้างอัตโนมัติ
 - `backend/storage/framework/cache/data/c2/4f/c24f92750673b2169c8cb7bfbc999cfa8457dc7c` — Laravel runtime cache ที่สร้างอัตโนมัติ
+- `backend/storage/framework/cache/data/df/96/df9665fb432ae50b8d98b1c2a0dd1321f17ce9c5` — Laravel runtime cache ที่สร้างอัตโนมัติ
 - `backend/storage/framework/sessions/.gitignore` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
-- `backend/storage/framework/sessions/vhxiCdRZPNz7NqKxvcW4mQSa720bMOiyGgznwtqN` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
-- `backend/storage/framework/sessions/xDMFPykcQcBqs40rqw7xhU7RG56dcQoPiOA2wXR2` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/6a27je2XVY32dJ5M3ZpFV9olze79mtvItxzIsxG2` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/8YL8P1lZ7bSAoBoSN6JAXZAb8OLdCCUqi2HkzUzd` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/55bncKBBtUUreHaR9usSaCMajGKOH0Rz7tKVXdfc` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/B0ZZ4loa28vtDkBfWzau5CfvBI4uc9ANRq4Hyool` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/bTGyniiTloKdESzgZN48k79RLRxyy453UnUbUavS` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/E0dmKlVxHuWdmDBRtCTmJmssZ6sIoSPKHoRY7aiT` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/FeSa8RrufpzInwGe5jz9fwf1T3QJUrTaB8Ua3ZHW` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/ggpZPdYE7ApkKkihMFTLQrwGwcLugHHXVd5Xk4ge` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/kHl3I0vMyxUMWj1lB9bijHxXWoeX6bp0teTs4HyV` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/n2TcV9rXyFB9fj0tsYase4R7IEQJBhVOVPhGOrpk` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/O2O9vqQxwSxJO5TJuWMxTQMhVbFB9njjh2c8pbFO` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/pa4OO0TkyjrAikR65mhqZGy0bbuQ1upSk3X99lHs` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/PHUjWcVMIXbZUYlbfHhUSpFBuIv5ug45emsxVneg` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
+- `backend/storage/framework/sessions/VRYKBEsv5FVemrqXiiVSlsEsq7uGvJblkwuvkh81` — ไฟล์ session ของ Laravel ที่สร้างระหว่างการเข้าสู่ระบบ
 - `backend/storage/framework/testing/.gitignore` — ไฟล์ประกอบระบบ .gitignore
 - `backend/storage/framework/views/.gitignore` — ไฟล์ประกอบระบบ .gitignore
 - `backend/storage/framework/views/0e6e7aa1c524a7c3709e8268bcfa9d89.php` — ไฟล์ PHP 0e6e7aa1c524a7c3709e8268bcfa9d89 ที่เป็นส่วนหนึ่งของ Backend
@@ -13925,13 +13939,13 @@
 - `backend/vendor/voku/portable-ascii/src/voku/helper/data/x1d7.php` — ไฟล์ dependency PHP จาก Composer; ไม่ควรแก้โดยตรงและสร้างใหม่ได้จาก composer install
 - `backend/vendor/voku/portable-ascii/src/voku/helper/data/x1f1.php` — ไฟล์ dependency PHP จาก Composer; ไม่ควรแก้โดยตรงและสร้างใหม่ได้จาก composer install
 
-## frontend (2885 ไฟล์)
+## frontend (2884 ไฟล์)
 
 - `frontend/.env.example` — ไฟล์ประกอบระบบ .env.example
 - `frontend/.gitignore` — ไฟล์ประกอบระบบ .gitignore
 - `frontend/.vscode/extensions.json` — ไฟล์ configuration/metadata extensions.json
-- `frontend/dist/assets/index-BLpVlKct.css` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
-- `frontend/dist/assets/index-D7v8E4dk.js` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
+- `frontend/dist/assets/index-BdyLYwUC.css` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
+- `frontend/dist/assets/index-Dvt88dPD.js` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
 - `frontend/dist/favicon.svg` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
 - `frontend/dist/icons.svg` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
 - `frontend/dist/index.html` — ไฟล์ผลลัพธ์ Production build ของ Vue; สร้างใหม่ด้วย pnpm build
@@ -16801,7 +16815,6 @@
 - ⭐ `frontend/src/views/LoginView.vue` — หน้าจอ Vue Login ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/MasterDataView.vue` — หน้าจอ Vue MasterData ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/NoticeBoardView.vue` — หน้าจอ Vue NoticeBoard ที่ผูก UI กับ API ของฟังก์ชันนั้น
-- ⭐ `frontend/src/views/PrintQueueView.vue` — หน้าจอ Vue PrintQueue ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/PublicTaxView.vue` — หน้าจอ Vue PublicTax ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/ResetPasswordView.vue` — หน้าจอ Vue ResetPassword ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/SaleOrderView.vue` — หน้าจอ Vue SaleOrder ที่ผูก UI กับ API ของฟังก์ชันนั้น
@@ -16813,7 +16826,7 @@
 - `frontend/tsconfig.node.json` — ไฟล์ตั้งค่า tsconfig.node ของเครื่องมือ Frontend
 - ⭐ `frontend/vite.config.ts` — ไฟล์ตั้งค่า vite.config ของเครื่องมือ Frontend
 
-## database (8 ไฟล์)
+## database (9 ไฟล์)
 
 - ⭐ `database/schema/audit_logs.sql` — SQL audit_logs สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/customer_credit_outstanding.sql` — SQL customer_credit_outstanding สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
@@ -16822,6 +16835,7 @@
 - ⭐ `database/schema/quotation_monthly_numbering.sql` — SQL quotation_monthly_numbering สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/reporting_draft_numbering.sql` — SQL reporting_draft_numbering สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/sales_call_reports.sql` — SQL sales_call_reports สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
+- ⭐ `database/schema/workflow_identity_cleanup.sql` — SQL workflow_identity_cleanup สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/workflow_updates.sql` — SQL workflow_updates สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 
 ## docs (6 ไฟล์)

@@ -20,6 +20,8 @@ use Illuminate\Validation\Rule;
 
 class BillingWorkflowController extends Controller
 {
+    private const EXPORTABLE_STATUSES = ['รอแอดมินส่งออก', 'อนุมัติแล้ว'];
+
     public function createFromQuotation(Request $request, Quotation $quotation, BillingWorkflow $workflow, WorkflowEmailNotifier $notifier): JsonResponse
     {
         $data = $request->validate([
@@ -160,7 +162,7 @@ class BillingWorkflowController extends Controller
             $request->ip(),
             $request->userAgent(),
         );
-        if ($bill->status === 'รอแอดมินตรวจสอบ') {
+        if ($bill->status === 'รอแอดมินส่งออก') {
             $notifier->billApproved($bill, $request->user());
         } else {
             $notifier->billAwaitingCustomer($bill, $request->user());
@@ -195,48 +197,28 @@ class BillingWorkflowController extends Controller
         return response()->json(['data' => $bill]);
     }
 
-    public function adminQueue(CustomerCreditResolver $creditResolver): JsonResponse
+    public function decline(Request $request, BillingRecord $bill, BillingWorkflow $workflow, WorkflowEmailNotifier $notifier): JsonResponse
     {
-        $bills = BillingRecord::query()->with('items')->where('status', 'รอแอดมินตรวจสอบ')->orderBy('created_at')->get();
-        $this->applyCurrentCreditProfiles($bills, $creditResolver);
+        $data = $request->validate(['reason' => ['required', 'string', 'max:5000']]);
 
-        return response()->json(['data' => $bills]);
-    }
+        $bill = $workflow->decline($request->user(), $bill, $data['reason']);
+        $notifier->billDeclined($bill, $request->user(), $data['reason']);
 
-    public function prepare(Request $request, BillingRecord $bill, BillingWorkflow $workflow): JsonResponse
-    {
-        $data = $request->validate([
-            'admin_branch' => ['required', Rule::in(['VH000', 'VH001', 'VH002', 'VH003', 'VH004', 'VH005'])],
-            'admin_dept' => ['required', 'string', 'max:255'],
-            'admin_project' => ['required', 'string', 'max:255'],
-            'admin_discount_final' => ['nullable', 'numeric', 'min:0'],
-            'bplus_salesman_code' => ['required', 'string', 'max:255'],
-            'bplus_sale_type_code' => ['required', Rule::in(['สินเชื่อ', 'เงินสด', 'ผ่อนชำระ'])],
-            'credit_limit' => ['required', 'numeric', 'min:0'],
-            'credit_outstanding' => ['required', 'numeric', 'min:0'],
-            'credit_term' => ['required', 'integer', 'min:0'],
-            'requested_credit_term' => ['required', 'integer', 'min:0'],
-            'items' => ['required', 'array', 'min:1'],
-            'items.*.item_id' => ['required', 'integer'],
-            'items.*.admin_lot' => ['nullable', 'string', 'max:1000'],
-            'items.*.admin_serial' => ['nullable', 'string', 'max:1000'],
-            'items.*.admin_storage' => ['nullable', 'string', 'max:255'],
-            'items.*.admin_free_qty' => ['nullable', 'integer', 'min:0'],
-            'items.*.admin_disocount_unit' => ['nullable', 'numeric', 'min:0'],
-            'items.*.admin_weight_unit' => ['nullable', 'numeric', 'min:0'],
-        ]);
-
-        return response()->json(['data' => $workflow->prepareForExport($request->user(), $bill, $data)]);
+        return response()->json(['data' => $bill]);
     }
 
     public function readyForExport(): JsonResponse
     {
-        return response()->json(['data' => BillingRecord::query()->with('items')->whereIn('status', ['เตรียมส่งออก', 'อนุมัติแล้ว'])->orderBy('bill_id')->get()]);
+        return response()->json(['data' => BillingRecord::query()
+            ->with(['items', 'creator:id,username,department'])
+            ->whereIn('status', self::EXPORTABLE_STATUSES)
+            ->orderBy('bill_id')
+            ->get()]);
     }
 
     public function complete(BillingRecord $bill): JsonResponse
     {
-        abort_unless(in_array($bill->status, ['เตรียมส่งออก', 'อนุมัติแล้ว'], true), 422, 'บิลนี้ยังไม่พร้อมปิดงาน');
+        abort_unless(in_array($bill->status, self::EXPORTABLE_STATUSES, true), 422, 'บิลนี้ยังไม่พร้อมปิดงาน');
         $bill->forceFill(['status' => 'ดำเนินการเสร็จสิ้น'])->save();
 
         return response()->json(['data' => $bill->fresh()]);
@@ -244,7 +226,7 @@ class BillingWorkflowController extends Controller
 
     public function completeAll(): JsonResponse
     {
-        $count = BillingRecord::query()->whereIn('status', ['เตรียมส่งออก', 'อนุมัติแล้ว'])->update(['status' => 'ดำเนินการเสร็จสิ้น']);
+        $count = BillingRecord::query()->whereIn('status', self::EXPORTABLE_STATUSES)->update(['status' => 'ดำเนินการเสร็จสิ้น']);
 
         return response()->json(['data' => ['updated' => $count]]);
     }
@@ -252,17 +234,51 @@ class BillingWorkflowController extends Controller
     public function export(Request $request, DocumentService $documents): mixed
     {
         $ids = $request->validate(['bill_ids' => ['nullable', 'array'], 'bill_ids.*' => ['integer']])['bill_ids'] ?? [];
-        $bills = BillingRecord::query()->with('items')->whereIn('status', ['เตรียมส่งออก', 'อนุมัติแล้ว'])
+        $bills = BillingRecord::query()
+            ->with(['items', 'creator:id,username,department'])
+            ->whereIn('status', self::EXPORTABLE_STATUSES)
             ->when($ids !== [], fn ($query) => $query->whereIn('bill_id', $ids))->orderBy('bill_id')->get();
         abort_if($bills->isEmpty(), 422, 'ไม่มีบิลที่พร้อม Export');
+        $workbook = $documents->bplusWorkbook($bills);
         BillingRecord::query()->whereIn('bill_id', $bills->pluck('bill_id'))->update([
             'excel_exported_at' => now(),
             'excel_exported_by' => $request->user()->username,
         ]);
 
-        return response($documents->bplusWorkbook($bills), 200, [
+        return response($workbook, 200, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'Content-Disposition' => 'attachment; filename="Bplus_Import_'.now()->format('Y-m-d').'.xlsx"',
+        ]);
+    }
+
+    public function exportQuotationsPdf(Request $request, DocumentService $documents): mixed
+    {
+        $ids = $request->validate([
+            'bill_ids' => ['required', 'array', 'min:1', 'max:100'],
+            'bill_ids.*' => ['required', 'integer', 'distinct'],
+        ])['bill_ids'];
+        $bills = BillingRecord::query()
+            ->with([
+                'items', 'signatures', 'documents', 'customerAcceptanceSignatures',
+                'quotation.items', 'quotation.creator:id,username,department',
+            ])
+            ->whereIn('status', self::EXPORTABLE_STATUSES)
+            ->whereIn('bill_id', $ids)
+            ->orderBy('bill_id')
+            ->get();
+        abort_if($bills->count() !== count(array_unique($ids)), 422, 'พบบิลที่ไม่อยู่ในสถานะพร้อม Export');
+        $withoutQuotation = $bills->filter(fn (BillingRecord $bill): bool => $bill->quotation === null)->pluck('bill_id');
+        abort_if($withoutQuotation->isNotEmpty(), 422, 'Bill #'.$withoutQuotation->implode(', #').' เปิดจาก PO โดยตรง จึงไม่มีใบเสนอราคาให้ Export');
+
+        $bytes = $documents->quotationBatchPdf($bills);
+        Quotation::query()->whereIn('qt_id', $bills->pluck('ref_qt_id'))->update([
+            'quotation_printed_at' => now(),
+            'quotation_printed_by' => $request->user()->username,
+        ]);
+
+        return response($bytes, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => $documents->attachmentDisposition('Quotations_'.now()->format('Y-m-d_His').'.pdf'),
         ]);
     }
 
@@ -438,7 +454,9 @@ class BillingWorkflowController extends Controller
 
     private function authorizeBillRead(Request $request, BillingRecord $bill): void
     {
-        if (RoleAccess::mustUseOwnBillingRecords($request->user()->role) && $bill->created_by !== $request->user()->username) {
+        if (RoleAccess::mustUseOwnBillingRecords($request->user()->role)
+            && (int) ($bill->creator_user_id ?? 0) !== (int) $request->user()->id
+            && ! ($bill->creator_user_id === null && $bill->created_by === $request->user()->username)) {
             abort(403, 'คุณไม่มีสิทธิ์เข้าถึงบิลนี้');
         }
     }

@@ -9,6 +9,7 @@ import { apiError, money, shortDate, todayIso } from '../utils/format'
 const data = ref<DashboardData | null>(null)
 const selectedSales = ref<string[]>([])
 const selectedStatuses = ref<string[]>([])
+const selectedDepartments = ref<string[]>([])
 const dateFrom = ref('')
 const dateTo = ref('')
 const reportScope = ref<'all' | 'successful'>('all')
@@ -19,9 +20,11 @@ const responseMs = ref(0)
 
 const maxPerson = computed(() => Math.max(...(data.value?.sales_by_person.map((row) => Number(row.total)) || [1]), 1))
 const maxDaily = computed(() => Math.max(...(data.value?.daily_sales.map((row) => Number(row.total)) || [1]), 1))
+const maxDepartment = computed(() => Math.max(...(data.value?.sales_by_department.map((row) => Number(row.total)) || [1]), 1))
 const filterPayload = computed(() => ({
   sales: selectedSales.value,
   statuses: selectedStatuses.value,
+  departments: selectedDepartments.value,
   date_from: dateFrom.value || undefined,
   date_to: dateTo.value || undefined,
 }))
@@ -44,6 +47,7 @@ async function loadDashboard() {
 function clearFilters() {
   selectedSales.value = []
   selectedStatuses.value = []
+  selectedDepartments.value = []
   dateFrom.value = ''
   dateTo.value = ''
   loadDashboard()
@@ -102,6 +106,12 @@ onMounted(loadDashboard)
           </select>
         </label>
         <label>
+          <span>แผนก</span>
+          <select v-model="selectedDepartments" multiple>
+            <option v-for="department in data.filters.departments" :key="department">{{ department }}</option>
+          </select>
+        </label>
+        <label>
           <span>ข้อมูลใน Excel</span>
           <select v-model="reportScope">
             <option value="all">ทุกสถานะและประวัติทั้งหมด</option>
@@ -150,14 +160,14 @@ onMounted(loadDashboard)
           <small>รวมทุกสถานะ</small>
         </article>
         <article class="metric-card">
-          <span>บิลในขั้นตอนอนุมัติ</span>
+          <span>บิลรอผู้มีอำนาจอนุมัติ</span>
           <strong>{{ data.summary.pending_approval }}</strong>
-          <small>รอหัวหน้า {{ data.summary.waiting_manager }} · รอแอดมิน {{ data.summary.waiting_admin }} · รอแก้ไข {{ data.summary.needs_revision }}</small>
+          <small>รอหัวหน้า {{ data.summary.waiting_manager }} · รอแก้ไข {{ data.summary.needs_revision }}</small>
         </article>
         <article class="metric-card">
           <span>ค่าเฉลี่ยต่อบิลทั้งหมด</span>
           <strong class="metric-money">{{ money(data.summary.total_bills ? data.summary.total_revenue / data.summary.total_bills : 0) }}</strong>
-          <small>พร้อมส่งออก {{ data.summary.ready_export }} · เสร็จสิ้น {{ data.summary.completed_bills }}</small>
+          <small>รอแอดมินส่งออก {{ data.summary.waiting_export }} · พร้อมส่งออก {{ data.summary.ready_export }} · เสร็จสิ้น {{ data.summary.completed_bills }}</small>
         </article>
       </div>
 
@@ -186,6 +196,29 @@ onMounted(loadDashboard)
           </div>
         </section>
       </div>
+
+      <section class="content-card section-gap">
+        <div class="section-heading">
+          <div>
+            <h2>มูลค่าบิลแยกตามแผนก</h2>
+            <p class="muted">อ้างอิงแผนกปัจจุบันของ Sale ผู้สร้างบิล</p>
+          </div>
+        </div>
+        <div class="trend-chart">
+          <div v-for="row in data.sales_by_department" :key="row.department" class="trend-column">
+            <!-- ย้ายตัวเลขยอดเงินมาไว้ด้านบนสุด -->
+            <b>{{ money(row.total) }}</b>
+
+            <!-- เปลี่ยนจาก width เป็น height และลบ <div> ที่ครอบอยู่ออก -->
+            <!-- ใช้ maxDepartment ในการคำนวณความสูง (px) ให้สัมพันธ์กับ 150px เหมือนกราฟล่าง -->
+            <i :style="{ height: `${Math.max((Number(row.total) / maxDepartment) * 150, 4)}px` }"></i>
+
+            <!-- ชื่อแผนก (และจำนวนบิลถ้าต้องการ) ไว้ด้านล่างสุด -->
+            <span>{{ row.department }} <br><small>({{ row.bills }} บิล)</small></span>
+          </div>
+          <p v-if="!data.sales_by_department.length" class="muted">ยังไม่มีข้อมูลแผนกตามตัวกรอง</p>
+        </div>
+      </section>
 
       <section class="content-card section-gap">
         <div class="section-heading">

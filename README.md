@@ -46,6 +46,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify-project.ps1
 
 ก่อน deploy รุ่นที่มี Password Reset, PO Versioning, Revision, การยกเลิกเอกสาร, PNG ลายเซ็นแบบ Version และหลักฐานลายมือชื่ออิเล็กทรอนิกส์ ให้รัน [`database/schema/production_readiness_workflow.sql`](database/schema/production_readiness_workflow.sql) ใน Supabase SQL Editor หนึ่งครั้งก่อน แล้วจึง push/deploy โค้ด ดูหลักการใช้งานที่ [`docs/ETDA_ELECTRONIC_SIGNATURE_WORKFLOW.md`](docs/ETDA_ELECTRONIC_SIGNATURE_WORKFLOW.md)
 
+ก่อน deploy รุ่นที่ผูกเอกสารและตารางงานกับ Account แบบถาวร พร้อมยุบ Timeline ไว้ใน `sales_tasks` ให้รัน [`database/schema/workflow_identity_cleanup.sql`](database/schema/workflow_identity_cleanup.sql) ใน Supabase SQL Editor หนึ่งครั้ง ไฟล์นี้จะรักษาประวัติเดิมไว้ใน JSONB, ผูกบิล/ใบเสนอราคา/ผู้รับมอบหมายด้วย `user_id`, ลบตาราง Timeline เก่าหลังย้ายข้อมูลสำเร็จ และรวมสถานะเดิมเป็น `รอแอดมินส่งออก`
+
+การเชื่อม Supabase ผ่าน Session Pooler พอร์ต `5432` ต้องตั้ง `DB_PERSISTENT=false` ทั้ง Local และ Render เพื่อไม่ให้ PHP-FPM ยึด connection ค้างจน pgAdmin เข้าไม่ได้ โดยระบบเลขใบเสนอราคายังคงใช้ PostgreSQL Advisory Lock ตามเดิม
+
 หากติดตั้ง Python ใหม่สำหรับเครื่อง Local ให้ใช้ `pip install -r backend/requirements-budget-local-ai.txt` ส่วน Docker/Render ใช้ชุดประหยัด RAM จาก `backend/requirements-budget.txt`
 
 ค่าฐานข้อมูลและ secret อยู่ใน `backend/.env` และ `backend/.secrets/` ซึ่งถูก Git ignore ห้ามนำ secret ไปใส่ใน Frontend

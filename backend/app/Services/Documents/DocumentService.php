@@ -25,7 +25,7 @@ use Symfony\Component\HttpFoundation\HeaderUtils;
 
 final class DocumentService
 {
-    private const REPORT_SUCCESS_STATUSES = ['อนุมัติแล้ว', 'เตรียมส่งออก', 'ดำเนินการเสร็จสิ้น'];
+    private const REPORT_SUCCESS_STATUSES = ['รอแอดมินส่งออก', 'อนุมัติแล้ว', 'ดำเนินการเสร็จสิ้น'];
 
     public function __construct(private readonly ThaiBahtText $bahtText) {}
 
@@ -70,6 +70,7 @@ final class DocumentService
             customerAddress: (string) ($bill->tax_cust_address ?: $bill->address_note),
             customerTaxId: (string) ($bill->tax_cust_tax_id ?: $bill->tax_id ?: '-'),
             salesperson: (string) ($bill->created_by ?? ''),
+            department: 'VH000',
             note: (string) ($bill->bill_note ?? '-'),
             total: (float) $bill->total_amount,
             billDiscount: (float) ($bill->sale_discount_total ?? 0),
@@ -86,9 +87,13 @@ final class DocumentService
         ?BillingRecord $draft = null,
         bool $revised = false,
         array $itemNameOverrides = [],
+        bool $htmlOnly = false,
     ): string
     {
         $quotation->loadMissing('items');
+        if (! $quotation->relationLoaded('creator') && $quotation->creator_user_id) {
+            $quotation->load('creator');
+        }
         $draft?->loadMissing('items');
         $source = $draft ?? $quotation;
         $sourceItems = $draft?->items ?? $quotation->items;
@@ -134,12 +139,14 @@ final class DocumentService
             customerAddress: (string) ($source->address_note ?? ''),
             customerTaxId: (string) ($source->tax_id ?: '-'),
             salesperson: (string) ($source->created_by ?? ''),
+            department: trim((string) ($quotation->creator?->department ?? '')) ?: '-',
             note: $this->quotationNote($source),
             total: (float) $source->total_amount,
             billDiscount: (float) ($source->sale_discount_total ?? 0),
             items: $items,
             copy: $copy,
             canceled: false,
+            rejected: $draft?->status === 'ไม่อนุมัติ',
             approvalEvidence: $signature ? [
                 'name' => $signature->signer_name ?: $signature->signer_username,
                 'role' => $signature->signer_role,
@@ -159,7 +166,35 @@ final class DocumentService
                 'customer_signer_organization' => $customerAcceptance?->signer_organization,
                 'customer_accepted_at' => $customerAcceptance?->accepted_at?->timezone('Asia/Bangkok')->format('d-m-Y H:i:s'),
             ] : null,
+            htmlOnly: $htmlOnly,
         );
+    }
+
+    /** @param Collection<int, BillingRecord> $bills */
+    public function quotationBatchPdf(Collection $bills, bool $htmlOnly = false): string
+    {
+        $pages = [];
+        $styles = '';
+        foreach ($bills as $bill) {
+            $quotation = $bill->quotation;
+            if (! $quotation) {
+                throw new RuntimeException("Bill #{$bill->bill_id} ไม่มีใบเสนอราคาอ้างอิง");
+            }
+            $html = $this->quotationPdf($quotation, draft: $bill, htmlOnly: true);
+            if ($styles === '' && preg_match('/<style>(.*?)<\/style>/s', $html, $styleMatch) === 1) {
+                $styles = $styleMatch[1];
+            }
+            if (preg_match('/<body>(.*?)<\/body>/s', $html, $bodyMatch) !== 1) {
+                throw new RuntimeException("ไม่สามารถรวมใบเสนอราคาของ Bill #{$bill->bill_id} ได้");
+            }
+            $pages[] = '<section class="batch-document">'.$bodyMatch[1].'</section>';
+        }
+
+        $html = '<!doctype html><html lang="th"><head><meta charset="utf-8"><style>'
+            .$styles.'.batch-document{page-break-after:always}.batch-document:last-child{page-break-after:auto}'
+            .'</style></head><body>'.implode('', $pages).'</body></html>';
+
+        return $htmlOnly ? $html : $this->dompdfOutput($html);
     }
 
     private function quotationNote(object $source): string
@@ -189,13 +224,16 @@ final class DocumentService
         string $customerAddress,
         string $customerTaxId,
         string $salesperson,
+        string $department,
         string $note,
         float $total,
         float $billDiscount,
         Collection $items,
         bool $copy,
         bool $canceled,
+        bool $rejected = false,
         ?array $approvalEvidence = null,
+        bool $htmlOnly = false,
     ): string {
         $fontPath = realpath(resource_path('assets/fonts/THSarabunNew.ttf'));
         $logoPath = realpath(resource_path('assets/images/valorhealth.png'));
@@ -217,10 +255,15 @@ final class DocumentService
             $rows .= '<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>';
         }
 
-        $watermark = $canceled ? 'ยกเลิกเอกสาร' : ($copy ? 'สำเนา (COPY)' : '');
+        $watermark = $rejected ? 'ไม่อนุมัติ' : ($canceled ? 'ยกเลิกเอกสาร' : ($copy ? 'สำเนา (COPY)' : ''));
         $watermarkClass = $canceled ? ' canceled' : '';
+        $rejectionCross = $rejected
+            ? '<div class="rejection-cross rejection-cross--forward"></div><div class="rejection-cross rejection-cross--backward"></div>'
+            : '';
         $isQuotation = $title === 'ใบเสนอราคา';
-        $documentBranch = $isQuotation ? 'สำนักงานใหญ่<br>สาขา VH000' : 'สาขาที่ออกใบกำกับภาษี<br>สาขา VH000';
+        $documentBranch = $isQuotation
+            ? 'สำนักงานใหญ่<br>สาขา '.e($department)
+            : 'สาขาที่ออกใบกำกับภาษี<br>สาขา '.e($department);
         $leftDocumentText = $isQuotation
             ? '<div class="received">เงื่อนไขการยืนยัน: ลูกค้าลงนามในเอกสารนี้ หรือออก PO ที่อ้างอิงใบเสนอราคา</div><div class="document-note"><strong>หมายเหตุ:</strong> กรุณาตรวจสอบรายการ ราคา เงื่อนไขชำระเงิน และกำหนดส่งก่อนยืนยัน</div>'
             : '<div class="received">○ ได้รับสินค้าตามรายการนี้ในสภาพสมบูรณ์และจำนวนครบถ้วน</div><div class="document-note"><strong>หมายเหตุ:</strong> เป็นการยกเลิกใบกำกับภาษีอย่างย่อ<br>และออกใบกำกับภาษีเต็มรูปแบบแทน</div>';
@@ -255,9 +298,10 @@ final class DocumentService
             .after-items{width:100%;border-collapse:collapse;margin-top:-1px;table-layout:fixed}.after-items>tbody>tr>td{padding:0;vertical-align:top}.after-left{width:56%;padding:7px 10px 0 5px!important}.after-right{width:44%}.words{text-align:center;font-weight:bold;margin-bottom:12px}.received{margin:0 0 18px}.document-note{line-height:1.25}
             .summary{width:100%;border-collapse:collapse}.summary td{border:1px solid #222;padding:5px 6px;height:29px;vertical-align:middle}.summary .label{width:64%}.summary .value{width:36%;text-align:right}
             .footer{text-align:center;color:#e3202f;font-size:14px;line-height:1.3;margin-top:16px}.watermark{position:fixed;top:43%;left:12%;font-size:86px;color:rgba(100,100,100,.16);transform:rotate(-35deg);z-index:-1}.watermark.canceled{color:rgba(220,0,0,.18)}
+            .rejection-cross{position:fixed;top:49%;left:8%;width:84%;border-top:14px solid rgba(220,0,0,.14);z-index:-2}.rejection-cross--forward{transform:rotate(35deg)}.rejection-cross--backward{transform:rotate(-35deg)}
             .signature-table{width:100%;border-collapse:collapse;margin-top:13px;table-layout:fixed}.signature-table td{width:50%;border:1px solid #222;padding:8px;text-align:center;vertical-align:middle;height:66px}.signature-line{line-height:2}.hash{font-size:9px;word-break:break-all}.signature-note{text-align:center;font-size:11px;margin-top:4px;color:#555}
             .signature-image{display:inline-block;max-width:150px;max-height:55px;object-fit:contain;margin:3px auto}
-        </style></head><body>'.($watermark ? '<div class="watermark'.$watermarkClass.'">'.e($watermark).'</div>' : '').$logo.'
+        </style></head><body>'.$rejectionCross.($watermark ? '<div class="watermark'.$watermarkClass.'">'.e($watermark).'</div>' : '').$logo.'
         <table class="header"><tr>
             <td class="company-cell"><div class="company header-line">บริษัท เวเลอร์ เฮลธ์ จำกัด (สำนักงานใหญ่)</div><div class="header-line">2/22 อาคารไอยรา ถ.จันทน์ แขวงทุ่งวัดดอน เขตสาทร</div><div class="header-line">จ.กรุงเทพมหานคร 10120</div><div class="header-line">โทรศัพท์ +66-655219785</div><div>เลขผู้เสียภาษี 0105558041179</div></td>
             <td class="title-cell"><div class="document-title">'.e($title).'<br><span>'.e($englishTitle).'</span></div></td>
@@ -276,7 +320,7 @@ final class DocumentService
             ? 'ใบเสนอราคานี้ไม่ใช่ใบกำกับภาษี และใช้ตามเงื่อนไข/ระยะเวลาที่ระบุในเอกสาร'
             : 'เอกสารนี้ได้จัดทำและส่งข้อมูลให้แก่กรมสรรพากรด้วยวิธีการทางอิเล็กทรอนิกส์<br>ทางบริษัทฯ ขอสงวนสิทธิ์ในการแก้ไข เปลี่ยนแปลง หรือยกเลิกเอกสารฉบับนี้ ภายใน 7 วัน นับจากวันที่ระบุในเอกสาร').'</div>
         </body></html>';
-        return $this->dompdfOutput($html);
+        return $htmlOnly ? $html : $this->dompdfOutput($html);
     }
 
     public function approvalCertificatePdf(BillingRecord $bill, DocumentSignature $signature): string
@@ -369,6 +413,7 @@ final class DocumentService
         $rowNumber = 2;
         $reviewRows = [];
         foreach ($bills as $bill) {
+            $saleDepartment = trim((string) ($bill->creator?->department ?? ''));
             $effectiveBillDiscount = (float) ($bill->admin_discount_final ?? 0) > 0
                 ? (float) $bill->admin_discount_final
                 : (float) ($bill->sale_discount_total ?? 0);
@@ -377,12 +422,12 @@ final class DocumentService
                     ? (float) $item->admin_disocount_unit
                     : (float) ($item->sale_discount_unit ?? 0);
                 $sheet->fromArray([
-                    $bill->bill_date?->format('Y-m-d'), $bill->bill_id, $bill->bill_date?->format('Y-m-d'),
-                    $bill->tax_invoice_no, $bill->bplus_customer_code, $effectiveBillDiscount,
-                    $bill->admin_branch, $bill->admin_dept, $bill->admin_project, $bill->bplus_salesman_code,
-                    $bill->bill_note, $item->main_category, $item->quantity, $item->admin_free_qty,
-                    $item->unit_price, $effectiveItemDiscount, $item->admin_weight_unit,
-                    $item->admin_lot, $item->admin_serial, $item->admin_storage,
+                    $bill->bill_date?->format('Y-m-d'), $bill->bill_id, '',
+                    '', $bill->bplus_customer_code, '',
+                    $saleDepartment, $saleDepartment, $saleDepartment, $bill->bplus_salesman_code,
+                    '', $item->main_category, $item->quantity, $item->admin_free_qty,
+                    $item->unit_price, $effectiveItemDiscount, '',
+                    '', '', '',
                 ], null, 'A'.$rowNumber++);
                 $reviewRows[] = [
                     $bill->bill_id,

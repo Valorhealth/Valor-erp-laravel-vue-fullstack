@@ -23,6 +23,7 @@ final class SalesCallDashboardPdf
             .$this->header('CALL SALE DASHBOARD', $actor, $filterText)
             .$this->metrics($metrics)
             .'<table class="chart-grid"><tr><td><h2>Call Outcome</h2><img class="chart" src="'.$this->outcomeDonut($dashboard).'">'.$this->outcomeLegend($dashboard).'</td><td><h2>Total Call x Success Rate</h2><img class="chart" src="'.$this->sellerBubbles($dashboard).'"><div class="hint">ขวา = Total Call มาก, สูง = Success Rate สูง</div></td></tr></table>'
+            .'<h2 class="section-title">ผลรวมแยกตามแผนกของ Sale</h2>'.$this->sellerDepartmentTable($dashboard)
             .'<div class="page-break"></div>'.$this->header('DAILY CALL TREND', $actor, $filterText)
             .'<h2 class="section-title">แนวโน้ม Total Call รายวัน</h2><img class="chart-trend" src="'.$this->trend($dashboard).'">'
             .'<div class="page-break"></div>'.$this->header('PRODUCT & SPECIALTY DASHBOARD', $actor, $filterText)
@@ -31,7 +32,9 @@ final class SalesCallDashboardPdf
             .'<div class="page-break"></div>'.$this->header('SALE TOTAL SUMMARY', $actor, $filterText)
             .'<h2 class="section-title">ผลรวมของ Sale แต่ละคน</h2>'.$this->sellerTable($dashboard)
             .'<h2 class="section-title spaced">Performance Matrix - Sale x Place of Work</h2>'.$this->performanceTable($dashboard)
-            .'<div class="page-break"></div>'.$this->header('PRODUCT x CUSTOMER', $actor, $filterText)
+            .'<div class="page-break"></div>'.$this->header('HOSPITAL PURCHASE RANKING', $actor, $filterText)
+            .'<h2 class="section-title">อันดับโรงพยาบาลที่ซื้อสินค้า (อิง Success Call)</h2>'.$this->hospitalPurchaseTable($dashboard)
+            .'<h2 class="section-title spaced">PRODUCT x CUSTOMER</h2>'
             .'<div class="hint">แสดงสูงสุด 50 รายการตามตัวกรอง รายละเอียดทั้งหมดอยู่ใน Export Excel</div>'.$this->productCustomerTable($dashboard)
             .'</body></html>';
 
@@ -86,6 +89,9 @@ final class SalesCallDashboardPdf
         if (($filters['seller_ids'] ?? []) !== []) {
             $parts[] = 'Sale: '.e(collect($dashboard['by_seller'])->pluck('seller_username')->implode(', ') ?: 'ไม่พบข้อมูล');
         }
+        if (($filters['seller_departments'] ?? []) !== []) {
+            $parts[] = 'Sale Department: '.e(implode(', ', $filters['seller_departments']));
+        }
         foreach (['products' => 'Product', 'outcomes' => 'Outcome', 'statuses' => 'Status'] as $key => $label) {
             if (($filters[$key] ?? []) !== []) {
                 $parts[] = $label.': '.e(implode(', ', $filters[$key]));
@@ -125,16 +131,34 @@ final class SalesCallDashboardPdf
         if ($sum === 0) {
             return $this->emptyChart('No data');
         }
-        $circumference = 314.159;
-        $offset = 0.0;
+        $startAngle = -90.0;
         $segments = '';
         foreach ($values as $index => $value) {
-            $length = $circumference * $value['total'] / $sum;
-            $segments .= sprintf('<circle cx="90" cy="78" r="50" fill="none" stroke="%s" stroke-width="25" stroke-dasharray="%.3f %.3f" stroke-dashoffset="%.3f" transform="rotate(-90 90 78)"/>', $colors[$index % count($colors)], $length, $circumference - $length, -$offset);
-            $offset += $length;
+            if ($value['total'] <= 0) {
+                continue;
+            }
+            $sweep = 360.0 * $value['total'] / $sum;
+            $segments .= $this->donutSegment($startAngle, $sweep, $colors[$index % count($colors)]);
+            $startAngle += $sweep;
         }
 
         return $this->svg('<svg xmlns="http://www.w3.org/2000/svg" width="520" height="165" viewBox="0 0 520 165"><rect width="520" height="165" fill="#fff"/>'.$segments.'<circle cx="90" cy="78" r="35" fill="#fff"/><text x="90" y="75" text-anchor="middle" font-family="Arial" font-size="20" font-weight="700" fill="#172033">'.number_format($sum).'</text><text x="90" y="94" text-anchor="middle" font-family="Arial" font-size="10" fill="#667085">'.e($label).'</text></svg>');
+    }
+
+    private function donutSegment(float $startAngle, float $sweep, string $color): string
+    {
+        $steps = max(2, (int) ceil($sweep / 6));
+        $points = [];
+        for ($step = 0; $step <= $steps; $step++) {
+            $angle = deg2rad($startAngle + ($sweep * $step / $steps));
+            $points[] = sprintf('%.2f,%.2f', 90 + 50 * cos($angle), 78 + 50 * sin($angle));
+        }
+        for ($step = $steps; $step >= 0; $step--) {
+            $angle = deg2rad($startAngle + ($sweep * $step / $steps));
+            $points[] = sprintf('%.2f,%.2f', 90 + 35 * cos($angle), 78 + 35 * sin($angle));
+        }
+
+        return '<polygon points="'.implode(' ', $points).'" fill="'.$color.'" stroke="#ffffff" stroke-width="1"/>';
     }
 
     /** @param array<string, mixed> $dashboard */
@@ -249,6 +273,14 @@ final class SalesCallDashboardPdf
     }
 
     /** @param array<string, mixed> $dashboard */
+    private function sellerDepartmentTable(array $dashboard): string
+    {
+        $rows = collect($dashboard['by_seller_department'] ?? [])->map(fn ($row): string => '<tr><td><b>'.e($row->department).'</b></td><td>'.number_format($row->total).'</td><td class="good">'.number_format($row->success_calls).'</td><td class="bad">'.number_format($row->failure_calls).'</td><td>'.number_format($row->no_calls).'</td><td>'.number_format($row->success_rate, 2).'%</td><td>'.number_format($row->working_days).'</td><td>'.number_format($row->calls_per_working_day, 2).'</td></tr>')->implode('');
+
+        return $this->table(['Sale Department', 'Total Call', 'Success', 'Failure', 'No Call', 'Success Rate', 'Working Day', 'Call / Day'], $rows);
+    }
+
+    /** @param array<string, mixed> $dashboard */
     private function performanceTable(array $dashboard): string
     {
         $rows = collect($dashboard['performance_matrix'])->map(fn ($row): string => '<tr><td>'.e($row->seller_username).'</td><td>'.e($row->place_of_work).'</td><td>'.number_format($row->total).'</td><td class="good">'.number_format($row->success_calls).'</td><td class="bad">'.number_format($row->failure_calls).'</td><td>'.number_format($row->no_calls).'</td><td>'.number_format($row->success_rate, 2).'%</td><td>'.number_format($row->working_days).'</td><td>'.number_format($row->calls_per_working_day, 2).'</td></tr>')->implode('');
@@ -262,6 +294,14 @@ final class SalesCallDashboardPdf
         $rows = collect($dashboard['product_customer_matrix'])->take(50)->map(fn ($row): string => '<tr><td>'.e($row->product).'</td><td>'.e($row->place_of_work).'</td><td>'.e($row->customer_name).'</td><td>'.number_format($row->total).'</td><td class="good">'.number_format($row->success_calls).'</td><td class="bad">'.number_format($row->failure_calls).'</td><td>'.number_format($row->success_rate, 2).'%</td><td>'.e((string) $row->last_call_date).'</td></tr>')->implode('');
 
         return $this->table(['Product', 'Place of Work', 'Customer', 'Total', 'Success', 'Failure', 'Success Rate', 'Last Call'], $rows);
+    }
+
+    /** @param array<string, mixed> $dashboard */
+    private function hospitalPurchaseTable(array $dashboard): string
+    {
+        $rows = collect($dashboard['hospital_purchase_ranking'] ?? [])->take(20)->values()->map(fn ($row, int $index): string => '<tr><td><b>'.number_format($index + 1).'</b></td><td><b>'.e($row->hospital_name).'</b></td><td class="good">'.number_format($row->purchase_calls).'</td><td>'.number_format($row->products_count).'</td><td>'.number_format($row->contacts_count).'</td><td>'.number_format((float) $row->actual_value, 2).'</td><td>'.e((string) $row->last_purchase_date).'</td></tr>')->implode('');
+
+        return $this->table(['Rank', 'Hospital / Place of Work', 'Success Purchase', 'Products', 'Contacts', 'Actual Value', 'Last Purchase'], $rows);
     }
 
     /** @param array<int, string> $headers */

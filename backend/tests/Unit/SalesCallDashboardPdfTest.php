@@ -21,6 +21,7 @@ class SalesCallDashboardPdfTest extends TestCase
             'by_objective' => [$record(['label' => 'Awareness', 'total' => 5, 'success_calls' => 3, 'failure_calls' => 1, 'no_calls' => 1])],
             'performance_matrix' => [$record(['seller_username' => 'sale-one', 'place_of_work' => 'Hospital', 'total' => 5, 'success_calls' => 3, 'failure_calls' => 1, 'no_calls' => 1, 'success_rate' => 60, 'working_days' => 4, 'calls_per_working_day' => 1.25])],
             'product_customer_matrix' => [$record(['product' => 'AVANOS-DH', 'place_of_work' => 'Hospital', 'customer_name' => 'Customer', 'total' => 5, 'success_calls' => 3, 'failure_calls' => 1, 'success_rate' => 60, 'last_call_date' => '2026-08-02'])],
+            'hospital_purchase_ranking' => [$record(['hospital_name' => 'Test Hospital', 'purchase_calls' => 3, 'products_count' => 2, 'contacts_count' => 2, 'actual_value' => 150000, 'last_purchase_date' => '2026-08-02'])],
         ];
         $actor = new User(['username' => 'approve']);
 
@@ -28,5 +29,23 @@ class SalesCallDashboardPdfTest extends TestCase
 
         $this->assertStringStartsWith('%PDF-', $pdf);
         $this->assertGreaterThan(10000, strlen($pdf));
+    }
+
+    public function test_donut_uses_independent_filled_segments_supported_by_pdf_renderer(): void
+    {
+        $method = new \ReflectionMethod(SalesCallDashboardPdf::class, 'donut');
+        $uri = $method->invoke(app(SalesCallDashboardPdf::class), [
+            ['label' => 'Success', 'total' => 3],
+            ['label' => 'Failure', 'total' => 1],
+            ['label' => 'No Call', 'total' => 1],
+        ], ['#22c55e', '#ef4444', '#94a3b8'], 'Total Call');
+        $svg = base64_decode(substr($uri, strpos($uri, ',') + 1), true);
+
+        $this->assertIsString($svg);
+        $this->assertSame(3, substr_count($svg, '<polygon '));
+        $this->assertStringContainsString('fill="#22c55e"', $svg);
+        $this->assertStringContainsString('fill="#ef4444"', $svg);
+        $this->assertStringContainsString('fill="#94a3b8"', $svg);
+        $this->assertStringNotContainsString('stroke-dasharray', $svg);
     }
 }

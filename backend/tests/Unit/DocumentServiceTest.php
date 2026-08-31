@@ -6,6 +6,7 @@ use App\Models\BillingRecord;
 use App\Models\BillItem;
 use App\Models\Quotation;
 use App\Models\QuotationItem;
+use App\Models\User;
 use App\Services\Documents\DocumentService;
 use App\Services\Documents\ThaiBahtText;
 use Illuminate\Support\Collection;
@@ -100,6 +101,64 @@ class DocumentServiceTest extends TestCase
     }
 
     #[Test]
+    public function it_combines_selected_quotations_as_consecutive_pages(): void
+    {
+        $bills = collect([1, 2])->map(function (int $id): BillingRecord {
+            $quotation = new Quotation([
+                'qt_no' => 'QT-TEST-000'.$id,
+                'qt_date' => '2026-08-31',
+                'buyer_name' => 'Hospital '.$id,
+                'created_by' => 'sale-test',
+                'total_amount' => 1000,
+            ]);
+            $quotation->qt_id = $id;
+            $quotation->setRelation('creator', new User(['department' => 'VH00'.$id]));
+            $quotation->setRelation('items', collect());
+
+            $bill = new BillingRecord([
+                'bill_date' => '2026-08-31',
+                'buyer_name' => 'Hospital '.$id,
+                'created_by' => 'sale-test',
+                'total_amount' => 1000,
+            ]);
+            $bill->bill_id = $id;
+            $bill->setRelation('quotation', $quotation);
+            $bill->setRelation('items', collect());
+
+            return $bill;
+        });
+
+        $html = (new DocumentService(new ThaiBahtText))->quotationBatchPdf($bills, htmlOnly: true);
+
+        $this->assertSame(2, substr_count($html, '<section class="batch-document">'));
+        $this->assertStringContainsString('QTTEST0001', $html);
+        $this->assertStringContainsString('QTTEST0002', $html);
+        $this->assertStringContainsString('page-break-after:always', $html);
+    }
+
+    #[Test]
+    public function it_marks_a_declined_quotation_with_a_cross_watermark(): void
+    {
+        $quotation = new Quotation([
+            'qt_no' => 'QT-DECLINED-0001', 'qt_date' => '2026-08-31', 'buyer_name' => 'Declined Hospital',
+            'created_by' => 'sale-test', 'total_amount' => 1000,
+        ]);
+        $quotation->qt_id = 99;
+        $quotation->setRelation('creator', new User(['department' => 'VH001']));
+        $quotation->setRelation('items', collect());
+        $bill = new BillingRecord([
+            'bill_date' => '2026-08-31', 'buyer_name' => 'Declined Hospital', 'created_by' => 'sale-test',
+            'total_amount' => 1000, 'status' => 'ไม่อนุมัติ',
+        ]);
+        $bill->setRelation('items', collect());
+
+        $html = (new DocumentService(new ThaiBahtText))->quotationPdf($quotation, draft: $bill, htmlOnly: true);
+
+        $this->assertSame(2, substr_count($html, 'rejection-cross rejection-cross--'));
+        $this->assertStringContainsString('ไม่อนุมัติ', $html);
+    }
+
+    #[Test]
     public function it_generates_the_same_bplus_columns_as_streamlit(): void
     {
         $bill = new BillingRecord([
@@ -109,6 +168,7 @@ class DocumentServiceTest extends TestCase
             'bplus_sale_type_code' => 'เงินสด', 'admin_discount_final' => 12,
         ]);
         $bill->bill_id = 99;
+        $bill->setRelation('creator', new User(['username' => 'sale-test', 'department' => 'AVANOS']));
         $bill->setRelation('items', new Collection([
             new BillItem(['main_category' => 'SKU001', 'quantity' => 2, 'unit_price' => 500, 'sale_discount_unit' => 5, 'admin_disocount_unit' => 7, 'admin_weight_unit' => 1.2, 'admin_lot' => 'LOT1', 'admin_serial' => 'SN1', 'admin_storage' => 'WH-MAIN']),
         ]));
@@ -132,9 +192,15 @@ class DocumentServiceTest extends TestCase
             $this->assertSame('วันที่เอกสาร', $sheet->getCell('A1')->getValue());
             $this->assertSame('รหัสซื้อขาย', $sheet->getCell('L1')->getValue());
             $this->assertSame('SKU001', $sheet->getCell('L2')->getValue());
-            $this->assertEquals(12, $sheet->getCell('F2')->getValue());
+            $this->assertNull($sheet->getCell('F2')->getValue());
+            $this->assertSame('AVANOS', $sheet->getCell('G2')->getValue());
+            $this->assertSame('AVANOS', $sheet->getCell('H2')->getValue());
+            $this->assertSame('AVANOS', $sheet->getCell('I2')->getValue());
             $this->assertEquals(7, $sheet->getCell('P2')->getValue());
-            $this->assertSame('WH-MAIN', $sheet->getCell('T2')->getValue());
+            $this->assertNull($sheet->getCell('Q2')->getValue());
+            $this->assertNull($sheet->getCell('R2')->getValue());
+            $this->assertNull($sheet->getCell('S2')->getValue());
+            $this->assertNull($sheet->getCell('T2')->getValue());
             $review = IOFactory::load($path)->getSheetByName('ข้อมูลตรวจสอบ');
             $this->assertNotNull($review);
             $this->assertSame('เงินสด', $review->getCell('B2')->getValue());
@@ -155,7 +221,7 @@ class DocumentServiceTest extends TestCase
             'buyer_name' => 'โรงพยาบาล ตากสิน',
             'tax_id' => '0105558041179',
             'created_by' => 'sale-a',
-            'status' => 'เตรียมส่งออก',
+            'status' => 'รอแอดมินส่งออก',
             'sale_discount_total' => 100,
             'admin_discount_final' => 25,
             'bplus_sale_type_code' => 'สินเชื่อ',

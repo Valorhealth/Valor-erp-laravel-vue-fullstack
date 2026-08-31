@@ -15,7 +15,6 @@ import LoginView from '../views/LoginView.vue'
 import ResetPasswordView from '../views/ResetPasswordView.vue'
 import MasterDataView from '../views/MasterDataView.vue'
 import NoticeBoardView from '../views/NoticeBoardView.vue'
-import PrintQueueView from '../views/PrintQueueView.vue'
 import PublicTaxView from '../views/PublicTaxView.vue'
 import CustomerQuotationAcceptanceView from '../views/CustomerQuotationAcceptanceView.vue'
 import SaleOrderView from '../views/SaleOrderView.vue'
@@ -46,7 +45,6 @@ const router = createRouter({
     { path: '/billing-records/rejected', name: 'rejected-billing-records', component: BillingRecordsView, props: { pageTitle: 'รายการที่ไม่อนุมัติ', statusGroup: 'rejected' }, meta: { requiresAuth: true, ability: 'rejected_bills' } },
     { path: '/billing-records/all', name: 'all-billing-records', component: BillingRecordsView, props: { pageTitle: 'รายการบิลทั้งหมด' }, meta: { requiresAuth: true, ability: 'all_bills' } },
     { path: '/budget-analysis', name: 'budget-analysis', component: BudgetAnalysisView, meta: { requiresAuth: true, ability: 'budget_analysis' } },
-    { path: '/print-queue', name: 'print-queue', component: PrintQueueView, meta: { requiresAuth: true, ability: 'print_queue' } },
     { path: '/system-admin', name: 'system-admin', component: SystemAdminView, meta: { requiresAuth: true, ability: 'system_admin' } },
     { path: '/master-data', name: 'master-data', component: MasterDataView, meta: { requiresAuth: true, ability: 'master_data' } },
     { path: '/customers', name: 'customers', component: CatalogView, props: { catalog: 'customers' }, meta: { requiresAuth: true, ability: 'master_data' } },

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class SalesTask extends Model
 {
@@ -22,6 +23,17 @@ class SalesTask extends Model
             'all_day' => 'boolean',
             'created_at' => 'datetime',
             'updated_at' => 'datetime',
+            'progress_updates' => 'array',
         ];
+    }
+
+    public function assignee(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'assigned_to_user_id', 'id');
+    }
+
+    public function assigner(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'assigned_by_user_id', 'id');
     }
 }

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Quotation extends Model
 {
@@ -37,6 +38,11 @@ class Quotation extends Model
     public function items(): HasMany
     {
         return $this->hasMany(QuotationItem::class, 'qt_id', 'qt_id');
+    }
+
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'creator_user_id', 'id');
     }
 
     public function billingRecord(): HasOne

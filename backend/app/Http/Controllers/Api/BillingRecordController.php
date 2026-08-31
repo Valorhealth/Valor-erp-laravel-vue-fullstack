@@ -12,7 +12,7 @@ use Illuminate\Validation\Rule;
 class BillingRecordController extends Controller
 {
     private const STATUS_GROUPS = [
-        'approved' => ['รอลูกค้ายืนยัน', 'รอแอดมินตรวจสอบ', 'อนุมัติแล้ว', 'เตรียมส่งออก', 'ดำเนินการเสร็จสิ้น'],
+        'approved' => ['รอลูกค้ายืนยัน', 'รอแอดมินส่งออก', 'อนุมัติแล้ว', 'ดำเนินการเสร็จสิ้น'],
         'rejected' => ['รอแก้ไข', 'ไม่อนุมัติ'],
     ];
 
@@ -32,7 +32,10 @@ class BillingRecordController extends Controller
         );
 
         $query = BillingRecord::query()
-            ->when($mustUseOwnRecords, fn ($query) => $query->where('created_by', $request->user()->username))
+            ->when($mustUseOwnRecords, fn ($query) => $query->where(
+                fn ($owned) => $owned->where('creator_user_id', $request->user()->id)
+                    ->orWhere(fn ($legacy) => $legacy->whereNull('creator_user_id')->where('created_by', $request->user()->username))
+            ))
             ->when($statusGroup !== null, fn ($query) => $query->whereIn('status', self::STATUS_GROUPS[$statusGroup]))
             ->when($status !== '', fn ($query) => $query->where('status', $status))
             ->when($search !== '', fn ($query) => $query->where(
@@ -49,7 +52,7 @@ class BillingRecordController extends Controller
         $records = $query
             ->select([
                 'bill_id', 'bill_date', 'buyer_name', 'tax_id', 'total_amount',
-                'status', 'created_by', 'created_at', 'workflow_type', 'address_note',
+                'status', 'created_by', 'creator_user_id', 'created_at', 'workflow_type', 'address_note',
                 'province', 'district', 'sub_district', 'zipcode', 'shipping_type',
                 'shipping_text', 'bill_note', 'sale_discount_total', 'sale_discount_note',
                 'bplus_customer_code', 'credit_limit', 'credit_outstanding', 'credit_remain',

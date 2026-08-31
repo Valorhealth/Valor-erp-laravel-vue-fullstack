@@ -61,12 +61,12 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/sales-calls/day', [SalesCallController::class, 'day'])->middleware('ability:sales_call_report');
         Route::put('/sales-calls/day', [SalesCallController::class, 'saveDay'])->middleware('ability:sales_call_report');
         Route::get('/billing-records', [BillingRecordController::class, 'index'])
-            ->middleware('ability:my_billing_history,approved_bills,rejected_bills,all_bills,print_queue,system_admin,document_center');
+            ->middleware('ability:my_billing_history,approved_bills,rejected_bills,all_bills,system_admin,document_center');
         Route::get('/catalog/customers', [CatalogController::class, 'customers'])->middleware('ability:master_data');
         Route::get('/catalog/products', [CatalogController::class, 'products'])->middleware('ability:master_data');
 
         Route::get('/reference-data', [ReferenceDataController::class, 'index'])
-            ->middleware('ability:create_bill,edit_bill,print_queue,master_data,credit_profiles,approve_bills');
+            ->middleware('ability:create_bill,edit_bill,system_admin,master_data,credit_profiles,approve_bills');
         Route::get('/reference-data/locations', [ReferenceDataController::class, 'locations'])
             ->middleware('ability:create_bill,edit_bill');
         Route::post('/receipt-ocr', ReceiptOcrController::class)->middleware('ability:create_bill');
@@ -82,15 +82,15 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::delete('/tasks/{task}', [TaskController::class, 'destroy'])->middleware('ability:approve_bills,system_admin');
 
         Route::get('/credit-requests', [CreditRequestController::class, 'index'])
-            ->middleware('ability:credit_request_status,approve_bills,print_queue');
+            ->middleware('ability:credit_request_status,approve_bills,system_admin');
         Route::post('/credit-requests', [CreditRequestController::class, 'store'])->middleware('ability:create_bill,edit_bill');
         Route::post('/credit-requests/{creditRequest}/approve', [CreditRequestController::class, 'approve'])->middleware('ability:approve_bills');
         Route::post('/credit-requests/{creditRequest}/reject', [CreditRequestController::class, 'reject'])->middleware('ability:approve_bills');
-        Route::post('/credit-requests/{creditRequest}/open', [CreditRequestController::class, 'open'])->middleware('ability:print_queue');
+        Route::post('/credit-requests/{creditRequest}/open', [CreditRequestController::class, 'open'])->middleware('ability:system_admin');
         Route::get('/credit-requests/{creditRequest}/documents/{document}', [CreditRequestController::class, 'document'])
-            ->middleware('ability:approve_bills,print_queue');
+            ->middleware('ability:approve_bills,system_admin');
 
-        Route::get('/credit-profiles', [CreditProfileController::class, 'index'])->middleware('ability:credit_profiles,create_bill,edit_bill,print_queue');
+        Route::get('/credit-profiles', [CreditProfileController::class, 'index'])->middleware('ability:credit_profiles,create_bill,edit_bill,system_admin');
         Route::post('/credit-profiles', [CreditProfileController::class, 'store'])->middleware('ability:credit_profiles');
         Route::delete('/credit-profiles/{creditProfile}', [CreditProfileController::class, 'destroy'])->middleware('ability:credit_profiles');
 
@@ -104,27 +104,27 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::post('/purchase-orders/create-bill', [BillingWorkflowController::class, 'createFromPurchaseOrder'])->middleware('ability:create_bill');
 
         Route::get('/bills/pending-approval', [BillingWorkflowController::class, 'pendingApproval'])->middleware('ability:approve_bills');
-        Route::get('/bills/admin-queue', [BillingWorkflowController::class, 'adminQueue'])->middleware('ability:print_queue');
         Route::get('/bills/ready-export', [BillingWorkflowController::class, 'readyForExport'])->middleware('ability:system_admin');
         Route::post('/bills/export', [BillingWorkflowController::class, 'export'])->middleware('ability:system_admin');
+        Route::post('/bills/export-quotations.pdf', [BillingWorkflowController::class, 'exportQuotationsPdf'])->middleware('ability:system_admin');
         Route::post('/bills/complete-all', [BillingWorkflowController::class, 'completeAll'])->middleware('ability:system_admin');
         Route::get('/bills/{bill}', [BillingWorkflowController::class, 'show'])
-            ->middleware('ability:edit_bill,my_billing_history,approve_bills,print_queue,system_admin,document_center,sales_documents');
+            ->middleware('ability:edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
         Route::put('/bills/{bill}', [BillingWorkflowController::class, 'updateBySale'])->middleware('ability:edit_bill');
         Route::post('/bills/{bill}/submit', [BillingWorkflowController::class, 'submitDraft'])->middleware('ability:edit_bill');
         Route::post('/bills/{bill}/purchase-order', [BillingDocumentController::class, 'store'])->middleware('ability:create_bill,edit_bill');
         Route::get('/bills/{bill}/purchase-order', [BillingDocumentController::class, 'show'])
-            ->middleware('ability:create_bill,edit_bill,my_billing_history,approve_bills,print_queue,system_admin,document_center,sales_documents');
+            ->middleware('ability:create_bill,edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
         Route::post('/bills/{bill}/signed-quotation', [BillingDocumentController::class, 'storeSignedQuotation'])->middleware('ability:create_bill,edit_bill');
         Route::get('/bills/{bill}/signed-quotation', [BillingDocumentController::class, 'showSignedQuotation'])
-            ->middleware('ability:create_bill,edit_bill,my_billing_history,approve_bills,print_queue,system_admin,document_center,sales_documents');
+            ->middleware('ability:create_bill,edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
         Route::post('/bills/{bill}/approve', [BillingWorkflowController::class, 'approve'])->middleware('ability:approve_bills');
         Route::get('/bills/{bill}/approval-certificate', [BillingWorkflowController::class, 'approvalCertificate'])
-            ->middleware('ability:edit_bill,my_billing_history,approve_bills,print_queue,system_admin,document_center,sales_documents');
+            ->middleware('ability:edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
         Route::post('/bills/{bill}/reject', [BillingWorkflowController::class, 'reject'])->middleware('ability:approve_bills');
-        Route::post('/bills/{bill}/prepare', [BillingWorkflowController::class, 'prepare'])->middleware('ability:print_queue');
+        Route::post('/bills/{bill}/decline', [BillingWorkflowController::class, 'decline'])->middleware('ability:approve_bills');
         Route::post('/bills/{bill}/complete', [BillingWorkflowController::class, 'complete'])->middleware('ability:system_admin');
-        Route::get('/bills/{bill}/pdf', [BillingWorkflowController::class, 'pdf'])->middleware('ability:sales_documents,document_center,print_queue,system_admin');
+        Route::get('/bills/{bill}/pdf', [BillingWorkflowController::class, 'pdf'])->middleware('ability:sales_documents,document_center,system_admin');
         Route::patch('/bills/{bill}/admin-status', [BillingWorkflowController::class, 'adminUpdateStatus'])->middleware('ability:system_admin');
         Route::put('/bills/{bill}/admin', [BillingWorkflowController::class, 'adminUpdate'])->middleware('ability:system_admin');
         Route::post('/bills/{bill}/cancel', [BillingWorkflowController::class, 'cancel'])->middleware('ability:system_admin');

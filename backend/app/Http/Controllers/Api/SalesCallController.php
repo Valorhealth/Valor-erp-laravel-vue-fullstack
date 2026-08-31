@@ -184,6 +184,8 @@ class SalesCallController extends Controller
         return $request->validate([
             'seller_ids' => ['nullable', 'array'],
             'seller_ids.*' => ['integer', 'exists:users,id'],
+            'seller_departments' => ['nullable', 'array'],
+            'seller_departments.*' => ['string', 'max:255'],
             'date_from' => ['nullable', 'date'],
             'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
             'products' => ['nullable', 'array'],

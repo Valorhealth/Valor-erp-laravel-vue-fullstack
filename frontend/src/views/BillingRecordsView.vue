@@ -20,7 +20,7 @@ const expandedBillId = ref<number | null>(null)
 const loading = ref(false)
 const error = ref('')
 
-const statuses = ['ฉบับร่าง', 'รอหัวหน้าอนุมัติ', 'รอลูกค้ายืนยัน', 'รอแอดมินตรวจสอบ', 'รอแก้ไข', 'เตรียมส่งออก', 'ดำเนินการเสร็จสิ้น', 'อนุมัติแล้ว', 'ไม่อนุมัติ', 'ยกเลิกบิล']
+const statuses = ['ฉบับร่าง', 'รอหัวหน้าอนุมัติ', 'รอลูกค้ายืนยัน', 'รอแอดมินส่งออก', 'รอแก้ไข', 'ดำเนินการเสร็จสิ้น', 'อนุมัติแล้ว', 'ไม่อนุมัติ', 'ยกเลิกบิล']
 const groupFilterLabel = computed(() => props.statusGroup === 'approved' ? 'ทุกสถานะที่ผ่านการอนุมัติ' : props.statusGroup === 'rejected' ? 'รายการที่ถูกตีกลับ/ไม่อนุมัติ' : 'ทุกสถานะ')
 const expandedBill = computed(() => records.value?.data.find((bill) => bill.bill_id === expandedBillId.value) ?? null)
 

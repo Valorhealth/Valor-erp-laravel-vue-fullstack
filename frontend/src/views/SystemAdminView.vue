@@ -17,8 +17,9 @@ const message = ref('')
 const saving = ref(false)
 const statusSaving = ref(false)
 const persistedStatus = ref('')
+const selectedExportIds = ref<number[]>([])
 
-const statuses = ['ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอลูกค้ายืนยัน', 'รอแอดมินตรวจสอบ', 'รอแก้ไข', 'อนุมัติแล้ว', 'เตรียมส่งออก', 'ดำเนินการเสร็จสิ้น', 'ไม่อนุมัติ', 'ยกเลิกบิล']
+const statuses = ['ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอลูกค้ายืนยัน', 'รอแอดมินส่งออก', 'รอแก้ไข', 'อนุมัติแล้ว', 'ดำเนินการเสร็จสิ้น', 'ไม่อนุมัติ', 'ยกเลิกบิล']
 const editableFields = [
   'bill_date', 'buyer_name', 'tax_id', 'address_note', 'province', 'district', 'sub_district',
   'zipcode', 'shipping_type', 'shipping_text', 'bill_note', 'sale_discount_total',
@@ -50,6 +51,12 @@ const dateFields = new Set(['bill_date', 'customer_confirmed_at', 'quotation_val
 const totalReady = computed(() => ready.value.reduce((sum, bill) => sum + Number(bill.total_amount || 0), 0))
 const itemSubtotal = computed(() => selected.value?.items?.reduce((sum, item) => sum + Math.max(Number(item.quantity || 0) * Number(item.unit_price || 0) - Number(item.sale_discount_unit || 0), 0), 0) || 0)
 const calculatedTotal = computed(() => Math.max(itemSubtotal.value - Number(selected.value?.sale_discount_total || 0), 0))
+const allReadySelected = computed({
+  get: () => ready.value.length > 0 && selectedExportIds.value.length === ready.value.length,
+  set: (checked: boolean) => { selectedExportIds.value = checked ? ready.value.map((bill) => bill.bill_id) : [] },
+})
+const selectedReadyBills = computed(() => ready.value.filter((bill) => selectedExportIds.value.includes(bill.bill_id)))
+const canExportQuotationPdf = computed(() => selectedReadyBills.value.length > 0 && selectedReadyBills.value.every((bill) => Boolean(bill.ref_qt_id)))
 
 async function load(page = records.value?.current_page || 1) {
   error.value = ''
@@ -59,6 +66,7 @@ async function load(page = records.value?.current_page || 1) {
       api.get<Paginated<BillingRecord>>('/api/v1/billing-records', { params: { page, per_page: 25, search: search.value || undefined } }),
     ])
     ready.value = readyResponse.data.data
+    selectedExportIds.value = selectedExportIds.value.filter((id) => ready.value.some((bill) => bill.bill_id === id))
     records.value = allResponse.data
   } catch (cause) { error.value = apiError(cause) }
 }
@@ -73,10 +81,22 @@ async function loadSelected() {
   } catch (cause) { selected.value = null; persistedStatus.value = ''; error.value = apiError(cause) }
 }
 
-async function exportBills(ids?: number[]) {
+async function exportBills() {
+  if (!selectedExportIds.value.length) return
   try {
-    await downloadFile('/api/v1/bills/export', `Bplus_Import_${new Date().toISOString().slice(0, 10)}.xlsx`, 'post', ids ? { bill_ids: ids } : {})
+    await downloadFile('/api/v1/bills/export', `Bplus_Import_${new Date().toISOString().slice(0, 10)}.xlsx`, 'post', { bill_ids: selectedExportIds.value })
+    selectedExportIds.value = []
     await load()
+  } catch (cause) { error.value = apiError(cause) }
+}
+
+async function exportQuotationsPdf() {
+  if (!canExportQuotationPdf.value) {
+    error.value = 'PDF ใบเสนอราคาใช้ได้เฉพาะรายการที่สร้างจากใบเสนอราคา กรุณานำบิลแบบ PO โดยตรงออกจากรายการที่เลือก'
+    return
+  }
+  try {
+    await downloadFile('/api/v1/bills/export-quotations.pdf', `Quotations_${new Date().toISOString().slice(0, 10)}.pdf`, 'post', { bill_ids: selectedExportIds.value })
   } catch (cause) { error.value = apiError(cause) }
 }
 
@@ -157,8 +177,8 @@ onMounted(() => load(1))
         <article class="metric-card"><span>รายการสินค้า</span><strong>{{ ready.reduce((sum, bill) => sum + (bill.items?.length || 0), 0) }}</strong></article>
       </div>
       <section class="content-card">
-        <div class="section-heading"><h2>Bplus Import Center</h2><div class="actions"><button class="secondary-button" :disabled="!ready.length" @click="exportBills()">ดาวน์โหลด Excel รวม</button><button class="primary-button" :disabled="!ready.length" @click="completeAll">ปิดงานทั้งหมด</button></div></div>
-        <div class="table-wrap"><table><thead><tr><th>Bill</th><th>ลูกค้า</th><th>ยอดรวม</th><th>Export ล่าสุด</th><th>จัดการ</th></tr></thead><tbody><tr v-for="bill in ready" :key="bill.bill_id"><td class="strong">#{{ bill.bill_id }}</td><td>{{ bill.buyer_name }}</td><td>{{ money(bill.total_amount) }}</td><td>{{ shortDate(bill.excel_exported_at) }}</td><td class="actions"><button class="secondary-button" @click="exportBills([bill.bill_id])">Excel</button><button class="primary-button primary-button--compact" @click="complete(bill.bill_id)">ปิดงาน</button></td></tr><tr v-if="!ready.length"><td colspan="5" class="empty-cell">ไม่มีบิลพร้อมส่งออก</td></tr></tbody></table></div>
+        <div class="section-heading"><div><h2>Bplus Import Center</h2><p class="muted">เลือกบิลหนึ่งหรือหลายใบ แล้ว Export Excel หรือรวมใบเสนอราคาเป็น PDF เดียว</p><p v-if="selectedExportIds.length && !canExportQuotationPdf" class="form-hint">รายการที่สร้างจาก PO โดยตรงไม่มีใบเสนอราคา จึง Export ได้เฉพาะ Excel</p></div><div class="actions"><button class="secondary-button" :disabled="!selectedExportIds.length" @click="exportBills">Export Excel ({{ selectedExportIds.length }})</button><button class="secondary-button" :disabled="!canExportQuotationPdf" title="ใช้ได้เฉพาะบิลที่สร้างจากใบเสนอราคา" @click="exportQuotationsPdf">Export PDF ใบเสนอราคา ({{ selectedExportIds.length }})</button><button class="primary-button" :disabled="!ready.length" @click="completeAll">ปิดงานทั้งหมด</button></div></div>
+        <div class="table-wrap"><table><thead><tr><th><input v-model="allReadySelected" type="checkbox" aria-label="เลือกบิลทั้งหมด"></th><th>Bill</th><th>ลูกค้า</th><th>Sale / แผนก</th><th>ยอดรวม</th><th>สถานะ</th><th>Export ล่าสุด</th><th>จัดการ</th></tr></thead><tbody><tr v-for="bill in ready" :key="bill.bill_id"><td><input v-model="selectedExportIds" type="checkbox" :value="bill.bill_id" :aria-label="`เลือกบิล ${bill.bill_id}`"></td><td class="strong">#{{ bill.bill_id }}</td><td>{{ bill.buyer_name }}</td><td>{{ bill.created_by }}<br><small>{{ bill.creator?.department || '-' }}</small></td><td>{{ money(bill.total_amount) }}</td><td><StatusPill :status="bill.status" /></td><td>{{ shortDate(bill.excel_exported_at) }}</td><td><button class="primary-button primary-button--compact" @click="complete(bill.bill_id)">ปิดงาน</button></td></tr><tr v-if="!ready.length"><td colspan="8" class="empty-cell">ไม่มีบิลพร้อมส่งออก</td></tr></tbody></table></div>
       </section>
     </template>
 

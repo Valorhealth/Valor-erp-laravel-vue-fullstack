@@ -33,7 +33,7 @@ class BillingCancellationServiceTest extends TestCase
     public function it_cancels_without_deleting_the_bill_quotation_or_items(): void
     {
         $quotationId = DB::table('quotations')->insertGetId(['status' => 'ร่างใบเสนอราคา']);
-        $billId = DB::table('billing_records')->insertGetId(['ref_qt_id' => $quotationId, 'status' => 'เตรียมส่งออก']);
+        $billId = DB::table('billing_records')->insertGetId(['ref_qt_id' => $quotationId, 'status' => 'รอแอดมินส่งออก']);
         DB::table('bill_items')->insert(['bill_id' => $billId]);
         $actor = new User(['username' => 'admin']);
 

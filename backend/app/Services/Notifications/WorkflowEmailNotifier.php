@@ -19,7 +19,7 @@ final class WorkflowEmailNotifier
 
     public function billSubmitted(BillingRecord $bill, User $actor): void
     {
-        if ($bill->status === 'รอแอดมินตรวจสอบ') {
+        if ($bill->status === 'รอแอดมินส่งออก') {
             $this->send(
                 $actor,
                 $this->recipients->forTarget('admin'),
@@ -27,7 +27,7 @@ final class WorkflowEmailNotifier
                 $this->lines([
                     'เรียน ผู้ดูแลระบบ,',
                     '',
-                    'มีบิลที่ผ่านเงื่อนไขอนุมัติอัตโนมัติเข้าสู่ระบบ โปรดตรวจสอบรายละเอียดเบื้องต้นดังนี้:',
+                    'มีบิลที่ผ่านเงื่อนไขอนุมัติอัตโนมัติเข้าสู่ระบบและรอส่งออก Bplus รายละเอียดดังนี้:',
                     '',
                     "Sale ผู้เปิดบิล: {$actor->username}",
                     'อีเมล Sale: '.$this->userEmail($actor),
@@ -36,7 +36,7 @@ final class WorkflowEmailNotifier
                     'ยอดรวม: '.$this->money($bill->total_amount).' บาท',
                     'ที่อยู่: '.$this->value($bill->address_note),
                     '',
-                    'กรุณาเข้าสู่ระบบเพื่อตรวจสอบและดำเนินการในขั้นตอน Admin ต่อไปครับ',
+                    'กรุณาเข้าสู่ระบบเพื่อส่งออกข้อมูลไปยัง Bplus ต่อไปครับ',
                 ]),
                 'bill',
                 (string) $bill->bill_id,
@@ -77,7 +77,7 @@ final class WorkflowEmailNotifier
             $this->lines([
                 'เรียน ผู้ดูแลระบบ,',
                 '',
-                'มีบิลที่ผ่านการอนุมัติและรอดำเนินการในขั้นตอน Admin รายละเอียดดังนี้:',
+                'มีบิลที่ผ่านการอนุมัติและรอ Admin ส่งออกไปยัง Bplus รายละเอียดดังนี้:',
                 '',
                 "Approve ผู้อนุมัติ: {$actor->username}",
                 'อีเมล Approve: '.$this->userEmail($actor),
@@ -87,7 +87,7 @@ final class WorkflowEmailNotifier
                 'ยอดรวม: '.$this->money($bill->total_amount).' บาท',
                 'ที่อยู่: '.$this->value($bill->address_note),
                 '',
-                'กรุณาเข้าสู่ระบบเพื่อตรวจสอบและดำเนินการในขั้นตอน Admin ต่อไปครับ',
+                'กรุณาเข้าสู่ระบบเพื่อส่งออกข้อมูลไปยัง Bplus ต่อไปครับ',
             ]),
             'bill',
             (string) $bill->bill_id,
@@ -175,6 +175,30 @@ final class WorkflowEmailNotifier
                 "เหตุผล: {$reason}",
                 '',
                 'กรุณาเข้าสู่ระบบเพื่อแก้ไขและส่งอนุมัติอีกครั้งครับ',
+            ]),
+            'bill',
+            (string) $bill->bill_id,
+        );
+    }
+
+    public function billDeclined(BillingRecord $bill, User $actor, string $reason): void
+    {
+        $this->send(
+            $actor,
+            $this->recipients->forUsername($bill->created_by),
+            "❌ แจ้งผลไม่อนุมัติบิล: โดย {$actor->username} (ลูกค้า: {$bill->buyer_name})",
+            $this->lines([
+                "เรียน {$bill->created_by},",
+                '',
+                'บิลของคุณไม่ได้รับการอนุมัติและปิดขั้นตอนการพิจารณารายการนี้ รายละเอียดดังนี้:',
+                '',
+                "Approve ผู้พิจารณา: {$actor->username}",
+                'อีเมล Approve: '.$this->userEmail($actor),
+                "เลขที่บิล: {$bill->bill_id}",
+                "ลูกค้า: {$bill->buyer_name}",
+                "เหตุผล: {$reason}",
+                '',
+                'ระบบเก็บรายการนี้ไว้ในประวัติรายการที่ไม่อนุมัติ และใบเสนอราคาจะแสดงลายน้ำไม่อนุมัติครับ',
             ]),
             'bill',
             (string) $bill->bill_id,

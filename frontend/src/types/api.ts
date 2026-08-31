@@ -49,6 +49,7 @@ export interface BillingRecord {
   total_amount: string | null
   status: string | null
   created_by: string | null
+  creator_user_id?: number | null
   created_at: string | null
   workflow_type?: string | null
   items?: BillItem[]
@@ -105,6 +106,7 @@ export interface BillingRecord {
   customer_acceptance_expires_at?: string | null
   customer_acceptance_used_at?: string | null
   documents?: BillingDocument[]
+  creator?: Pick<User, 'id' | 'username' | 'department'> | null
 }
 
 export interface BillingDocument {
@@ -149,6 +151,8 @@ export interface Quotation {
   bill_note: string | null
   bplus_customer_code: string | null
   created_by: string | null
+  creator_user_id?: number | null
+  creator?: Pick<User, 'id' | 'username' | 'department'> | null
   status: string | null
   workflow_type: string | null
   sale_discount_total: string | null
@@ -248,13 +252,25 @@ export interface SalesTask {
   description: string | null
   assigned_to: string
   assigned_by: string
+  assigned_to_user_id?: number | null
+  assigned_by_user_id?: number | null
   start_date: string
   end_date: string
   start_time: string | null
   end_time: string | null
   all_day: boolean
   priority: 'ปกติ' | 'ด่วน' | 'สำคัญมาก'
-  status: 'รอดำเนินการ' | 'กำลังทำ' | 'สำเร็จ' | 'ยกเลิก'
+  status: 'รอดำเนินการ' | 'กำลังดำเนินการ' | 'สำเร็จ' | 'ยกเลิก'
+  progress_updates?: SalesTaskUpdate[]
+}
+
+export interface SalesTaskUpdate {
+  update_id: number
+  task_id: number
+  status: SalesTask['status']
+  progress_note: string
+  updated_by: string
+  created_at: string
 }
 
 export interface Salesman {
@@ -302,6 +318,7 @@ export interface SalesCallActivity {
 
 export interface SalesCallOptions {
   sellers: Array<Pick<User, 'id' | 'username' | 'first_name' | 'last_name' | 'department'>>
+  seller_departments: string[]
   specialties: string[]
   departments: string[]
   groups: string[]
@@ -330,6 +347,7 @@ export interface SalesCallDashboard {
     follow_ups_due: number
   }
     by_seller: Array<{ seller_user_id: number; seller_username: string; total: number; success_calls: number; failure_calls: number; no_calls: number; working_days: number; success_rate: number; calls_per_working_day: number; active_customers: number; follow_ups: number; duration_minutes: number; pipeline_value: string; actual_value: string }>
+    by_seller_department: Array<{ department: string; total: number; success_calls: number; failure_calls: number; no_calls: number; working_days: number; success_rate: number; calls_per_working_day: number }>
     performance_matrix: Array<{ seller_username: string; place_of_work: string; total: number; success_calls: number; failure_calls: number; no_calls: number; working_days: number; success_rate: number; calls_per_working_day: number }>
   by_stage: Array<{ label: string; total: number; value: string }>
   by_outcome: Array<{ label: string; total: number }>
@@ -338,6 +356,7 @@ export interface SalesCallDashboard {
     by_product: Array<{ label: string; total: number; success_calls: number; customers_called: number; success_rate: number }>
     by_specialty: Array<{ label: string; total: number; success_calls: number; failure_calls: number; success_rate: number }>
     product_customer_matrix: Array<{ product: string; place_of_work: string; customer_name: string; total: number; success_calls: number; failure_calls: number; success_rate: number; last_call_date: string }>
+    hospital_purchase_ranking: Array<{ hospital_name: string; purchase_calls: number; products_count: number; contacts_count: number; actual_value: string; last_purchase_date: string }>
     success_breakdown: Array<{ seller_username: string; product: string; specialty: string; place_of_work: string; total: number }>
     failure_breakdown: Array<{ seller_username: string; product: string; specialty: string; place_of_work: string; total: number }>
   daily_trend: Array<{ activity_date: string; total: number; pipeline_value: string }>
@@ -367,7 +386,7 @@ export interface DashboardSummary {
   completed_bills: number
   pending_approval: number
   waiting_manager: number
-  waiting_admin: number
+  waiting_export: number
   needs_revision: number
   ready_export: number
   items_sold: number
@@ -376,9 +395,10 @@ export interface DashboardSummary {
 
 export interface DashboardData {
   summary: DashboardSummary
-  filters: { sales: string[]; statuses: string[] }
+  filters: { sales: string[]; statuses: string[]; departments: string[] }
   status_breakdown: Array<{ status: string; total: number }>
   sales_by_person: Array<{ created_by: string; total: string }>
+  sales_by_department: Array<{ department: string; bills: number; total: string }>
   daily_sales: Array<{ bill_date: string; total: string }>
   top_customers: Array<{ buyer_name: string; bills: number; total: string }>
   top_products: Array<{ sku: string; product_name: string; quantity: number; gross_amount: string; discount_amount: string; net_amount: string }>

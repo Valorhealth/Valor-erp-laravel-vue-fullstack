@@ -5,9 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\User;
+use App\Models\BillingRecord;
+use App\Models\Quotation;
+use App\Models\SalesTask;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
@@ -60,7 +64,24 @@ class UserManagementController extends Controller
             $updates['password_hash'] = Hash::make($data['password']);
             $updates['password_changed_at'] = now();
         }
-        $user->fill($updates)->save();
+        DB::transaction(function () use ($user, $updates): void {
+            $oldUsername = $user->username;
+            $user->fill($updates)->save();
+            if ($oldUsername === $user->username) {
+                return;
+            }
+
+            DB::table('billing_records')->where('creator_user_id', $user->id)->update(['created_by' => $user->username]);
+            DB::table('quotations')->where('creator_user_id', $user->id)->update(['created_by' => $user->username]);
+            DB::table('credit_requests')->where('created_by', $oldUsername)->update(['created_by' => $user->username]);
+            DB::table('notice_board')->where('created_by', $oldUsername)->update(['created_by' => $user->username]);
+            DB::table('sales_tasks')->where('assigned_to_user_id', $user->id)
+                ->orWhere(fn ($query) => $query->whereNull('assigned_to_user_id')->where('assigned_to', $oldUsername))
+                ->update(['assigned_to' => $user->username]);
+            DB::table('sales_tasks')->where('assigned_by_user_id', $user->id)
+                ->orWhere(fn ($query) => $query->whereNull('assigned_by_user_id')->where('assigned_by', $oldUsername))
+                ->update(['assigned_by' => $user->username]);
+        });
 
         return response()->json(['data' => new UserResource($user->fresh())]);
     }
@@ -73,6 +94,17 @@ class UserManagementController extends Controller
         if ($user->signatureAssets()->exists()) {
             throw ValidationException::withMessages([
                 'user' => 'บัญชีนี้มีประวัติภาพลายเซ็น จึงลบไม่ได้ ให้ปิดสิทธิ์ลงนามและเปลี่ยน Role เพื่อรักษาหลักฐานเดิม',
+            ]);
+        }
+        if (BillingRecord::query()->where('creator_user_id', $user->id)->exists()
+            || Quotation::query()->where('creator_user_id', $user->id)->exists()) {
+            throw ValidationException::withMessages([
+                'user' => 'บัญชีนี้มีประวัติใบเสนอราคาหรือบิล จึงลบไม่ได้ กรุณาเปลี่ยน Role เพื่อปิดการใช้งานแทน',
+            ]);
+        }
+        if (SalesTask::query()->where('assigned_to_user_id', $user->id)->orWhere('assigned_by_user_id', $user->id)->exists()) {
+            throw ValidationException::withMessages([
+                'user' => 'บัญชีนี้มีประวัติมอบหมายงานหรือได้รับมอบหมายงาน จึงลบไม่ได้ ให้เปลี่ยน Role เพื่อรักษาประวัติเดิม',
             ]);
         }
         $user->delete();

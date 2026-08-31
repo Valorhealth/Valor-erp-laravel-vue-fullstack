@@ -27,7 +27,10 @@ class QuotationController extends Controller
                     ->where('signature_type', 'internal_quotation_approval')
                     ->whereNull('revoked_at')])])
             ->withCount('items')
-            ->when(RoleAccess::mustUseOwnBillingRecords($request->user()->role), fn ($query) => $query->where('created_by', $request->user()->username))
+            ->when(RoleAccess::mustUseOwnBillingRecords($request->user()->role), fn ($query) => $query->where(
+                fn ($owned) => $owned->where('creator_user_id', $request->user()->id)
+                    ->orWhere(fn ($legacy) => $legacy->whereNull('creator_user_id')->where('created_by', $request->user()->username))
+            ))
             ->when($availableForBilling, fn ($query) => $query->where(fn ($available) => $available
                 ->whereDoesntHave('billingRecord')
                 ->orWhereHas('billingRecord', fn ($bill) => $bill->where('status', BillingWorkflow::DRAFT_STATUS))))
@@ -121,6 +124,7 @@ class QuotationController extends Controller
                 'credit_term' => $credit?->credit_term ?? 0,
                 'requested_credit_term' => $data['requested_credit_term'] ?? $credit?->credit_term ?? 0,
                 'created_by' => $request->user()->username,
+                'creator_user_id' => $request->user()->id,
                 'status' => 'ร่างใบเสนอราคา',
                 'created_at' => now(),
             ]);
@@ -144,6 +148,7 @@ class QuotationController extends Controller
 
     public function pdf(Request $request, Quotation $quotation, DocumentService $documents): mixed
     {
+        $quotation->loadMissing('creator:id,username,department');
         $this->authorizeQuotation($request, $quotation);
         $copy = $request->boolean('copy');
         $revised = $request->boolean('revised');
@@ -161,6 +166,7 @@ class QuotationController extends Controller
 
     public function customNamePdf(Request $request, Quotation $quotation, DocumentService $documents): mixed
     {
+        $quotation->loadMissing('creator:id,username,department');
         $this->authorizeQuotation($request, $quotation);
         $data = $request->validate([
             'item_names' => ['required', 'array', 'min:1', 'max:100'],
@@ -175,7 +181,8 @@ class QuotationController extends Controller
         $itemNames = collect($data['item_names'])
             ->mapWithKeys(fn (array $item): array => [(int) $item['qt_item_id'] => trim($item['name'])])
             ->all();
-        $bytes = $documents->quotationPdf($quotation, revised: true, itemNameOverrides: $itemNames);
+        $draft = $quotation->billingRecord()->with(['items', 'signatures', 'documents', 'customerAcceptanceSignatures'])->first();
+        $bytes = $documents->quotationPdf($quotation, draft: $draft, revised: true, itemNameOverrides: $itemNames);
         $quotation->forceFill(['quotation_printed_at' => now(), 'quotation_printed_by' => $request->user()->username])->save();
         $filename = $documents->quotationDownloadName($quotation, revised: true);
 
@@ -187,7 +194,9 @@ class QuotationController extends Controller
 
     private function authorizeQuotation(Request $request, Quotation $quotation): void
     {
-        if (RoleAccess::mustUseOwnBillingRecords($request->user()->role) && $quotation->created_by !== $request->user()->username) {
+        if (RoleAccess::mustUseOwnBillingRecords($request->user()->role)
+            && (int) ($quotation->creator_user_id ?? 0) !== (int) $request->user()->id
+            && ! ($quotation->creator_user_id === null && $quotation->created_by === $request->user()->username)) {
             abort(403, 'คุณไม่มีสิทธิ์เข้าถึงใบเสนอราคานี้');
         }
     }

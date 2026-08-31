@@ -25,10 +25,9 @@ final class BillingWorkflow
         'รออนุมัติ',
         'รอหัวหน้าอนุมัติ',
         'รอลูกค้ายืนยัน',
-        'รอแอดมินตรวจสอบ',
+        'รอแอดมินส่งออก',
         'รอแก้ไข',
         'อนุมัติแล้ว',
-        'เตรียมส่งออก',
         'ดำเนินการเสร็จสิ้น',
         'ไม่อนุมัติ',
         'ยกเลิกบิล',
@@ -49,7 +48,7 @@ final class BillingWorkflow
         return DB::transaction(function () use ($user, $quotation, $payload): BillingRecord {
             $quotation = Quotation::query()->lockForUpdate()->with('items')->findOrFail($quotation->qt_id);
 
-            if ($quotation->created_by !== $user->username) {
+            if (! $this->isOwnedBy($quotation, $user)) {
                 abort(403, 'คุณไม่มีสิทธิ์ใช้ใบเสนอราคานี้');
             }
 
@@ -87,6 +86,7 @@ final class BillingWorkflow
                 ]),
                 ...Arr::only($payload, ['bill_date', 'shipping_type', 'shipping_text', 'bill_note']),
                 'created_by' => $user->username,
+                'creator_user_id' => $user->id,
                 'created_at' => now(),
                 'status' => $isDraft ? self::DRAFT_STATUS : $initialStatus,
                 'req_tax_invoice' => true,
@@ -152,6 +152,7 @@ final class BillingWorkflow
                 'credit_term' => (int) ($credit?->credit_term ?? 0),
                 'requested_credit_term' => $payload['requested_credit_term'] ?? $credit?->credit_term ?? 0,
                 'created_by' => $user->username,
+                'creator_user_id' => $user->id,
                 'created_at' => now(),
                 'submitted_at' => now(),
                 'status' => 'รอหัวหน้าอนุมัติ',
@@ -180,7 +181,7 @@ final class BillingWorkflow
     {
         return DB::transaction(function () use ($user, $bill, $payload): BillingRecord {
             $bill = BillingRecord::query()->lockForUpdate()->with('items')->findOrFail($bill->bill_id);
-            if ($bill->created_by !== $user->username) {
+            if (! $this->isOwnedBy($bill, $user)) {
                 abort(403, 'คุณไม่มีสิทธิ์แก้ไขบิลนี้');
             }
             if (! in_array($bill->status, self::SALE_EDITABLE_STATUSES, true)) {
@@ -273,7 +274,7 @@ final class BillingWorkflow
     {
         return DB::transaction(function () use ($user, $bill): BillingRecord {
             $bill = BillingRecord::query()->lockForUpdate()->with('items')->findOrFail($bill->bill_id);
-            if ($bill->created_by !== $user->username) {
+            if (! $this->isOwnedBy($bill, $user)) {
                 abort(403, 'คุณไม่มีสิทธิ์ส่งบิลนี้');
             }
             if ($bill->status !== self::DRAFT_STATUS) {
@@ -363,7 +364,7 @@ final class BillingWorkflow
                 ->whereIn('document_type', ['customer_po', 'signed_quotation'])
                 ->exists();
             $bill->forceFill([
-                'status' => $hasCustomerEvidence ? 'รอแอดมินตรวจสอบ' : 'รอลูกค้ายืนยัน',
+                'status' => $hasCustomerEvidence ? 'รอแอดมินส่งออก' : 'รอลูกค้ายืนยัน',
                 'reject_reason' => null,
             ])->save();
 
@@ -375,7 +376,7 @@ final class BillingWorkflow
     {
         return DB::transaction(function () use ($user, $bill): BillingRecord {
             $bill = BillingRecord::query()->lockForUpdate()->findOrFail($bill->bill_id);
-            if ($bill->created_by !== $user->username) {
+            if (! $this->isOwnedBy($bill, $user)) {
                 abort(403, 'คุณไม่มีสิทธิ์ยืนยันหลักฐานลูกค้าของรายการนี้');
             }
             if ($bill->status !== 'รอลูกค้ายืนยัน') {
@@ -390,7 +391,7 @@ final class BillingWorkflow
                 throw ValidationException::withMessages(['evidence' => 'กรุณาแนบ PO หรือใบเสนอราคาที่ลูกค้าลงชื่อก่อนส่งต่อ Admin']);
             }
             $bill->forceFill([
-                'status' => 'รอแอดมินตรวจสอบ',
+                'status' => 'รอแอดมินส่งออก',
                 'customer_confirmed_at' => $bill->customer_confirmed_at ?: today(),
             ])->save();
             EditLog::query()->create([
@@ -412,47 +413,12 @@ final class BillingWorkflow
         ]);
     }
 
-    /** @param array<string, mixed> $payload */
-    public function prepareForExport(User $user, BillingRecord $bill, array $payload): BillingRecord
+    public function decline(User $user, BillingRecord $bill, string $reason): BillingRecord
     {
-        return DB::transaction(function () use ($user, $bill, $payload): BillingRecord {
-            $bill = BillingRecord::query()->lockForUpdate()->with('items')->findOrFail($bill->bill_id);
-            if ($bill->status !== 'รอแอดมินตรวจสอบ') {
-                throw ValidationException::withMessages(['status' => "บิลนี้ไม่ได้อยู่ในคิวแอดมิน (สถานะปัจจุบัน: {$bill->status})"]);
-            }
-
-            foreach ($payload['items'] as $itemPayload) {
-                BillItem::query()
-                    ->where('bill_id', $bill->bill_id)
-                    ->where('item_id', $itemPayload['item_id'])
-                    ->update(Arr::only($itemPayload, [
-                        'admin_lot', 'admin_serial', 'admin_storage', 'admin_free_qty',
-                        'admin_disocount_unit', 'admin_weight_unit',
-                    ]));
-            }
-
-            $creditRemain = max((float) $payload['credit_limit'] - (float) $payload['credit_outstanding'], 0);
-            $bill->fill([
-                ...Arr::only($payload, [
-                    'admin_branch', 'admin_dept', 'admin_project', 'admin_discount_final',
-                    'bplus_salesman_code', 'bplus_sale_type_code', 'credit_limit',
-                    'credit_outstanding', 'credit_term', 'requested_credit_term',
-                ]),
-                'credit_remain' => $creditRemain,
-                'admin_verified_by' => $user->username,
-                'status' => 'เตรียมส่งออก',
-            ])->save();
-
-            $this->creditResolver->updateCurrentCredit(
-                $bill->bplus_customer_code,
-                $bill->buyer_name,
-                (float) $payload['credit_limit'],
-                (int) $payload['credit_term'],
-                (float) $payload['credit_outstanding'],
-            );
-
-            return $bill->fresh('items');
-        });
+        return $this->transition($bill, 'รอหัวหน้าอนุมัติ', [
+            'status' => 'ไม่อนุมัติ',
+            'reject_reason' => $reason,
+        ]);
     }
 
     /** @param array<string, mixed> $updates */
@@ -467,5 +433,11 @@ final class BillingWorkflow
 
             return $bill->fresh('items');
         });
+    }
+
+    private function isOwnedBy(BillingRecord|Quotation $record, User $user): bool
+    {
+        return (int) ($record->creator_user_id ?? 0) === (int) $user->id
+            || ($record->creator_user_id === null && $record->created_by === $user->username);
     }
 }

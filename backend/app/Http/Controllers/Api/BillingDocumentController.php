@@ -65,7 +65,7 @@ final class BillingDocumentController extends Controller
 
         abort_unless($bill->ref_qt_id && $bill->customerAcceptanceSignatures()->whereNull('revoked_at')->exists(), 404);
         $bill->load(['items', 'documents', 'signatures', 'customerAcceptanceSignatures']);
-        $quotation = $bill->ref_qt_id ? \App\Models\Quotation::query()->with('items')->findOrFail($bill->ref_qt_id) : null;
+        $quotation = $bill->ref_qt_id ? \App\Models\Quotation::query()->with(['items', 'creator:id,username,department'])->findOrFail($bill->ref_qt_id) : null;
         $bytes = $documents->quotationPdf($quotation, draft: $bill);
 
         return response($bytes, 200, [
@@ -88,7 +88,9 @@ final class BillingDocumentController extends Controller
 
     private function authorizeRead(Request $request, BillingRecord $bill): void
     {
-        if (RoleAccess::mustUseOwnBillingRecords($request->user()->role) && $bill->created_by !== $request->user()->username) {
+        if (RoleAccess::mustUseOwnBillingRecords($request->user()->role)
+            && (int) ($bill->creator_user_id ?? 0) !== (int) $request->user()->id
+            && ! ($bill->creator_user_id === null && $bill->created_by === $request->user()->username)) {
             abort(403, 'คุณไม่มีสิทธิ์เข้าถึงเอกสารนี้');
         }
     }

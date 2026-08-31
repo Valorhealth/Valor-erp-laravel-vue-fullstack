@@ -13,14 +13,14 @@ class RoleAccessTest extends TestCase
     public static function roleProvider(): array
     {
         return [
-            'super admin' => ['Super Admin', RoleAccess::GROUP_SUPER_ADMIN, 20],
-            'thai super admin' => ['ผู้ดูแลระบบสูงสุด', RoleAccess::GROUP_SUPER_ADMIN, 20],
-            'owner' => ['Owner', RoleAccess::GROUP_SUPER_ADMIN, 20],
+            'super admin' => ['Super Admin', RoleAccess::GROUP_SUPER_ADMIN, 19],
+            'thai super admin' => ['ผู้ดูแลระบบสูงสุด', RoleAccess::GROUP_SUPER_ADMIN, 19],
+            'owner' => ['Owner', RoleAccess::GROUP_SUPER_ADMIN, 19],
             'sale' => ['Sale Executive', RoleAccess::GROUP_SALE, 7],
             'thai sale' => ['เซล', RoleAccess::GROUP_SALE, 7],
             'approver' => ['Approve Manager', RoleAccess::GROUP_APPROVE, 8],
             'thai approver' => ['หัวหน้าฝ่ายขาย', RoleAccess::GROUP_APPROVE, 8],
-            'admin' => ['Admin', RoleAccess::GROUP_ADMIN, 8],
+            'admin' => ['Admin', RoleAccess::GROUP_ADMIN, 7],
             'unknown' => ['Accounting', RoleAccess::GROUP_DEFAULT, 2],
             'empty' => [null, RoleAccess::GROUP_DEFAULT, 2],
         ];
@@ -44,11 +44,11 @@ class RoleAccessTest extends TestCase
 
         $this->assertSame('สร้างใบเสนอราคา/เปิดบิลใหม่', $labels[0]);
         $this->assertSame('Call Sale Report', $labels[5]);
-        $this->assertSame('รายการบิลรอพิมพ์', $labels[6]);
-        $this->assertSame('แดชบอร์ดสถิติ', $labels[12]);
-        $this->assertSame('บันทึกกิจกรรมระบบ', $labels[17]);
-        $this->assertSame('วิเคราะห์งบประมาณ', $labels[18]);
-        $this->assertSame('ตารางงาน', $labels[19]);
+        $this->assertSame('จัดการระบบส่วนกลาง', $labels[6]);
+        $this->assertSame('แดชบอร์ดสถิติ', $labels[11]);
+        $this->assertSame('บันทึกกิจกรรมระบบ', $labels[16]);
+        $this->assertSame('วิเคราะห์งบประมาณ', $labels[17]);
+        $this->assertSame('ตารางงาน', $labels[18]);
     }
 
     #[Test]
@@ -93,7 +93,7 @@ class RoleAccessTest extends TestCase
             array_column(RoleAccess::detailsForRole('Approve')['menu'], 'label'),
         );
         $this->assertSame(
-            ['รายการบิลรอพิมพ์', 'จัดการระบบส่วนกลาง', 'จัดการข้อมูลหลัก', 'จัดการเครดิตลูกค้า', 'จัดการผู้ใช้งาน', 'ศูนย์จัดการเอกสาร', 'รายการบิลทั้งหมด', 'ตารางงาน'],
+            ['จัดการระบบส่วนกลาง', 'จัดการข้อมูลหลัก', 'จัดการเครดิตลูกค้า', 'จัดการผู้ใช้งาน', 'ศูนย์จัดการเอกสาร', 'รายการบิลทั้งหมด', 'ตารางงาน'],
             array_column(RoleAccess::detailsForRole('Admin')['menu'], 'label'),
         );
     }

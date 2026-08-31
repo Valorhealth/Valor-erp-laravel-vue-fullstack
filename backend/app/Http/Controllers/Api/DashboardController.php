@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\BillingRecord;
+use App\Models\User;
 use App\Services\Dashboard\DashboardService;
 use App\Services\Documents\DocumentService;
 use Illuminate\Http\JsonResponse;
@@ -19,6 +20,8 @@ class DashboardController extends Controller
             'sales.*' => ['string', 'max:255'],
             'statuses' => ['nullable', 'array'],
             'statuses.*' => ['string', 'max:255'],
+            'departments' => ['nullable', 'array'],
+            'departments.*' => ['string', 'max:255'],
             'date_from' => ['nullable', 'date'],
             'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
         ]);
@@ -26,6 +29,7 @@ class DashboardController extends Controller
         return response()->json(['data' => $dashboard->summary(
             $data['sales'] ?? [],
             $data['statuses'] ?? [],
+            $data['departments'] ?? [],
             $data['date_from'] ?? null,
             $data['date_to'] ?? null,
         )]);
@@ -38,6 +42,8 @@ class DashboardController extends Controller
             'sales.*' => ['string', 'max:255'],
             'statuses' => ['nullable', 'array'],
             'statuses.*' => ['string', 'max:255'],
+            'departments' => ['nullable', 'array'],
+            'departments.*' => ['string', 'max:255'],
             'date_from' => ['nullable', 'date'],
             'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
             'scope' => ['nullable', Rule::in(['all', 'successful'])],
@@ -45,10 +51,15 @@ class DashboardController extends Controller
 
         $sales = $data['sales'] ?? [];
         $statuses = $data['statuses'] ?? [];
+        $departments = $data['departments'] ?? [];
+        $departmentUserIds = $departments === []
+            ? []
+            : User::query()->whereIn('department', $departments)->pluck('id')->all();
         $bills = BillingRecord::query()
             ->with('items')
             ->when($sales !== [], fn ($query) => $query->whereIn('created_by', $sales))
             ->when($statuses !== [], fn ($query) => $query->whereIn('status', $statuses))
+            ->when($departments !== [], fn ($query) => $query->whereIn('creator_user_id', $departmentUserIds))
             ->when(($data['scope'] ?? 'all') === 'successful', fn ($query) => $query->whereIn('status', DashboardService::SUCCESS_STATUSES))
             ->when($data['date_from'] ?? null, fn ($query, $date) => $query->whereDate('bill_date', '>=', $date))
             ->when($data['date_to'] ?? null, fn ($query, $date) => $query->whereDate('bill_date', '<=', $date))

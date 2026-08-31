@@ -17,7 +17,10 @@ class TaskController extends Controller
     {
         $group = RoleAccess::groupForRole($request->user()->role);
         $tasks = SalesTask::query()
-            ->when(in_array($group, [RoleAccess::GROUP_SALE, RoleAccess::GROUP_DEFAULT], true), fn ($query) => $query->where('assigned_to', $request->user()->username))
+            ->when(in_array($group, [RoleAccess::GROUP_SALE, RoleAccess::GROUP_DEFAULT], true), fn ($query) => $query->where(
+                fn ($owned) => $owned->where('assigned_to_user_id', $request->user()->id)
+                    ->orWhere(fn ($legacy) => $legacy->whereNull('assigned_to_user_id')->where('assigned_to', $request->user()->username))
+            ))
             ->orderBy('start_date')->orderByDesc('task_id')->get();
         $sales = User::query()->select(['username', 'department', 'role'])->orderBy('username')->get()
             ->filter(fn (User $user) => RoleAccess::groupForRole($user->role) === RoleAccess::GROUP_SALE)->values();
@@ -48,14 +51,29 @@ class TaskController extends Controller
         }
 
         $tasks = DB::transaction(function () use ($request, $data) {
-            return collect(array_unique($data['assigned_to']))->map(fn (string $username) => SalesTask::query()->create([
-                ...collect($data)->except('assigned_to')->all(),
-                'assigned_to' => $username,
-                'assigned_by' => $request->user()->username,
-                'status' => 'รอดำเนินการ',
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]));
+            $assignees = User::query()->whereIn('username', array_unique($data['assigned_to']))->get()->keyBy('username');
+
+            return collect(array_unique($data['assigned_to']))->map(function (string $username) use ($request, $data, $assignees): SalesTask {
+                $assignee = $assignees->get($username);
+
+                return SalesTask::query()->create([
+                    ...collect($data)->except('assigned_to')->all(),
+                    'assigned_to' => $username,
+                    'assigned_to_user_id' => $assignee->id,
+                    'assigned_by' => $request->user()->username,
+                    'assigned_by_user_id' => $request->user()->id,
+                    'status' => 'รอดำเนินการ',
+                    'progress_updates' => [[
+                        'update_id' => (string) \Illuminate\Support\Str::uuid(),
+                        'status' => 'รอดำเนินการ',
+                        'progress_note' => 'มอบหมายงานให้ '.$username,
+                        'updated_by' => $request->user()->username,
+                        'created_at' => now()->toIso8601String(),
+                    ]],
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            });
         });
 
         return response()->json(['data' => $tasks], 201);
@@ -63,12 +81,32 @@ class TaskController extends Controller
 
     public function updateStatus(Request $request, SalesTask $task): JsonResponse
     {
-        $data = $request->validate(['status' => ['required', 'in:รอดำเนินการ,กำลังทำ,สำเร็จ,ยกเลิก']]);
+        $data = $request->validate([
+            'status' => ['required', 'in:รอดำเนินการ,กำลังดำเนินการ,สำเร็จ,ยกเลิก'],
+            'progress_note' => ['required', 'string', 'min:2', 'max:5000'],
+        ]);
         $group = RoleAccess::groupForRole($request->user()->role);
-        if (in_array($group, [RoleAccess::GROUP_SALE, RoleAccess::GROUP_DEFAULT], true) && $task->assigned_to !== $request->user()->username) {
+        if (in_array($group, [RoleAccess::GROUP_SALE, RoleAccess::GROUP_DEFAULT], true)
+            && (int) ($task->assigned_to_user_id ?? 0) !== (int) $request->user()->id
+            && ! ($task->assigned_to_user_id === null && $task->assigned_to === $request->user()->username)) {
             abort(403, 'คุณอัปเดตได้เฉพาะงานที่มอบหมายให้คุณ');
         }
-        $task->forceFill([...$data, 'updated_at' => now()])->save();
+        DB::transaction(function () use ($request, $task, $data): void {
+            $task = SalesTask::query()->lockForUpdate()->findOrFail($task->task_id);
+            $updates = $task->progress_updates ?? [];
+            $updates[] = [
+                'update_id' => (string) \Illuminate\Support\Str::uuid(),
+                'status' => $data['status'],
+                'progress_note' => trim($data['progress_note']),
+                'updated_by' => $request->user()->username,
+                'created_at' => now()->toIso8601String(),
+            ];
+            $task->forceFill([
+                'status' => $data['status'],
+                'progress_updates' => $updates,
+                'updated_at' => now(),
+            ])->save();
+        });
 
         return response()->json(['data' => $task->fresh()]);
     }

@@ -113,7 +113,7 @@ final class CustomerAcceptanceController extends Controller
             ]);
 
             $bill->forceFill([
-                'status' => 'รอแอดมินตรวจสอบ',
+                'status' => 'รอแอดมินส่งออก',
                 'customer_confirmed_at' => today(),
                 'customer_contact_name' => trim((string) $data['signer_name']),
                 'customer_contact_channel' => filled($data['signer_email'] ?? null) ? 'Customer Portal: '.$data['signer_email'] : 'Customer Portal',
@@ -123,7 +123,7 @@ final class CustomerAcceptanceController extends Controller
             return $bill->fresh(['items', 'documents']);
         });
 
-        $sale = User::query()->where('username', $bill->created_by)->first();
+        $sale = $bill->creator()->first() ?? User::query()->where('username', $bill->created_by)->first();
         if ($sale) {
             $notifier->customerAcceptedQuotation($bill, $sale, trim((string) $data['signer_name']));
         }
@@ -134,7 +134,7 @@ final class CustomerAcceptanceController extends Controller
     public function pdf(string $token, DocumentService $documents): mixed
     {
         $bill = $this->billForToken($token)->load(['items', 'documents', 'signatures', 'customerAcceptanceSignatures']);
-        $quotation = Quotation::query()->with('items')->findOrFail($bill->ref_qt_id);
+        $quotation = Quotation::query()->with(['items', 'creator:id,username,department'])->findOrFail($bill->ref_qt_id);
         $bytes = $documents->quotationPdf($quotation, draft: $bill);
 
         return response($bytes, 200, [

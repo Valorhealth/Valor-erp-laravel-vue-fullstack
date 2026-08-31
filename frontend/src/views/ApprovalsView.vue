@@ -64,6 +64,17 @@ async function approveBill(bill: BillingRecord) {
   approvalConsents[bill.bill_id] = false
 }
 
+async function declineBill(bill: BillingRecord) {
+  const reason = rejectBillReasons[bill.bill_id]?.trim()
+  if (!reason || !confirm(`ยืนยันไม่อนุมัติบิล #${bill.bill_id} หรือไม่? รายการจะถูกปิดและเก็บในประวัติรายการที่ไม่อนุมัติ`)) return
+  await action(
+    `/api/v1/bills/${bill.bill_id}/decline`,
+    { reason },
+    `บันทึกผลไม่อนุมัติบิล #${bill.bill_id} แล้ว`,
+  )
+  rejectBillReasons[bill.bill_id] = ''
+}
+
 function display(value: unknown): string {
   const text = String(value ?? '').trim()
   return text || '-'
@@ -363,11 +374,18 @@ onMounted(load)
               >
                 ตีกลับให้แก้ไข
               </button>
+              <button
+                class="danger-button"
+                :disabled="!rejectBillReasons[bill.bill_id]"
+                @click="declineBill(bill)"
+              >
+                ไม่อนุมัติบิล
+              </button>
               <label>
-                <span>เหตุผลตีกลับ</span>
+                <span>เหตุผลตีกลับ / ไม่อนุมัติ</span>
                 <input
                   v-model="rejectBillReasons[bill.bill_id]"
-                  placeholder="ระบุจุดที่ต้องการให้ Sale แก้ไข"
+                  placeholder="ระบุเหตุผลเพื่อเก็บในประวัติและแจ้ง Sale"
                 >
               </label>
             </div>

@@ -36,7 +36,6 @@ final class RoleAccess
             ['key' => 'budget_analysis', 'label' => 'วิเคราะห์งบประมาณ', 'path' => '/budget-analysis', 'icon' => '💱'],
         ],
         self::GROUP_ADMIN => [
-            ['key' => 'print_queue', 'label' => 'รายการบิลรอพิมพ์', 'path' => '/print-queue', 'icon' => '⌛'],
             ['key' => 'system_admin', 'label' => 'จัดการระบบส่วนกลาง', 'path' => '/system-admin', 'icon' => '🗂️'],
             ['key' => 'master_data', 'label' => 'จัดการข้อมูลหลัก', 'path' => '/master-data', 'icon' => '💼'],
             ['key' => 'credit_profiles', 'label' => 'จัดการเครดิตลูกค้า', 'path' => '/credit-profiles', 'icon' => '💼'],
@@ -111,11 +110,11 @@ final class RoleAccess
         return [
             ...array_slice($sale, 0, 5),
             $approve[5],
-            ...array_slice($admin, 0, 6),
+            ...array_slice($admin, 0, 5),
             ...array_slice($approve, 0, 5),
             ['key' => 'audit_logs', 'label' => 'บันทึกกิจกรรมระบบ', 'path' => '/audit-logs', 'icon' => '▤'],
             $approve[7],
-            $admin[7],
+            $admin[6],
         ];
     }
 

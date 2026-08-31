@@ -28,4 +28,4 @@ SET credit_limit = profile.credit_limit,
     credit_term = profile.credit_term
 FROM customer_credit_profiles AS profile
 WHERE bill.bplus_customer_code = profile.ar_code
-  AND bill.status IN ('ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอแอดมินตรวจสอบ', 'รอแก้ไข');
+  AND bill.status IN ('ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอแอดมินส่งออก', 'รอแก้ไข');

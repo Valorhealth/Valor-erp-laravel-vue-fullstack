@@ -3,33 +3,39 @@
 namespace App\Services\Dashboard;
 
 use App\Models\BillingRecord;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 
 final class DashboardService
 {
-    public const SUCCESS_STATUSES = ['อนุมัติแล้ว', 'เตรียมส่งออก', 'ดำเนินการเสร็จสิ้น'];
+    public const SUCCESS_STATUSES = ['รอแอดมินส่งออก', 'อนุมัติแล้ว', 'ดำเนินการเสร็จสิ้น'];
 
     private const WAITING_MANAGER_STATUSES = ['รออนุมัติ', 'รอหัวหน้าอนุมัติ'];
 
-    private const WAITING_ADMIN_STATUSES = ['รอแอดมินตรวจสอบ'];
+    private const WAITING_EXPORT_STATUSES = ['รอแอดมินส่งออก'];
 
     private const NEEDS_REVISION_STATUSES = ['รอแก้ไข', 'ไม่อนุมัติ'];
 
-    private const READY_EXPORT_STATUSES = ['อนุมัติแล้ว', 'เตรียมส่งออก'];
+    private const READY_EXPORT_STATUSES = ['รอแอดมินส่งออก', 'อนุมัติแล้ว'];
 
     private const COMPLETED_STATUSES = ['ดำเนินการเสร็จสิ้น'];
 
-    /** @param array<int, string> $sales @param array<int, string> $statuses @return array<string, mixed> */
+    /** @param array<int, string> $sales @param array<int, string> $statuses @param array<int, string> $departments @return array<string, mixed> */
     public function summary(
         array $sales = [],
         array $statuses = [],
+        array $departments = [],
         ?string $dateFrom = null,
         ?string $dateTo = null,
     ): array {
+        $departmentUserIds = $departments === []
+            ? []
+            : User::query()->whereIn('department', $departments)->pluck('id')->all();
         $filtered = BillingRecord::query()
             ->when($sales !== [], fn (Builder $query) => $query->whereIn('created_by', $sales))
             ->when($statuses !== [], fn (Builder $query) => $query->whereIn('status', $statuses))
+            ->when($departments !== [], fn (Builder $query) => $query->whereIn('creator_user_id', $departmentUserIds))
             ->when($dateFrom, fn (Builder $query) => $query->whereDate('bill_date', '>=', $dateFrom))
             ->when($dateTo, fn (Builder $query) => $query->whereDate('bill_date', '<=', $dateTo));
 
@@ -51,12 +57,18 @@ final class DashboardService
             $wanted,
         ));
         $waitingManager = $countStatuses(self::WAITING_MANAGER_STATUSES);
-        $waitingAdmin = $countStatuses(self::WAITING_ADMIN_STATUSES);
+        $waitingExport = $countStatuses(self::WAITING_EXPORT_STATUSES);
         $needsRevision = $countStatuses(self::NEEDS_REVISION_STATUSES);
         $readyExport = $countStatuses(self::READY_EXPORT_STATUSES);
         $completedBills = $countStatuses(self::COMPLETED_STATUSES);
         $salesByPerson = (clone $financial)
             ->selectRaw('created_by, COALESCE(SUM(total_amount), 0) AS total')->groupBy('created_by')->orderByDesc('total')->get();
+        $salesByDepartment = (clone $financial)
+            ->leftJoin('users as dashboard_users', 'dashboard_users.id', '=', 'billing_records.creator_user_id')
+            ->selectRaw("COALESCE(NULLIF(BTRIM(dashboard_users.department), ''), 'ไม่ระบุแผนก') AS department, COUNT(*) AS bills, COALESCE(SUM(total_amount), 0) AS total")
+            ->groupByRaw("COALESCE(NULLIF(BTRIM(dashboard_users.department), ''), 'ไม่ระบุแผนก')")
+            ->orderByDesc('total')
+            ->get();
         $dailySales = (clone $financial)
             ->selectRaw('bill_date, COALESCE(SUM(total_amount), 0) AS total')->groupBy('bill_date')->orderBy('bill_date')->get();
         $topCustomers = (clone $financial)
@@ -75,6 +87,7 @@ final class DashboardService
             ->leftJoinSub($itemTotals, 'item_totals', 'item_totals.bill_id', '=', 'bills.bill_id')
             ->when($sales !== [], fn ($query) => $query->whereIn('bills.created_by', $sales))
             ->when($statuses !== [], fn ($query) => $query->whereIn('bills.status', $statuses))
+            ->when($departments !== [], fn ($query) => $query->whereIn('bills.creator_user_id', $departmentUserIds))
             ->when($dateFrom, fn ($query) => $query->whereDate('bills.bill_date', '>=', $dateFrom))
             ->when($dateTo, fn ($query) => $query->whereDate('bills.bill_date', '<=', $dateTo));
         $filteredItems->where('bills.status', '!=', 'ยกเลิกบิล');
@@ -104,9 +117,9 @@ final class DashboardService
                 'total_bills' => $totalBills,
                 'recognized_bills' => $recognizedBills,
                 'completed_bills' => $completedBills,
-                'pending_approval' => $waitingManager + $waitingAdmin,
+                'pending_approval' => $waitingManager,
                 'waiting_manager' => $waitingManager,
-                'waiting_admin' => $waitingAdmin,
+                'waiting_export' => $waitingExport,
                 'needs_revision' => $needsRevision,
                 'ready_export' => $readyExport,
                 'items_sold' => (int) ($itemMetrics?->quantity ?? 0),
@@ -115,9 +128,11 @@ final class DashboardService
             'filters' => [
                 'sales' => BillingRecord::query()->whereNotNull('created_by')->distinct()->orderBy('created_by')->pluck('created_by'),
                 'statuses' => BillingRecord::query()->whereNotNull('status')->distinct()->orderBy('status')->pluck('status'),
+                'departments' => User::query()->whereNotNull('department')->where('department', '!=', '')->distinct()->orderBy('department')->pluck('department'),
             ],
             'status_breakdown' => $statusBreakdown,
             'sales_by_person' => $salesByPerson,
+            'sales_by_department' => $salesByDepartment,
             'daily_sales' => $dailySales,
             'top_customers' => $topCustomers,
             'top_products' => $topProducts,
