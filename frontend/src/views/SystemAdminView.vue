@@ -18,6 +18,7 @@ const saving = ref(false)
 const statusSaving = ref(false)
 const persistedStatus = ref('')
 const selectedExportIds = ref<number[]>([])
+const expandedReadyBillId = ref<number | null>(null)
 
 const statuses = ['ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอลูกค้ายืนยัน', 'รอแอดมินส่งออก', 'รอแก้ไข', 'อนุมัติแล้ว', 'ดำเนินการเสร็จสิ้น', 'ไม่อนุมัติ', 'ยกเลิกบิล']
 const editableFields = [
@@ -58,6 +59,21 @@ const allReadySelected = computed({
 const selectedReadyBills = computed(() => ready.value.filter((bill) => selectedExportIds.value.includes(bill.bill_id)))
 const canExportQuotationPdf = computed(() => selectedReadyBills.value.length > 0 && selectedReadyBills.value.every((bill) => Boolean(bill.ref_qt_id)))
 
+function hasBillDetails(bill: BillingRecord): boolean {
+  return [
+    bill.bill_note,
+    bill.shipping_type,
+    bill.shipping_text,
+    bill.delivery_due_date,
+    bill.delivery_terms,
+    bill.sale_discount_note,
+  ].some((value) => String(value ?? '').trim() !== '')
+}
+
+function toggleReadyBillDetails(billId: number) {
+  expandedReadyBillId.value = expandedReadyBillId.value === billId ? null : billId
+}
+
 async function load(page = records.value?.current_page || 1) {
   error.value = ''
   try {
@@ -67,6 +83,7 @@ async function load(page = records.value?.current_page || 1) {
     ])
     ready.value = readyResponse.data.data
     selectedExportIds.value = selectedExportIds.value.filter((id) => ready.value.some((bill) => bill.bill_id === id))
+    if (expandedReadyBillId.value && !ready.value.some((bill) => bill.bill_id === expandedReadyBillId.value)) expandedReadyBillId.value = null
     records.value = allResponse.data
   } catch (cause) { error.value = apiError(cause) }
 }
@@ -178,7 +195,53 @@ onMounted(() => load(1))
       </div>
       <section class="content-card">
         <div class="section-heading"><div><h2>Bplus Import Center</h2><p class="muted">เลือกบิลหนึ่งหรือหลายใบ แล้ว Export Excel หรือรวมใบเสนอราคาเป็น PDF เดียว</p><p v-if="selectedExportIds.length && !canExportQuotationPdf" class="form-hint">รายการที่สร้างจาก PO โดยตรงไม่มีใบเสนอราคา จึง Export ได้เฉพาะ Excel</p></div><div class="actions"><button class="secondary-button" :disabled="!selectedExportIds.length" @click="exportBills">Export Excel ({{ selectedExportIds.length }})</button><button class="secondary-button" :disabled="!canExportQuotationPdf" title="ใช้ได้เฉพาะบิลที่สร้างจากใบเสนอราคา" @click="exportQuotationsPdf">Export PDF ใบเสนอราคา ({{ selectedExportIds.length }})</button><button class="primary-button" :disabled="!ready.length" @click="completeAll">ปิดงานทั้งหมด</button></div></div>
-        <div class="table-wrap"><table><thead><tr><th><input v-model="allReadySelected" type="checkbox" aria-label="เลือกบิลทั้งหมด"></th><th>Bill</th><th>ลูกค้า</th><th>Sale / แผนก</th><th>ยอดรวม</th><th>สถานะ</th><th>Export ล่าสุด</th><th>จัดการ</th></tr></thead><tbody><tr v-for="bill in ready" :key="bill.bill_id"><td><input v-model="selectedExportIds" type="checkbox" :value="bill.bill_id" :aria-label="`เลือกบิล ${bill.bill_id}`"></td><td class="strong">#{{ bill.bill_id }}</td><td>{{ bill.buyer_name }}</td><td>{{ bill.created_by }}<br><small>{{ bill.creator?.department || '-' }}</small></td><td>{{ money(bill.total_amount) }}</td><td><StatusPill :status="bill.status" /></td><td>{{ shortDate(bill.excel_exported_at) }}</td><td><button class="primary-button primary-button--compact" @click="complete(bill.bill_id)">ปิดงาน</button></td></tr><tr v-if="!ready.length"><td colspan="8" class="empty-cell">ไม่มีบิลพร้อมส่งออก</td></tr></tbody></table></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th><input v-model="allReadySelected" type="checkbox" aria-label="เลือกบิลทั้งหมด"></th><th>Bill</th><th>ลูกค้า</th><th>Sale / แผนก</th><th>ยอดรวม</th><th>สถานะ</th><th>Export ล่าสุด</th><th>จัดการ</th></tr></thead>
+            <tbody>
+              <template v-for="bill in ready" :key="bill.bill_id">
+                <tr>
+                  <td><input v-model="selectedExportIds" type="checkbox" :value="bill.bill_id" :aria-label="`เลือกบิล ${bill.bill_id}`"></td>
+                  <td class="strong">#{{ bill.bill_id }}</td>
+                  <td>{{ bill.buyer_name }}</td>
+                  <td>{{ bill.created_by }}<br><small>{{ bill.creator?.department || '-' }}</small></td>
+                  <td>{{ money(bill.total_amount) }}</td>
+                  <td><StatusPill :status="bill.status" /></td>
+                  <td>{{ shortDate(bill.excel_exported_at) }}</td>
+                  <td>
+                    <div class="bill-row-actions">
+                      <button
+                        v-if="hasBillDetails(bill)"
+                        class="secondary-button primary-button--compact"
+                        type="button"
+                        :aria-expanded="expandedReadyBillId === bill.bill_id"
+                        :aria-controls="`ready-bill-detail-${bill.bill_id}`"
+                        @click="toggleReadyBillDetails(bill.bill_id)"
+                      >{{ expandedReadyBillId === bill.bill_id ? 'ซ่อนรายละเอียด' : 'รายละเอียดบิล' }}</button>
+                      <button class="primary-button primary-button--compact" type="button" @click="complete(bill.bill_id)">ปิดงาน</button>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="expandedReadyBillId === bill.bill_id" :id="`ready-bill-detail-${bill.bill_id}`" class="bill-detail-row">
+                  <td colspan="8">
+                    <section class="bill-detail-panel" :aria-label="`รายละเอียดบิล ${bill.bill_id}`">
+                      <header><div><small>Bill #{{ bill.bill_id }}</small><h3>{{ bill.buyer_name }}</h3></div><span>ข้อมูลจาก Sale สำหรับดำเนินการใน Bplus</span></header>
+                      <dl>
+                        <div><dt>ประเภทการจัดส่ง</dt><dd>{{ bill.shipping_type || '-' }}</dd></div>
+                        <div><dt>กำหนดส่งสินค้า</dt><dd>{{ shortDate(bill.delivery_due_date) }}</dd></div>
+                        <div class="bill-detail-panel__wide"><dt>หมายเหตุการจัดส่ง</dt><dd>{{ bill.shipping_text || '-' }}</dd></div>
+                        <div class="bill-detail-panel__wide"><dt>เงื่อนไขการส่งสินค้า</dt><dd>{{ bill.delivery_terms || '-' }}</dd></div>
+                        <div class="bill-detail-panel__wide"><dt>รายละเอียดบิล</dt><dd>{{ bill.bill_note || '-' }}</dd></div>
+                        <div class="bill-detail-panel__wide"><dt>หมายเหตุส่วนลด</dt><dd>{{ bill.sale_discount_note || '-' }}</dd></div>
+                      </dl>
+                    </section>
+                  </td>
+                </tr>
+              </template>
+              <tr v-if="!ready.length"><td colspan="8" class="empty-cell">ไม่มีบิลพร้อมส่งออก</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </template>
 

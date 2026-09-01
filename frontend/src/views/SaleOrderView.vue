@@ -259,11 +259,16 @@ onBeforeUnmount(() => {
         <div class="span-2 form-section-block"><div class="section-heading"><h2>2. รายการสินค้า</h2><button class="secondary-button" type="button" @click="form.items.push(newItem())">+ เพิ่มรายการ</button></div>
           <article v-for="(item, index) in form.items" :key="index" class="line-item">
             <label class="line-item__product"><span>สินค้าหลักในระบบ *</span><select v-model="item.product" required @change="selectProduct(item)"><option value="">-- เลือกสินค้า{{ item.customer_product_name ? 'ให้ตรงกับ PO' : '' }} --</option><option v-for="product in refs?.products" :key="product.sku_code" :value="product.sku_code">{{ product.sku_code }} | {{ product.sku_name }}</option></select></label><label class="line-item__product"><span>ชื่อสินค้าใน PO / ตามที่ รพ. ต้องการ</span><input v-model="item.customer_product_name" maxlength="2000" placeholder="ระบบจะกรอกจาก PO หรือ Sale กรอกเอง"></label>
-            <label><span>หน่วย</span><select v-model="item.unit_type"><option v-for="unit in refs?.units" :key="unit">{{ unit }}</option></select></label><label><span>จำนวน</span><input v-model.number="item.quantity" type="number" min="1" required></label><label><span>ราคา Ex VAT</span><input v-model.number="item.unit_price" type="number" min="0" step="0.01" required></label><label><span>ส่วนลดรายการ</span><input v-model.number="item.sale_discount_unit" type="number" min="0" step="0.01"></label><div class="line-total"><span>รวม</span><strong>{{ money(Math.max(item.quantity * item.unit_price - item.sale_discount_unit, 0)) }}</strong></div><button v-if="form.items.length > 1" class="remove-line" type="button" @click="form.items.splice(index, 1)">×</button>
+            <label><span>หน่วย</span><select v-model="item.unit_type"><option v-for="unit in refs?.units" :key="unit">{{ unit }}</option></select></label><label><span>จำนวน</span><input v-model.number="item.quantity" type="number" min="1" required></label><label><span>ราคา Ex VAT</span><input v-model.number="item.unit_price" type="number" min="0" step="0.01" required></label><label><span>ส่วนลดรายการ</span><input v-model.number="item.sale_discount_unit" type="number" min="0" step="0.01"></label><div class="line-total">
+            <span>รวม</span><strong>{{ money(Math.max(item.quantity * item.unit_price - item.sale_discount_unit, 0)) }}</strong></div><button v-if="form.items.length > 1" class="remove-line" type="button" @click="form.items.splice(index, 1)">×</button>
           </article>
+            <label class="span-2"><span>หมายเหตุส่วนลด</span><textarea v-model="form.sale_discount_note" maxlength="2000" placeholder="ระบุรายละเอียดหรือเงื่อนไขส่วนลดเพิ่มเติม (ถ้ามี)"></textarea></label>
+
         </div>
-        <!-- <label><span>ส่วนลดท้ายบิล</span><input v-model.number="form.sale_discount_total" type="number" min="0" step="0.01"></label><label><span>หมายเหตุส่วนลด</span><input v-model="form.sale_discount_note"></label> -->
-        <div class="span-2 total-summary"><span>ยอดก่อนส่วนลดท้ายบิล <b>{{ money(grossTotal) }}</b></span><strong>ยอดสุทธิ {{ money(netTotal) }}</strong></div>
+        <!-- <label><span>ส่วนลดท้ายบิล</span><input v-model.number="form.sale_discount_total" type="number" min="0" step="0.01"></label> -->
+        <div class="span-2 total-summary">
+        <!-- <span>ยอดก่อนส่วนลดท้ายบิล <b>{{ money(grossTotal) }}</b></span> -->
+        <strong>ยอดสุทธิ {{ money(netTotal) }}</strong></div>
         <div class="span-2 form-section-title"><h2>3. ข้อมูลยืนยันการซื้อขาย</h2><p class="muted">ข้อมูลแก้ไขต่อได้ใน Draft และระบบจะเก็บเป็น Revision</p></div>
         <label><span>เลขที่ PO / หนังสือสั่งซื้อ</span><input v-model="form.customer_po_no" maxlength="255"></label>
         <label><span>วันที่ลูกค้ายืนยัน</span><input v-model="form.customer_confirmed_at" type="date"></label><label><span>ผู้ติดต่อ</span><input v-model="form.customer_contact_name" maxlength="500"></label>

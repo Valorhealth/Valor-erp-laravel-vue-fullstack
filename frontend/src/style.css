@@ -318,6 +318,18 @@ input[type="checkbox"] { accent-color: var(--brand); box-shadow: none; }
 .detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
 .detail-grid > span { padding: 12px; background: #f7f7f9; border-radius: 9px; color: var(--muted); font-size: 11px; }
 .detail-grid b { display: block; margin-top: 4px; color: var(--ink); font-size: 13px; }
+.bill-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-width: 190px; }
+.bill-detail-row td { padding: 0 14px 16px; background: #f8fafc; }
+.bill-detail-panel { padding: 16px; border: 1px solid #e3c3c7; border-left: 4px solid var(--brand); border-radius: 10px; background: #fff; box-shadow: 0 5px 16px rgba(33, 35, 41, .05); }
+.bill-detail-panel header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.bill-detail-panel header small { color: var(--brand); font-size: 10px; font-weight: 800; }
+.bill-detail-panel header h3 { margin: 3px 0 0; color: var(--ink); font-size: 15px; }
+.bill-detail-panel header > span { color: var(--muted); font-size: 10px; }
+.bill-detail-panel dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0 0; }
+.bill-detail-panel dl > div { min-width: 0; padding: 11px 12px; border-radius: 8px; background: #f7f8fa; }
+.bill-detail-panel dt { margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.bill-detail-panel dd { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bill-detail-panel__wide { grid-column: 1 / -1; }
 .collapsible-panel { padding: 0; overflow: hidden; }
 .panel-toggle { width: 100%; padding: 20px 24px; border: 0; background: #fff; display: flex; justify-content: space-between; text-align: left; }
 .panel-toggle strong, .panel-toggle small { display: block; }
@@ -457,6 +469,9 @@ select[multiple] { min-height: 130px; }
   .form-grid .span-2 { grid-column: auto; }
   .admin-status-editor { grid-template-columns: 1fr; align-items: stretch; }
   .search-row { grid-template-columns: 1fr; }
+  .bill-detail-panel header { align-items: flex-start; flex-direction: column; }
+  .bill-detail-panel dl { grid-template-columns: 1fr; }
+  .bill-detail-panel__wide { grid-column: auto; }
   .ollama-health { align-items: flex-start; flex-direction: column; }
   .line-item, .warehouse-item { grid-template-columns: 1fr 1fr; }
   .line-item__product, .warehouse-item > strong { grid-column: 1 / -1; }
