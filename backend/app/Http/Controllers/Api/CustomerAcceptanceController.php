@@ -136,6 +136,7 @@ final class CustomerAcceptanceController extends Controller
         $bill = $this->billForToken($token)->load(['items', 'documents', 'signatures', 'customerAcceptanceSignatures']);
         $quotation = Quotation::query()->with(['items', 'creator:id,username,department'])->findOrFail($bill->ref_qt_id);
         $bytes = $documents->quotationPdf($quotation, draft: $bill);
+        \App\Services\Documents\DocumentDownloadAudit::capture(request(), 'customer_quotation', $quotation, $bill);
 
         return response($bytes, 200, [
             'Content-Type' => 'application/pdf',

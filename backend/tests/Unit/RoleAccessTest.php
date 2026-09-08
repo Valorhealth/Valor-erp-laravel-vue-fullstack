@@ -13,14 +13,14 @@ class RoleAccessTest extends TestCase
     public static function roleProvider(): array
     {
         return [
-            'super admin' => ['Super Admin', RoleAccess::GROUP_SUPER_ADMIN, 19],
-            'thai super admin' => ['ผู้ดูแลระบบสูงสุด', RoleAccess::GROUP_SUPER_ADMIN, 19],
-            'owner' => ['Owner', RoleAccess::GROUP_SUPER_ADMIN, 19],
-            'sale' => ['Sale Executive', RoleAccess::GROUP_SALE, 7],
-            'thai sale' => ['เซล', RoleAccess::GROUP_SALE, 7],
-            'approver' => ['Approve Manager', RoleAccess::GROUP_APPROVE, 8],
-            'thai approver' => ['หัวหน้าฝ่ายขาย', RoleAccess::GROUP_APPROVE, 8],
-            'admin' => ['Admin', RoleAccess::GROUP_ADMIN, 7],
+            'super admin' => ['Super Admin', RoleAccess::GROUP_SUPER_ADMIN, 20],
+            'thai super admin' => ['ผู้ดูแลระบบสูงสุด', RoleAccess::GROUP_SUPER_ADMIN, 20],
+            'owner' => ['Owner', RoleAccess::GROUP_SUPER_ADMIN, 20],
+            'sale' => ['Sale Executive', RoleAccess::GROUP_SALE, 8],
+            'thai sale' => ['เซล', RoleAccess::GROUP_SALE, 8],
+            'approver' => ['Approve Manager', RoleAccess::GROUP_APPROVE, 10],
+            'thai approver' => ['หัวหน้าฝ่ายขาย', RoleAccess::GROUP_APPROVE, 10],
+            'admin' => ['Admin', RoleAccess::GROUP_ADMIN, 8],
             'unknown' => ['Accounting', RoleAccess::GROUP_DEFAULT, 2],
             'empty' => [null, RoleAccess::GROUP_DEFAULT, 2],
         ];
@@ -49,6 +49,16 @@ class RoleAccessTest extends TestCase
         $this->assertSame('บันทึกกิจกรรมระบบ', $labels[16]);
         $this->assertSame('วิเคราะห์งบประมาณ', $labels[17]);
         $this->assertSame('ตารางงาน', $labels[18]);
+        $this->assertSame('ตารางจองเครื่อง FibroScan', $labels[19]);
+    }
+
+    #[Test]
+    public function approver_can_read_document_center_without_admin_write_access(): void
+    {
+        $this->assertTrue(RoleAccess::can('Approve', 'document_center'));
+        $this->assertFalse(RoleAccess::can('Approve', 'system_admin'));
+        $this->assertFalse(RoleAccess::can('Approve', 'edit_bill'));
+        $this->assertFalse(RoleAccess::can('Sale', 'document_center'));
     }
 
     #[Test]
@@ -71,6 +81,16 @@ class RoleAccessTest extends TestCase
     }
 
     #[Test]
+    public function equipment_booking_is_shared_by_all_operational_roles(): void
+    {
+        $this->assertTrue(RoleAccess::can('Sale Executive', 'equipment_booking'));
+        $this->assertTrue(RoleAccess::can('Approve Manager', 'equipment_booking'));
+        $this->assertTrue(RoleAccess::can('Admin', 'equipment_booking'));
+        $this->assertTrue(RoleAccess::can('Super Admin', 'equipment_booking'));
+        $this->assertFalse(RoleAccess::can('Accounting', 'equipment_booking'));
+    }
+
+    #[Test]
     public function billing_visibility_is_owner_only_unless_the_role_is_privileged(): void
     {
         $this->assertTrue(RoleAccess::mustUseOwnBillingRecords('Sale Executive'));
@@ -85,15 +105,15 @@ class RoleAccessTest extends TestCase
     public function each_role_has_the_exact_streamlit_menu_order(): void
     {
         $this->assertSame(
-            ['สร้างใบเสนอราคา/เปิดบิลใหม่', 'แก้ไขบิล/Draft(ใบเสนอราคา)', 'ใบเสนอราคา', 'ประวัติการเปิดบิลของฉัน', 'ติดตามอนุมัติวงเงิน', 'บันทึก Call Sale', 'ตารางงาน'],
+            ['สร้างใบเสนอราคา/เปิดบิลใหม่', 'แก้ไขบิล/Draft(ใบเสนอราคา)', 'ใบเสนอราคา', 'ประวัติการเปิดบิลของฉัน', 'ติดตามอนุมัติวงเงิน', 'บันทึก Call Sale', 'ตารางงาน', 'ตารางจองเครื่อง FibroScan'],
             array_column(RoleAccess::detailsForRole('Sale')['menu'], 'label'),
         );
         $this->assertSame(
-            ['แดชบอร์ดสถิติ', 'พิจารณาอนุมัติบิล', 'รายการที่อนุมัติแล้ว', 'รายการที่ไม่อนุมัติ', 'รายการบิลทั้งหมด', 'Call Sale Report', 'ตารางงาน', 'วิเคราะห์งบประมาณ'],
+            ['แดชบอร์ดสถิติ', 'พิจารณาอนุมัติบิล', 'รายการที่อนุมัติแล้ว', 'รายการที่ไม่อนุมัติ', 'รายการบิลทั้งหมด', 'Call Sale Report', 'ตารางงาน', 'ตารางจองเครื่อง FibroScan', 'วิเคราะห์งบประมาณ', 'ศูนย์จัดการเอกสาร'],
             array_column(RoleAccess::detailsForRole('Approve')['menu'], 'label'),
         );
         $this->assertSame(
-            ['จัดการระบบส่วนกลาง', 'จัดการข้อมูลหลัก', 'จัดการเครดิตลูกค้า', 'จัดการผู้ใช้งาน', 'ศูนย์จัดการเอกสาร', 'รายการบิลทั้งหมด', 'ตารางงาน'],
+            ['จัดการระบบส่วนกลาง', 'จัดการข้อมูลหลัก', 'จัดการเครดิตลูกค้า', 'จัดการผู้ใช้งาน', 'ศูนย์จัดการเอกสาร', 'รายการบิลทั้งหมด', 'ตารางงาน', 'ตารางจองเครื่อง FibroScan'],
             array_column(RoleAccess::detailsForRole('Admin')['menu'], 'label'),
         );
     }

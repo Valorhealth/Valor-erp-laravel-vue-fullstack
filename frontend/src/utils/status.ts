@@ -10,7 +10,7 @@ export function statusTone(value: string | null | undefined): StatusTone {
   if (!status || status === '-') return 'neutral'
 
   // Negative states must be checked first because "ไม่อนุมัติ" contains "อนุมัติ".
-  if (containsAny(status, ['ไม่อนุมัติ', 'ยกเลิก', 'ล้มเหลว', 'ไม่สำเร็จ', 'ไม่พร้อม', 'failed', 'error', 'canceled', 'cancelled'])) {
+  if (containsAny(status, ['ไม่อนุมัติ', 'ยกเลิก', 'เลิกใช้งาน', 'ล้มเหลว', 'ไม่สำเร็จ', 'ไม่พร้อม', 'failed', 'error', 'canceled', 'cancelled'])) {
     return 'danger'
   }
 
@@ -25,13 +25,14 @@ export function statusTone(value: string | null | undefined): StatusTone {
     'เปิดวงเงินแล้ว',
     'เปิดใช้งาน',
     'พร้อมใช้งาน',
+    'คืนแล้ว',
     'success',
     'completed',
   ])) return 'success'
 
   if (containsAny(status, ['รอแอดมินส่งออก', 'พร้อมส่งออก', 'พร้อมจัดส่ง'])) return 'ready'
   if (containsAny(status, ['รอลูกค้ายืนยัน', 'รอแอดมินส่งออก', 'กำลังทำ', 'กำลังดำเนินการ', 'processing', 'in progress'])) return 'info'
-  if (containsAny(status, ['รออนุมัติ', 'รอหัวหน้า', 'รออนุมัติวงเงิน', 'รอดำเนินการ', 'pending'])) return 'warning'
+  if (containsAny(status, ['รออนุมัติ', 'รอหัวหน้า', 'รออนุมัติวงเงิน', 'รอดำเนินการ', 'จองแล้ว', 'ซ่อมบำรุง', 'pending'])) return 'warning'
 
   return 'neutral'
 }

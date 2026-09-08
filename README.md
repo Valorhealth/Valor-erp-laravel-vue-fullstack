@@ -48,6 +48,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify-project.ps1
 
 ก่อน deploy รุ่นที่ผูกเอกสารและตารางงานกับ Account แบบถาวร พร้อมยุบ Timeline ไว้ใน `sales_tasks` ให้รัน [`database/schema/workflow_identity_cleanup.sql`](database/schema/workflow_identity_cleanup.sql) ใน Supabase SQL Editor หนึ่งครั้ง ไฟล์นี้จะรักษาประวัติเดิมไว้ใน JSONB, ผูกบิล/ใบเสนอราคา/ผู้รับมอบหมายด้วย `user_id`, ลบตาราง Timeline เก่าหลังย้ายข้อมูลสำเร็จ และรวมสถานะเดิมเป็น `รอแอดมินส่งออก`
 
+ก่อน deploy รุ่นตารางจองเครื่อง FibroScan ให้รัน [`database/schema/fibroscan_booking.sql`](database/schema/fibroscan_booking.sql) หนึ่งครั้ง ไฟล์นี้สร้างทะเบียนเครื่อง ตารางจอง และ PostgreSQL Exclusion Constraint สำหรับป้องกันการจองเครื่องเดียวกันในช่วงเวลาซ้อนกัน
+
 การเชื่อม Supabase ผ่าน Session Pooler พอร์ต `5432` ต้องตั้ง `DB_PERSISTENT=false` ทั้ง Local และ Render เพื่อไม่ให้ PHP-FPM ยึด connection ค้างจน pgAdmin เข้าไม่ได้ โดยระบบเลขใบเสนอราคายังคงใช้ PostgreSQL Advisory Lock ตามเดิม
 
 หากติดตั้ง Python ใหม่สำหรับเครื่อง Local ให้ใช้ `pip install -r backend/requirements-budget-local-ai.txt` ส่วน Docker/Render ใช้ชุดประหยัด RAM จาก `backend/requirements-budget.txt`

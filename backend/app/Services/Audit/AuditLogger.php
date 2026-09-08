@@ -21,7 +21,7 @@ final class AuditLogger
         'PasswordResetController@reset' => ['auth.reset_password', 'การเข้าสู่ระบบ', 'เปลี่ยนรหัสผ่านด้วย Token'],
         'QuotationController@store' => ['quotation.create', 'ใบเสนอราคา', 'สร้างใบเสนอราคา'],
         'QuotationController@show' => ['quotation.view', 'ใบเสนอราคา', 'เปิดดูรายละเอียดใบเสนอราคา'],
-        'QuotationController@pdf' => ['quotation.print', 'เอกสาร', 'เปิดหรือพิมพ์ใบเสนอราคา'],
+        'QuotationController@pdf' => ['quotation.print', 'เอกสาร', 'ดาวน์โหลดใบเสนอราคา'],
         'QuotationController@customNamePdf' => ['quotation.custom_name_print', 'เอกสาร', 'สร้างใบเสนอราคาที่เปลี่ยนชื่อสินค้า'],
         'BillingWorkflowController@createFromQuotation' => ['bill.create_from_quotation', 'บิล', 'สร้างบิลจากใบเสนอราคา'],
         'BillingWorkflowController@createFromPurchaseOrder' => ['bill.create_from_purchase_order', 'บิล', 'สร้างรายการเปิดบิลจาก PO โดยตรง'],
@@ -38,7 +38,7 @@ final class AuditLogger
         'BillingWorkflowController@completeAll' => ['bill.complete_all', 'จัดเตรียมบิล', 'ปิดงานบิลทั้งหมด'],
         'BillingWorkflowController@export' => ['bill.export', 'เอกสาร', 'ส่งออกข้อมูลบิล'],
         'BillingWorkflowController@exportQuotationsPdf' => ['quotation.batch_export', 'เอกสาร', 'ส่งออกใบเสนอราคาหลายฉบับเป็น PDF เดียว'],
-        'BillingWorkflowController@pdf' => ['bill.print', 'เอกสาร', 'เปิดหรือพิมพ์เอกสารบิล'],
+        'BillingWorkflowController@pdf' => ['bill.print', 'เอกสาร', 'ดาวน์โหลดเอกสารบิล'],
         'BillingWorkflowController@cancel' => ['bill.cancel', 'บิล', 'ยกเลิกบิลโดยเก็บเอกสารเดิม'],
         'BillingDocumentController@store' => ['bill.purchase_order_upload', 'เอกสาร', 'แนบหรือเปลี่ยนไฟล์ PO ลูกค้า'],
         'BillingDocumentController@show' => ['bill.purchase_order_download', 'เอกสาร', 'เปิดไฟล์ PO ลูกค้า'],
@@ -56,6 +56,11 @@ final class AuditLogger
         'TaskController@store' => ['task.create', 'ตารางงาน', 'สร้างงาน'],
         'TaskController@updateStatus' => ['task.update_progress', 'ตารางงาน', 'อัปเดตสถานะและความคืบหน้างาน'],
         'TaskController@destroy' => ['task.delete', 'ตารางงาน', 'ลบงาน'],
+        'FibroscanBookingController@store' => ['fibroscan_booking.create', 'ตารางจองเครื่อง', 'จองเครื่อง FibroScan'],
+        'FibroscanBookingController@update' => ['fibroscan_booking.update', 'ตารางจองเครื่อง', 'แก้ไขรายการจองเครื่อง FibroScan'],
+        'FibroscanBookingController@updateStatus' => ['fibroscan_booking.status', 'ตารางจองเครื่อง', 'เปลี่ยนสถานะรายการจองเครื่อง FibroScan'],
+        'FibroscanMachineController@store' => ['fibroscan_machine.create', 'ทะเบียนเครื่อง', 'เพิ่มเครื่อง FibroScan'],
+        'FibroscanMachineController@update' => ['fibroscan_machine.update', 'ทะเบียนเครื่อง', 'แก้ไขทะเบียนเครื่อง FibroScan'],
         'MasterDataController@storeCustomer' => ['master.customer_create', 'ข้อมูลหลัก', 'เพิ่มข้อมูลลูกค้า'],
         'MasterDataController@destroyCustomer' => ['master.customer_delete', 'ข้อมูลหลัก', 'ลบข้อมูลลูกค้า'],
         'MasterDataController@storeSalesman' => ['master.salesman_create', 'ข้อมูลหลัก', 'เพิ่มข้อมูลพนักงานขาย'],
@@ -68,7 +73,7 @@ final class AuditLogger
         'PublicTaxController@confirm' => ['public_tax.confirm', 'ข้อมูลภาษี', 'ลูกค้ายืนยันข้อมูลภาษี'],
         'PublicTaxController@show' => ['public_tax.view', 'ข้อมูลภาษี', 'ลูกค้าเปิดหน้าตรวจสอบข้อมูลภาษี'],
         'PublicTaxController@cancel' => ['public_tax.cancel', 'ข้อมูลภาษี', 'ลูกค้ายกเลิกการยืนยันข้อมูลภาษี'],
-        'PublicTaxController@pdf' => ['public_tax.print', 'เอกสาร', 'ลูกค้าเปิดหรือพิมพ์เอกสารภาษี'],
+        'PublicTaxController@pdf' => ['public_tax.print', 'เอกสาร', 'ลูกค้าดาวน์โหลดเอกสารภาษี'],
         'CustomerAcceptanceController@show' => ['customer_acceptance.view', 'ลายมือชื่ออิเล็กทรอนิกส์', 'ลูกค้าเปิดใบเสนอราคาเพื่อยืนยัน'],
         'CustomerAcceptanceController@accept' => ['customer_acceptance.sign', 'ลายมือชื่ออิเล็กทรอนิกส์', 'ลูกค้ายืนยันและลงลายมือชื่อใบเสนอราคา'],
         'CustomerAcceptanceController@pdf' => ['customer_acceptance.print', 'เอกสาร', 'ลูกค้าดาวน์โหลดใบเสนอราคาที่ลงนาม'],
@@ -117,6 +122,7 @@ final class AuditLogger
             [$action, $category, $description] = $this->eventFor($request);
             [$targetType, $targetId] = $this->targetFor($request);
             $status = $response->getStatusCode();
+            $payload = $this->responseRequestData($request, $response, $requestData);
 
             AuditLog::query()->create([
                 'occurred_at' => now(),
@@ -131,7 +137,7 @@ final class AuditLogger
                 'route_uri' => $request->route()?->uri(),
                 'target_type' => $targetType,
                 'target_id' => $targetId,
-                'request_data' => $requestData ?? $this->sanitizedRequestData($request),
+                'request_data' => $payload === [] ? null : $this->sanitize($payload),
                 'response_status' => $status,
                 'was_successful' => $status < 400,
                 'ip_address' => $request->ip(),
@@ -141,6 +147,26 @@ final class AuditLogger
         } catch (Throwable $exception) {
             report($exception);
         }
+    }
+
+    /** @param array<string, mixed> $data */
+    public function responseRequestData(Request $request, Response $response, ?array $data = null): array
+    {
+        $payload = $data ?? $this->sanitizedRequestData($request) ?? [];
+        // This key is server-owned; callers cannot forge document download evidence.
+        unset($payload['document_download']);
+        $document = $request->attributes->get('document_audit');
+        if (is_array($document) && $response->isSuccessful() && ! $request->isMethod('HEAD')) {
+            $content = $response->getContent();
+            $payload['document_download'] = [
+                ...$document,
+                'result' => 'response_generated',
+                'content_disposition' => $response->headers->get('Content-Disposition'),
+                'sha256' => is_string($content) ? hash('sha256', $content) : null,
+            ];
+        }
+
+        return $payload;
     }
 
     /** @param array<string, mixed> $data */
@@ -226,6 +252,7 @@ final class AuditLogger
             'bill' => 'bill', 'quotation' => 'quotation', 'creditRequest' => 'credit_request',
             'creditProfile' => 'credit_profile', 'notice' => 'notice', 'task' => 'task',
             'customer' => 'customer', 'salesman' => 'salesman', 'user' => 'user',
+            'booking' => 'fibroscan_booking', 'machine' => 'fibroscan_machine',
             'salesCall' => 'sales_call',
             'analysisId' => 'budget_analysis', 'document' => 'document',
         ];

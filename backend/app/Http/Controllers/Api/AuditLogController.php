@@ -31,7 +31,8 @@ final class AuditLogController extends Controller
                 $query->where(function (Builder $nested) use ($term): void {
                     $nested->whereRaw('LOWER(COALESCE(username, \'\')) LIKE ?', [$term])
                         ->orWhereRaw('LOWER(description) LIKE ?', [$term])
-                        ->orWhereRaw('LOWER(COALESCE(target_id, \'\')) LIKE ?', [$term]);
+                        ->orWhereRaw('LOWER(COALESCE(target_id, \'\')) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(CAST(request_data AS TEXT)) LIKE ?', [$term]);
                 });
             })
             ->when($data['username'] ?? null, fn (Builder $query, string $username) => $query->where('username', $username))
@@ -62,4 +63,3 @@ final class AuditLogController extends Controller
         ]);
     }
 }
-

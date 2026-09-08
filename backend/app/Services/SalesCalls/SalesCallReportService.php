@@ -142,22 +142,44 @@ final class SalesCallReportService
     {
         $sellerQuery = User::query()->select(['id', 'username', 'first_name', 'last_name', 'department', 'role'])->orderBy('username');
         $sellers = $sellerQuery->get()->filter(fn (User $user) => RoleAccess::groupForRole($user->role) === RoleAccess::GROUP_SALE);
-        if (! $this->canViewTeam($actor)) {
+        $manager = $this->canViewTeam($actor);
+        if (! $manager) {
             $sellers = $sellers->where('id', $actor->id);
         }
+        $savedOptions = SalesCallActivity::query()
+            ->when(! $manager, fn (Builder $query) => $query->where('seller_user_id', $actor->id));
 
         return [
             'sellers' => $sellers->values(),
             'seller_departments' => $sellers->pluck('department')->filter()->unique()->sort()->values(),
-            'specialties' => self::SPECIALTIES,
-            'departments' => self::DEPARTMENTS,
-            'groups' => self::GROUPS,
-            'products' => self::PRODUCTS,
+            'specialties' => $this->mergeSavedOptions($savedOptions, 'specialty', self::SPECIALTIES),
+            'departments' => $this->mergeSavedOptions($savedOptions, 'department', self::DEPARTMENTS),
+            'groups' => $this->mergeSavedOptions($savedOptions, 'customer_group', self::GROUPS),
+            'products' => $this->mergeSavedOptions($savedOptions, 'product_1', self::PRODUCTS),
             'objectives' => self::OBJECTIVES,
             'outcomes' => self::OUTCOMES,
             'stages' => self::STAGES,
             'statuses' => self::STATUSES,
         ];
+    }
+
+    /** @param Builder<SalesCallActivity> $query @param array<int, string> $defaults @return array<int, string> */
+    private function mergeSavedOptions(Builder $query, string $column, array $defaults): array
+    {
+        $saved = (clone $query)
+            ->whereNotNull($column)
+            ->whereRaw("BTRIM({$column}) <> ''")
+            ->distinct()
+            ->orderBy($column)
+            ->pluck($column);
+
+        return collect($defaults)
+            ->merge($saved)
+            ->map(fn (mixed $value): string => trim((string) $value))
+            ->filter()
+            ->unique(fn (string $value): string => mb_strtolower($value))
+            ->values()
+            ->all();
     }
 
     public function canViewTeam(User $user): bool

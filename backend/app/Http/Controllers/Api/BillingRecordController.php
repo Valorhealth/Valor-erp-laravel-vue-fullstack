@@ -21,6 +21,7 @@ class BillingRecordController extends Controller
         $filters = $request->validate([
             'status_group' => ['nullable', Rule::in(array_keys(self::STATUS_GROUPS))],
             'scope' => ['nullable', Rule::in(['mine', 'all'])],
+            'has_po' => ['nullable', 'boolean'],
         ]);
         $search = trim((string) $request->query('search', ''));
         $status = trim((string) $request->query('status', ''));
@@ -32,6 +33,7 @@ class BillingRecordController extends Controller
         );
 
         $query = BillingRecord::query()
+            ->when($request->boolean('has_po'), fn ($query) => $query->whereHas('documents', fn ($documents) => $documents->where('document_type', 'customer_po')))
             ->when($mustUseOwnRecords, fn ($query) => $query->where(
                 fn ($owned) => $owned->where('creator_user_id', $request->user()->id)
                     ->orWhere(fn ($legacy) => $legacy->whereNull('creator_user_id')->where('created_by', $request->user()->username))
@@ -43,6 +45,7 @@ class BillingRecordController extends Controller
                     ->where('buyer_name', 'ilike', "%{$search}%")
                     ->orWhere('tax_id', 'ilike', "%{$search}%")
                     ->orWhere('created_by', 'ilike', "%{$search}%")
+                    ->orWhere('customer_po_no', 'ilike', "%{$search}%")
             ));
 
         $summary = (clone $query)
@@ -60,8 +63,12 @@ class BillingRecordController extends Controller
                 'tax_qr_token', 'document_printed_at', 'document_printed_by',
                 'excel_exported_at', 'excel_exported_by', 'tax_invoice_no',
                 'submitted_at', 'issued_at',
+                'customer_po_no', 'ref_qt_id', 'revision_no',
             ])
             ->with(['items:item_id,bill_id,main_category,sub_category,customer_product_name,unit_type,quantity,unit_price,sale_discount_unit,line_total_before_discount,line_total'])
+            ->when($request->boolean('has_po'), fn ($query) => $query->with(['documents' => fn ($documents) => $documents
+                ->where('document_type', 'customer_po')
+                ->select(['doc_id', 'bill_id', 'document_type', 'file_name', 'version_no', 'uploaded_at', 'is_current'])]))
             ->orderByDesc('bill_id')
             ->paginate($perPage)
             ->withQueryString();

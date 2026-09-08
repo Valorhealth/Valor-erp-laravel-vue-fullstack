@@ -26,6 +26,8 @@ function dateTime(value: string | null): string {
 }
 
 function readableTarget(row: AuditLog): string {
+  const document = row.request_data?.document_download as { quotation_no?: string; revision_no?: number } | undefined
+  if (document?.quotation_no) return `${document.quotation_no} · R${document.revision_no || 1}`
   return row.target_type && row.target_id ? `${row.target_type} #${row.target_id}` : '-'
 }
 
@@ -97,6 +99,7 @@ onMounted(() => load())
     <div v-else-if="error" class="error-state">{{ error }} <button @click="load(1)">ลองอีกครั้ง</button></div>
 
     <section v-else class="content-card">
+      <p class="muted">ประวัติดาวน์โหลดบันทึกเมื่อระบบสร้างไฟล์ตอบกลับสำเร็จ ไม่ยืนยันการบันทึกไฟล์หรือพิมพ์กระดาษจริง ดู Revision และรายการเอกสารที่ส่งออกรวมได้ใน “ดูข้อมูล”</p>
       <div class="table-wrap audit-table-wrap">
         <table>
           <thead><tr><th>วันเวลา</th><th>ผู้ใช้งาน</th><th>กิจกรรม</th><th>รายการอ้างอิง</th><th>ผลลัพธ์</th><th>รายละเอียด</th></tr></thead>

@@ -37,6 +37,8 @@
 - ⭐ `backend/app/Http/Controllers/Api/CreditRequestController.php` — API Controller CreditRequest รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
 - ⭐ `backend/app/Http/Controllers/Api/CustomerAcceptanceController.php` — API Controller CustomerAcceptance รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
 - ⭐ `backend/app/Http/Controllers/Api/DashboardController.php` — API Controller Dashboard รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
+- ⭐ `backend/app/Http/Controllers/Api/FibroscanBookingController.php` — API ตารางจองเครื่อง ตรวจช่วงเวลาซ้ำและควบคุมสิทธิ์ผู้แก้ไขรายการ
+- ⭐ `backend/app/Http/Controllers/Api/FibroscanMachineController.php` — API ทะเบียนเครื่องสำหรับเพิ่ม แก้ไข และเปลี่ยนสถานะโดยไม่ลบประวัติ
 - ⭐ `backend/app/Http/Controllers/Api/HealthController.php` — API Controller Health รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
 - ⭐ `backend/app/Http/Controllers/Api/MasterDataController.php` — API Controller MasterData รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
 - ⭐ `backend/app/Http/Controllers/Api/NoticeController.php` — API Controller Notice รับคำขอ ตรวจสิทธิ์ และส่งผลลัพธ์ให้ Frontend
@@ -68,6 +70,8 @@
 - ⭐ `backend/app/Models/CustomerAcceptanceSignature.php` — Eloquent Model CustomerAcceptanceSignature สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
 - ⭐ `backend/app/Models/DocumentSignature.php` — Eloquent Model DocumentSignature สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
 - ⭐ `backend/app/Models/EditLog.php` — Eloquent Model EditLog สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
+- ⭐ `backend/app/Models/FibroscanBooking.php` — Eloquent Model รายการจองเครื่องและความสัมพันธ์กับเครื่อง/ผู้จอง
+- ⭐ `backend/app/Models/FibroscanMachine.php` — Eloquent Model ทะเบียนเครื่อง FibroScan และประวัติการจอง
 - ⭐ `backend/app/Models/MasterProduct.php` — Eloquent Model MasterProduct สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
 - ⭐ `backend/app/Models/Notice.php` — Eloquent Model Notice สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
 - ⭐ `backend/app/Models/Quotation.php` — Eloquent Model Quotation สำหรับอ่านและเขียนข้อมูลใน PostgreSQL
@@ -16812,6 +16816,7 @@
 - ⭐ `frontend/src/views/DashboardView.vue` — หน้าจอ Vue Dashboard ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/DocumentCenterView.vue` — หน้าจอ Vue DocumentCenter ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/EditBillView.vue` — หน้าจอ Vue EditBill ที่ผูก UI กับ API ของฟังก์ชันนั้น
+- ⭐ `frontend/src/views/FibroscanBookingView.vue` — หน้าปฏิทิน/ตารางจองร่วม เปิดรายละเอียดงาน อัปเดตสถานะ ตรวจเครื่องว่าง และจัดการทะเบียนเครื่อง
 - ⭐ `frontend/src/views/LoginView.vue` — หน้าจอ Vue Login ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/MasterDataView.vue` — หน้าจอ Vue MasterData ที่ผูก UI กับ API ของฟังก์ชันนั้น
 - ⭐ `frontend/src/views/NoticeBoardView.vue` — หน้าจอ Vue NoticeBoard ที่ผูก UI กับ API ของฟังก์ชันนั้น
@@ -16831,6 +16836,7 @@
 - ⭐ `database/schema/audit_logs.sql` — SQL audit_logs สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/customer_credit_outstanding.sql` — SQL customer_credit_outstanding สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/draft_quotation_updates.sql` — SQL draft_quotation_updates สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
+- ⭐ `database/schema/fibroscan_booking.sql` — SQL ทะเบียนเครื่อง ตารางจอง ดัชนี และ Constraint ป้องกันคิวซ้อน
 - ⭐ `database/schema/production_readiness_workflow.sql` — SQL production_readiness_workflow สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/quotation_monthly_numbering.sql` — SQL quotation_monthly_numbering สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL
 - ⭐ `database/schema/reporting_draft_numbering.sql` — SQL reporting_draft_numbering สำหรับสร้างหรือปรับ schema/data ใน PostgreSQL

@@ -55,8 +55,9 @@ final class BillingDocumentController extends Controller
     public function showSignedQuotation(Request $request, BillingRecord $bill, DocumentService $documents): mixed
     {
         $this->authorizeRead($request, $bill);
-        $stored = DB::selectOne("SELECT file_name, mime_type, encode(file_bytes, 'base64') AS encoded FROM billing_documents WHERE bill_id = ? AND document_type = 'signed_quotation' AND is_current = TRUE ORDER BY version_no DESC LIMIT 1", [$bill->bill_id]);
+        $stored = DB::selectOne("SELECT doc_id AS document_id, version_no, file_name, mime_type, encode(file_bytes, 'base64') AS encoded FROM billing_documents WHERE bill_id = ? AND document_type = 'signed_quotation' AND is_current = TRUE ORDER BY version_no DESC LIMIT 1", [$bill->bill_id]);
         if ($stored) {
+            \App\Services\Documents\DocumentDownloadAudit::capture($request, 'signed_quotation_upload', bill: $bill, extra: ['document_id' => $stored->document_id, 'file_version' => $stored->version_no]);
             return response(base64_decode((string) $stored->encoded, true), 200, [
                 'Content-Type' => $stored->mime_type ?: 'application/octet-stream',
                 'Content-Disposition' => 'attachment; filename*=UTF-8\'\''.rawurlencode($stored->file_name),
@@ -67,6 +68,7 @@ final class BillingDocumentController extends Controller
         $bill->load(['items', 'documents', 'signatures', 'customerAcceptanceSignatures']);
         $quotation = $bill->ref_qt_id ? \App\Models\Quotation::query()->with(['items', 'creator:id,username,department'])->findOrFail($bill->ref_qt_id) : null;
         $bytes = $documents->quotationPdf($quotation, draft: $bill);
+        \App\Services\Documents\DocumentDownloadAudit::capture($request, 'signed_quotation', $quotation, $bill);
 
         return response($bytes, 200, [
             'Content-Type' => 'application/pdf',
@@ -77,8 +79,9 @@ final class BillingDocumentController extends Controller
     private function showDocument(Request $request, BillingRecord $bill, string $documentType): mixed
     {
         $this->authorizeRead($request, $bill);
-        $document = DB::selectOne("SELECT file_name, mime_type, encode(file_bytes, 'base64') AS encoded FROM billing_documents WHERE bill_id = ? AND document_type = ? AND is_current = TRUE ORDER BY version_no DESC LIMIT 1", [$bill->bill_id, $documentType]);
+        $document = DB::selectOne("SELECT doc_id AS document_id, version_no, file_name, mime_type, encode(file_bytes, 'base64') AS encoded FROM billing_documents WHERE bill_id = ? AND document_type = ? AND is_current = TRUE ORDER BY version_no DESC LIMIT 1", [$bill->bill_id, $documentType]);
         abort_unless($document, 404);
+        \App\Services\Documents\DocumentDownloadAudit::capture($request, $documentType, bill: $bill, extra: ['document_id' => $document->document_id, 'file_version' => $document->version_no]);
 
         return response(base64_decode((string) $document->encoded, true), 200, [
             'Content-Type' => $document->mime_type ?: 'application/octet-stream',

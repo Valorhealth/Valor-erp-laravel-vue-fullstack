@@ -11,6 +11,8 @@ use App\Http\Controllers\Api\CreditProfileController;
 use App\Http\Controllers\Api\CreditRequestController;
 use App\Http\Controllers\Api\CustomerAcceptanceController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\FibroscanBookingController;
+use App\Http\Controllers\Api\FibroscanMachineController;
 use App\Http\Controllers\Api\HealthController;
 use App\Http\Controllers\Api\MasterDataController;
 use App\Http\Controllers\Api\NoticeController;
@@ -80,6 +82,14 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::post('/tasks', [TaskController::class, 'store'])->middleware('ability:approve_bills,system_admin');
         Route::patch('/tasks/{task}/status', [TaskController::class, 'updateStatus'])->middleware('ability:calendar');
         Route::delete('/tasks/{task}', [TaskController::class, 'destroy'])->middleware('ability:approve_bills,system_admin');
+
+        Route::get('/fibroscan-bookings', [FibroscanBookingController::class, 'index'])->middleware('ability:equipment_booking');
+        Route::get('/fibroscan-bookings-availability', [FibroscanBookingController::class, 'availability'])->middleware('ability:equipment_booking');
+        Route::post('/fibroscan-bookings', [FibroscanBookingController::class, 'store'])->middleware('ability:equipment_booking');
+        Route::put('/fibroscan-bookings/{booking}', [FibroscanBookingController::class, 'update'])->middleware('ability:equipment_booking');
+        Route::patch('/fibroscan-bookings/{booking}/status', [FibroscanBookingController::class, 'updateStatus'])->middleware('ability:equipment_booking');
+        Route::post('/fibroscan-machines', [FibroscanMachineController::class, 'store'])->middleware('ability:system_admin');
+        Route::put('/fibroscan-machines/{machine}', [FibroscanMachineController::class, 'update'])->middleware('ability:system_admin');
 
         Route::get('/credit-requests', [CreditRequestController::class, 'index'])
             ->middleware('ability:credit_request_status,approve_bills,system_admin');

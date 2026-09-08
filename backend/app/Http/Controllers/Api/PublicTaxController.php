@@ -55,6 +55,7 @@ class PublicTaxController extends Controller
         $bytes = $documents->billPdf($bill);
         $bill->forceFill(['document_printed_at' => now(), 'document_printed_by' => 'Customer Portal'])->save();
         $filename = $documents->billDownloadName($bill);
+        \App\Services\Documents\DocumentDownloadAudit::capture(request(), 'customer_tax_invoice', bill: $bill, extra: ['tax_invoice_no' => $bill->tax_invoice_no]);
 
         return response($bytes, 200, [
             'Content-Type' => 'application/pdf',

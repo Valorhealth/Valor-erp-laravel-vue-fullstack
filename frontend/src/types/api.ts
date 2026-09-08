@@ -273,6 +273,40 @@ export interface SalesTaskUpdate {
   created_at: string
 }
 
+export type FibroscanMachineStatus = 'พร้อมใช้งาน' | 'ซ่อมบำรุง' | 'เลิกใช้งาน'
+export type FibroscanBookingStatus = 'จองแล้ว' | 'กำลังใช้งาน' | 'คืนแล้ว' | 'ยกเลิก'
+
+export interface FibroscanMachine {
+  machine_id: number
+  machine_code: string
+  machine_name: string
+  serial_number: string | null
+  status: FibroscanMachineStatus
+  note: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface FibroscanBooking {
+  booking_id: number
+  machine_id: number
+  hospital_name: string
+  purpose: 'ทดลองใช้' | 'Event' | 'เช่า' | 'สาธิต' | 'อื่นๆ'
+  reserved_from: string
+  reserved_until: string
+  contact_name: string | null
+  contact_phone: string | null
+  note: string | null
+  status: FibroscanBookingStatus
+  booked_by_user_id: number
+  booked_by: string
+  booked_by_department: string | null
+  can_edit: boolean
+  machine: Pick<FibroscanMachine, 'machine_id' | 'machine_code' | 'machine_name' | 'status'>
+  owner?: Pick<User, 'id' | 'username' | 'first_name' | 'last_name' | 'department'> | null
+}
+
 export interface Salesman {
   id?: number
   salesman_code: string

@@ -180,6 +180,7 @@ class BillingWorkflowController extends Controller
             ->latest('signed_at')
             ->firstOrFail();
         $bytes = $documents->approvalCertificatePdf($bill, $signature);
+        \App\Services\Documents\DocumentDownloadAudit::capture($request, 'approval_certificate', bill: $bill, extra: ['revision_no' => $signature->revision_no]);
 
         return response($bytes, 200, [
             'Content-Type' => 'application/pdf',
@@ -240,6 +241,7 @@ class BillingWorkflowController extends Controller
             ->when($ids !== [], fn ($query) => $query->whereIn('bill_id', $ids))->orderBy('bill_id')->get();
         abort_if($bills->isEmpty(), 422, 'ไม่มีบิลที่พร้อม Export');
         $workbook = $documents->bplusWorkbook($bills);
+        $request->attributes->set('document_audit', ['type' => 'bplus_excel', 'documents' => $bills->map(fn ($bill) => ['bill_id' => $bill->bill_id, 'quotation_id' => $bill->ref_qt_id, 'revision_no' => $bill->revision_no])->all()]);
         BillingRecord::query()->whereIn('bill_id', $bills->pluck('bill_id'))->update([
             'excel_exported_at' => now(),
             'excel_exported_by' => $request->user()->username,
@@ -271,6 +273,7 @@ class BillingWorkflowController extends Controller
         abort_if($withoutQuotation->isNotEmpty(), 422, 'Bill #'.$withoutQuotation->implode(', #').' เปิดจาก PO โดยตรง จึงไม่มีใบเสนอราคาให้ Export');
 
         $bytes = $documents->quotationBatchPdf($bills);
+        $request->attributes->set('document_audit', ['type' => 'quotation_batch', 'documents' => $bills->map(fn ($bill) => ['bill_id' => $bill->bill_id, 'quotation_id' => $bill->ref_qt_id, 'quotation_no' => $bill->quotation->qt_no, 'revision_no' => $bill->revision_no])->all()]);
         Quotation::query()->whereIn('qt_id', $bills->pluck('ref_qt_id'))->update([
             'quotation_printed_at' => now(),
             'quotation_printed_by' => $request->user()->username,
@@ -302,6 +305,7 @@ class BillingWorkflowController extends Controller
         $bytes = $documents->billPdf($bill, $copy, $canceled);
         $bill->forceFill(['document_printed_at' => now(), 'document_printed_by' => $request->user()->username])->save();
         $filename = $documents->billDownloadName($bill, $copy, $canceled);
+        \App\Services\Documents\DocumentDownloadAudit::capture($request, $canceled ? 'bill_canceled' : ($copy ? 'bill_copy' : 'bill_original'), bill: $bill, extra: ['tax_invoice_no' => $bill->tax_invoice_no]);
 
         return response($bytes, 200, [
             'Content-Type' => 'application/pdf',

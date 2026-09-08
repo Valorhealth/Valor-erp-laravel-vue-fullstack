@@ -3,10 +3,13 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import StatusPill from '../components/StatusPill.vue'
+import { auth } from '../stores/auth'
 import type { BillingRecord, Paginated, Quotation } from '../types/api'
 import { apiError, money, shortDate, todayIso } from '../utils/format'
 
-const tab = ref<'quotations' | 'bills'>('quotations')
+const tab = ref<'quotations' | 'bills' | 'purchase-orders'>('quotations')
+const purchaseOrders = ref<Paginated<BillingRecord> | null>(null)
+const downloadingPo = ref<number | null>(null)
 const quotations = ref<Paginated<Quotation> | null>(null)
 const bills = ref<Paginated<BillingRecord> | null>(null)
 const search = ref('')
@@ -27,8 +30,22 @@ async function loadBills(page = 1) {
 }
 async function load() {
   error.value = ''
-  try { await Promise.all([loadQuotes(), loadBills()]) }
+  try { await Promise.all([loadQuotes(), loadBills(), loadPurchaseOrders()]) }
   catch (cause) { error.value = apiError(cause) }
+}
+async function loadPurchaseOrders(page = 1) {
+  try {
+    const response = await api.get<Paginated<BillingRecord>>('/api/v1/billing-records', { params: { page, has_po: 1, search: search.value || undefined, per_page: 25 } })
+    purchaseOrders.value = response.data
+  } catch (cause) { error.value = apiError(cause, 'โหลดประวัติ PO ไม่สำเร็จ') }
+}
+async function downloadPo(bill: BillingRecord) {
+  downloadingPo.value = bill.bill_id
+  error.value = ''
+  try {
+    await downloadFile(`/api/v1/bills/${bill.bill_id}/purchase-order`, bill.documents?.find(document => document.document_type === 'customer_po')?.file_name)
+  } catch (cause) { error.value = apiError(cause, 'ดาวน์โหลด PO ไม่สำเร็จ') }
+  finally { downloadingPo.value = null }
 }
 function canIssue(bill: BillingRecord) {
   return !blockedStatuses.includes(bill.status || '') && (!bill.bill_date || bill.bill_date <= todayIso())
@@ -96,6 +113,7 @@ onMounted(() => {
       Promise.all([
         loadQuotes(quotations.value?.current_page || 1),
         loadBills(bills.value?.current_page || 1),
+        loadPurchaseOrders(purchaseOrders.value?.current_page || 1),
       ]).catch((cause) => { error.value = apiError(cause, 'อัปเดตสถานะเอกสารไม่สำเร็จ') })
     }
   }, 15_000)
@@ -106,17 +124,40 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <AppShell title="ศูนย์จัดการเอกสาร" subtitle="พิมพ์ต้นฉบับ สำเนา และเอกสารยกเลิกจากข้อมูลใน PostgreSQL">
+  <AppShell title="ศูนย์จัดการเอกสาร" subtitle="ดาวน์โหลดใบเสนอราคาและหลักฐาน PO ย้อนหลัง รวมถึงรายการที่อนุมัติและปิดงานแล้ว">
     <div class="tabs"><button :class="{ active: tab === 'quotations' }" @click="tab = 'quotations'">ใบเสนอราคา</button>
     <!-- <button :class="{ active: tab === 'bills' }" @click="tab = 'bills'">ใบกำกับภาษี / ใบขนส่ง</button> -->
+    <button :class="{ active: tab === 'purchase-orders' }" @click="tab = 'purchase-orders'">ประวัติ PO</button>
   </div>
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="message" class="success-message">{{ message }}</p>
     <form class="content-card search-row" @submit.prevent="load"><label><span>ค้นหาเลขที่ ลูกค้า หรือผู้สร้าง</span><input v-model="search"></label><button class="secondary-button">ค้นหา</button></form>
 
     <section v-if="tab === 'quotations'" class="content-card section-gap">
-      <div class="table-wrap"><table><thead><tr><th>เลขที่</th><th>Revision</th><th>วันที่</th><th>ลูกค้า</th><th>Sale</th><th>ยอดรวม</th><th>สถานะ</th><th>ดาวน์โหลด / หลักฐานลูกค้า</th></tr></thead><tbody><tr v-for="qt in quotations?.data" :key="qt.qt_id"><td class="strong">{{ qt.qt_no }}</td><td>R{{ qt.revision_no || 1 }}</td><td>{{ shortDate(qt.billing_record?.bill_date || qt.qt_date) }}</td><td>{{ qt.billing_record?.buyer_name || qt.buyer_name }}</td><td>{{ qt.created_by }}</td><td>{{ money(qt.billing_record?.total_amount || qt.total_amount) }}</td><td><StatusPill :status="quotationStatus(qt)" /></td><td class="actions"><button class="primary-button primary-button--compact" type="button" @click="quotePdf(qt)">ต้นฉบับ</button><button class="secondary-button" type="button" @click="quotePdf(qt, 'copy')">สำเนา</button><button class="secondary-button" type="button" @click="quotePdf(qt, 'revised')">ใบเสนอราคาที่ได้รับการแก้ไข</button><button v-if="qt.billing_record?.internal_approval_exists" class="secondary-button" type="button" @click="approvalCertificate(qt)">ใบรับรองการอนุมัติ</button><button v-if="quotationStatus(qt) === 'รอลูกค้ายืนยัน' && acceptanceLink(qt)" class="primary-button primary-button--compact" type="button" @click="copyAcceptanceLink(qt)">คัดลอกลิงก์ให้ลูกค้าเซ็น</button><a v-if="quotationStatus(qt) === 'รอลูกค้ายืนยัน' && acceptanceLink(qt)" class="text-link" :href="acceptanceLink(qt)" target="_blank">เปิดหน้าลูกค้า</a><button v-if="qt.billing_record?.customer_acceptance_used_at || currentDocument(qt, 'signed_quotation')" class="secondary-button" type="button" @click="downloadFile(`/api/v1/bills/${qt.billing_record?.bill_id}/signed-quotation`, currentDocument(qt, 'signed_quotation')?.file_name)">ดาวน์โหลดใบที่ลูกค้าเซ็น</button><button v-if="currentDocument(qt, 'customer_po')" class="secondary-button" type="button" @click="downloadFile(`/api/v1/bills/${qt.billing_record?.bill_id}/purchase-order`, currentDocument(qt, 'customer_po')?.file_name)">ดาวน์โหลด PO</button><div v-if="quotationStatus(qt) === 'รอลูกค้ายืนยัน'" class="evidence-upload"><select v-model="evidenceTypes[qt.qt_id]"><option value="signed_quotation">ใบเสนอราคาที่ลูกค้าลงชื่อ</option><option value="customer_po">PO ต้นฉบับจากลูกค้า</option></select><input type="file" accept=".pdf,.png,.jpg,.jpeg,.xlsx" @change="selectEvidenceFile(qt, $event)"><button class="primary-button primary-button--compact" type="button" :disabled="!evidenceFiles[qt.qt_id]" @click="uploadCustomerEvidence(qt)">เก็บหลักฐานและส่ง Admin</button></div></td></tr><tr v-if="!quotations?.data.length"><td colspan="8" class="empty-cell">ไม่พบใบเสนอราคา</td></tr></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>เลขที่</th><th>Revision</th><th>วันที่</th><th>ลูกค้า</th><th>Sale</th><th>ยอดรวม</th><th>สถานะ</th><th>ดาวน์โหลด / หลักฐานลูกค้า</th></tr></thead><tbody><tr v-for="qt in quotations?.data" :key="qt.qt_id"><td class="strong">{{ qt.qt_no }}</td><td>R{{ qt.revision_no || 1 }}</td><td>{{ shortDate(qt.billing_record?.bill_date || qt.qt_date) }}</td><td>{{ qt.billing_record?.buyer_name || qt.buyer_name }}</td><td>{{ qt.created_by }}</td><td>{{ money(qt.billing_record?.total_amount || qt.total_amount) }}</td><td><StatusPill :status="quotationStatus(qt)" /></td><td><details class="document-download-menu"><summary>ดาวน์โหลดเอกสาร</summary><div class="document-download-options"><button class="primary-button primary-button--compact" type="button" @click="quotePdf(qt)">ต้นฉบับ</button><button class="secondary-button" type="button" @click="quotePdf(qt, 'copy')">สำเนา</button><button class="secondary-button" type="button" @click="quotePdf(qt, 'revised')">ใบเสนอราคาที่ได้รับการแก้ไข</button><button v-if="qt.billing_record?.internal_approval_exists" class="secondary-button" type="button" @click="approvalCertificate(qt)">ใบรับรองการอนุมัติ</button><button v-if="qt.billing_record?.customer_acceptance_used_at || currentDocument(qt, 'signed_quotation')" class="secondary-button" type="button" @click="downloadFile(`/api/v1/bills/${qt.billing_record?.bill_id}/signed-quotation`, currentDocument(qt, 'signed_quotation')?.file_name)">ดาวน์โหลดใบที่ลูกค้าเซ็น</button><button v-if="currentDocument(qt, 'customer_po')" class="secondary-button" type="button" @click="downloadFile(`/api/v1/bills/${qt.billing_record?.bill_id}/purchase-order`, currentDocument(qt, 'customer_po')?.file_name)">ดาวน์โหลด PO</button></div></details><button v-if="auth.can('edit_bill') && quotationStatus(qt) === 'รอลูกค้ายืนยัน' && acceptanceLink(qt)" class="primary-button primary-button--compact" type="button" @click="copyAcceptanceLink(qt)">คัดลอกลิงก์ให้ลูกค้าเซ็น</button><a v-if="auth.can('edit_bill') && quotationStatus(qt) === 'รอลูกค้ายืนยัน' && acceptanceLink(qt)" class="text-link" :href="acceptanceLink(qt)" target="_blank">เปิดหน้าลูกค้า</a><div v-if="auth.can('edit_bill') && quotationStatus(qt) === 'รอลูกค้ายืนยัน'" class="evidence-upload"><select v-model="evidenceTypes[qt.qt_id]"><option value="signed_quotation">ใบเสนอราคาที่ลูกค้าลงชื่อ</option><option value="customer_po">PO ต้นฉบับจากลูกค้า</option></select><input type="file" accept=".pdf,.png,.jpg,.jpeg,.xlsx" @change="selectEvidenceFile(qt, $event)"><button class="primary-button primary-button--compact" type="button" :disabled="!evidenceFiles[qt.qt_id]" @click="uploadCustomerEvidence(qt)">เก็บหลักฐานและส่ง Admin</button></div></td></tr><tr v-if="!quotations?.data.length"><td colspan="8" class="empty-cell">ไม่พบใบเสนอราคา</td></tr></tbody></table></div>
       <div v-if="quotations" class="pagination"><span>ทั้งหมด {{ quotations.total }} รายการ</span><div><button class="secondary-button" :disabled="!quotations.prev_page_url" @click="loadQuotes(quotations.current_page - 1)">ก่อนหน้า</button><span>หน้า {{ quotations.current_page }} / {{ quotations.last_page }}</span><button class="secondary-button" :disabled="!quotations.next_page_url" @click="loadQuotes(quotations.current_page + 1)">ถัดไป</button></div></div>
+    </section>
+
+    <section v-else-if="tab === 'purchase-orders'" class="content-card section-gap">
+      <p>PO ที่แนบกับรายการย้อนหลังทุกสถานะ รวมทั้งรายการที่เปิดจาก PO โดยตรง ดาวน์โหลดไฟล์ฉบับปัจจุบันของรายการได้</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>รายการ</th><th>เลข PO</th><th>วันที่</th><th>ลูกค้า</th><th>Sale</th><th>สถานะ</th><th>เอกสาร</th></tr></thead>
+        <tbody>
+          <tr v-for="bill in purchaseOrders?.data" :key="bill.bill_id">
+            <td>#{{ bill.bill_id }}</td><td>{{ bill.customer_po_no || '-' }}</td><td>{{ shortDate(bill.bill_date) }}</td>
+            <td>{{ bill.buyer_name }}</td><td>{{ bill.created_by }}</td><td><StatusPill :status="bill.status" /></td>
+            <td><div v-for="document in bill.documents" :key="document.doc_id"><small>{{ document.file_name }} · ฉบับ {{ document.version_no || 1 }}</small></div>
+              <button type="button" class="secondary-button" :disabled="downloadingPo !== null" @click="downloadPo(bill)">{{ downloadingPo === bill.bill_id ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PO' }}</button>
+            </td>
+          </tr>
+          <tr v-if="!purchaseOrders?.data.length"><td colspan="7" class="empty-cell">ไม่พบรายการที่มี PO ตามคำค้นหา</td></tr>
+        </tbody>
+      </table></div>
+      <div v-if="purchaseOrders" class="pagination"><span>ทั้งหมด {{ purchaseOrders.total }} รายการ</span><div>
+        <button class="secondary-button" :disabled="!purchaseOrders.prev_page_url" @click="loadPurchaseOrders(purchaseOrders.current_page - 1)">ก่อนหน้า</button>
+        <span>หน้า {{ purchaseOrders.current_page }} / {{ purchaseOrders.last_page }}</span>
+        <button class="secondary-button" :disabled="!purchaseOrders.next_page_url" @click="loadPurchaseOrders(purchaseOrders.current_page + 1)">ถัดไป</button>
+      </div></div>
     </section>
 
     <section v-else class="content-card section-gap">
@@ -133,3 +174,11 @@ onBeforeUnmount(() => {
 
   </AppShell>
 </template>
+
+<style scoped>
+.document-download-menu { min-width: 180px; }
+.document-download-menu summary { cursor: pointer; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; color: var(--brand); font-weight: 700; }
+.document-download-menu summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.document-download-options { display: grid; gap: 6px; padding-top: 8px; }
+.document-download-options button { text-align: left; }
+</style>

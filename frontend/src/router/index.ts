@@ -11,6 +11,7 @@ import CreditRequestStatusView from '../views/CreditRequestStatusView.vue'
 import DashboardView from '../views/DashboardView.vue'
 import DocumentCenterView from '../views/DocumentCenterView.vue'
 import EditBillView from '../views/EditBillView.vue'
+import FibroscanBookingView from '../views/FibroscanBookingView.vue'
 import LoginView from '../views/LoginView.vue'
 import ResetPasswordView from '../views/ResetPasswordView.vue'
 import MasterDataView from '../views/MasterDataView.vue'
@@ -37,6 +38,7 @@ const router = createRouter({
     { path: '/billing-records/my', name: 'my-billing-records', component: BillingRecordsView, props: { pageTitle: 'ประวัติการเปิดบิลของฉัน', ownerOnly: true }, meta: { requiresAuth: true, ability: 'my_billing_history' } },
     { path: '/credit-requests', name: 'credit-requests', component: CreditRequestStatusView, meta: { requiresAuth: true, ability: 'credit_request_status' } },
     { path: '/calendar', name: 'calendar', component: CalendarView, meta: { requiresAuth: true, ability: 'calendar' } },
+    { path: '/fibroscan-bookings', name: 'fibroscan-bookings', component: FibroscanBookingView, meta: { requiresAuth: true, ability: 'equipment_booking' } },
     { path: '/sales-call-report', name: 'sales-call-report', component: SalesCallReportView, meta: { requiresAuth: true, ability: 'sales_call_report' } },
     { path: '/dashboard', name: 'dashboard', component: DashboardView, meta: { requiresAuth: true, ability: 'dashboard_stats' } },
     { path: '/audit-logs', name: 'audit-logs', component: AuditLogsView, meta: { requiresAuth: true, ability: 'audit_logs' } },

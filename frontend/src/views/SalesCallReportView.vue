@@ -13,12 +13,20 @@ type DailyRow = Pick<SalesCallActivity, 'call_id' | 'place_of_work' | 'customer_
   status: string
 }
 
+type CustomOptionKey = 'specialties' | 'departments' | 'groups' | 'products'
+
+const customOptionLabels: Record<CustomOptionKey, string> = {
+  specialties: 'Specialty', departments: 'Department', groups: 'Group', products: 'Product-1',
+}
+
 const managerView = computed(() => ['approve', 'super_admin'].includes(auth.user.value?.role_group ?? ''))
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
 const notice = ref('')
 const options = ref<SalesCallOptions>({ sellers: [], seller_departments: [], specialties: [], departments: [], groups: [], products: [], objectives: [], outcomes: [], stages: [], statuses: [] })
+const customOptions = reactive<Record<CustomOptionKey, string[]>>({ specialties: [], departments: [], groups: [], products: [] })
+const customOptionEditor = reactive<{ field: CustomOptionKey | null; value: string }>({ field: null, value: '' })
 
 const selectedDate = ref(localDate(new Date()))
 const dailyRows = ref<DailyRow[]>([])
@@ -69,6 +77,77 @@ function blankRow(): DailyRow {
     product_1: '', objective: 'Awareness', call_detail_objective: '', outcome: 'No Call',
     call_detail_outcome: '', next_follow_up_date: null, notes: '', sm_comment: '', status: 'ทำงาน',
   }
+}
+
+function customOptionsStorageKey(): string {
+  return `valor-call-sale-options-v1:${auth.user.value?.id ?? 'anonymous'}`
+}
+
+function loadCustomOptions() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(customOptionsStorageKey()) || '{}') as Partial<Record<CustomOptionKey, unknown>>
+    ;(Object.keys(customOptions) as CustomOptionKey[]).forEach((field) => {
+      customOptions[field] = Array.isArray(saved[field])
+        ? saved[field].filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean).slice(0, 50)
+        : []
+    })
+  } catch {
+    ;(Object.keys(customOptions) as CustomOptionKey[]).forEach(field => { customOptions[field] = [] })
+  }
+}
+
+function persistCustomOptions() {
+  try {
+    localStorage.setItem(customOptionsStorageKey(), JSON.stringify(customOptions))
+  } catch {
+    error.value = 'Browser ไม่อนุญาตให้บันทึกตัวเลือกส่วนตัว กรุณาตรวจสอบการตั้งค่าเว็บไซต์หรือโหมดไม่ระบุตัวตน'
+  }
+}
+
+function optionValues(field: CustomOptionKey, currentValue = ''): string[] {
+  const values = [...options.value[field], ...customOptions[field], currentValue]
+  const unique = new Map<string, string>()
+  values.map(value => String(value || '').trim()).filter(Boolean).forEach((value) => {
+    const key = value.toLocaleLowerCase('th-TH')
+    if (!unique.has(key)) unique.set(key, value)
+  })
+  return [...unique.values()].sort((a, b) => a.localeCompare(b, 'th'))
+}
+
+function openCustomOptionEditor(field: CustomOptionKey) {
+  customOptionEditor.field = field
+  customOptionEditor.value = ''
+}
+
+function closeCustomOptionEditor() {
+  customOptionEditor.field = null
+  customOptionEditor.value = ''
+}
+
+function saveCustomOption() {
+  const field = customOptionEditor.field
+  const value = customOptionEditor.value.trim()
+  if (!field || !value) return
+  if (value.length > 100) { error.value = 'ตัวเลือกต้องมีความยาวไม่เกิน 100 ตัวอักษร'; return }
+  if (optionValues(field).some(item => item.toLocaleLowerCase('th-TH') === value.toLocaleLowerCase('th-TH'))) {
+    notice.value = `${value} มีอยู่ใน ${customOptionLabels[field]} แล้ว`
+    closeCustomOptionEditor()
+    return
+  }
+  if (customOptions[field].length >= 50) { error.value = `เพิ่มตัวเลือกส่วนตัวใน ${customOptionLabels[field]} ได้สูงสุด 50 รายการ`; return }
+  customOptions[field].push(value)
+  persistCustomOptions()
+  notice.value = `เพิ่ม ${value} ใน ${customOptionLabels[field]} แล้ว`
+  closeCustomOptionEditor()
+}
+
+function removeCustomOption(field: CustomOptionKey, value: string) {
+  customOptions[field] = customOptions[field].filter(item => item !== value)
+  persistCustomOptions()
+}
+
+function removeCurrentCustomOption(value: string) {
+  if (customOptionEditor.field) removeCustomOption(customOptionEditor.field, value)
 }
 
 function donutStyle(rows: Array<{ total: number }>, colors: string[]): Record<string, string> {
@@ -228,6 +307,7 @@ function apiMessage(cause: unknown, fallback: string): string {
 }
 
 onMounted(async () => {
+  loadCustomOptions()
   if (managerView.value) await loadReport()
   else await Promise.all([loadDay(), loadHistory()])
 })
@@ -252,13 +332,31 @@ onMounted(async () => {
           <div class="row-count">{{ dailyRows.length }} Call</div>
         </div>
 
+        <div v-if="customOptionEditor.field" class="custom-option-editor">
+          <div>
+            <strong>เพิ่มตัวเลือก {{ customOptionLabels[customOptionEditor.field] }}</strong>
+            <small>บันทึกเฉพาะบัญชีนี้ใน Browser เครื่องนี้ และค่าที่เลือกใน Call จะถูกส่งให้ Approve ตามปกติ</small>
+          </div>
+          <form @submit.prevent="saveCustomOption">
+            <input v-model.trim="customOptionEditor.value" maxlength="100" autofocus :placeholder="`กรอก ${customOptionLabels[customOptionEditor.field]} ใหม่`">
+            <button class="btn btn-primary" type="submit" :disabled="!customOptionEditor.value.trim()">เพิ่มใน Dropdown</button>
+            <button class="btn" type="button" @click="closeCustomOptionEditor">ปิด</button>
+          </form>
+          <div v-if="customOptions[customOptionEditor.field].length" class="custom-option-list">
+            <span v-for="item in customOptions[customOptionEditor.field]" :key="item">{{ item }}<button type="button" :aria-label="`ลบ ${item}`" @click="removeCurrentCustomOption(item)">×</button></span>
+          </div>
+        </div>
+
         <div v-if="loading" class="loading-box">กำลังโหลดตาราง...</div>
         <div v-else class="planner-scroll">
           <table class="planner-table">
             <thead>
               <tr>
                 <th class="col-no">Call No.</th><th class="col-date">Date</th><th>PLACE OF WORK</th><th>CUSTOMER NAME</th>
-                <th>SPECIALTY</th><th>DEPARTMENT</th><th>GROUP</th><th>PRODUCT-1</th><th>CALL OBJECTIVE</th>
+                <th><div class="planner-option-header"><span>SPECIALTY</span><button type="button" title="เพิ่ม Specialty ส่วนตัว" @click="openCustomOptionEditor('specialties')">＋</button></div></th>
+                <th><div class="planner-option-header"><span>DEPARTMENT</span><button type="button" title="เพิ่ม Department ส่วนตัว" @click="openCustomOptionEditor('departments')">＋</button></div></th>
+                <th><div class="planner-option-header"><span>GROUP</span><button type="button" title="เพิ่ม Group ส่วนตัว" @click="openCustomOptionEditor('groups')">＋</button></div></th>
+                <th><div class="planner-option-header"><span>PRODUCT-1</span><button type="button" title="เพิ่ม Product ส่วนตัว" @click="openCustomOptionEditor('products')">＋</button></div></th><th>CALL OBJECTIVE</th>
                 <th>CALL DETAIL (Obj)</th><th>CALL OUTCOME</th><th>CALL DETAIL (Out)</th><th>F/U DATE</th>
                 <th>NOTE</th><th>SM Comment</th><th>Status</th><th class="col-remove"></th>
               </tr>
@@ -269,10 +367,10 @@ onMounted(async () => {
                 <td class="locked col-date">{{ displayDate(selectedDate) }}</td>
                 <td><textarea v-model.trim="row.place_of_work" rows="2" placeholder="สถานที่ทำงาน"></textarea></td>
                 <td><textarea v-model.trim="row.customer_name" rows="2" placeholder="ชื่อลูกค้า"></textarea></td>
-                <td><select v-model="row.specialty"><option value="">เลือก</option><option v-for="item in options.specialties" :key="item">{{ item }}</option></select></td>
-                <td><select v-model="row.department"><option value="">เลือก</option><option v-for="item in options.departments" :key="item">{{ item }}</option></select></td>
-                <td><select v-model="row.customer_group"><option value="">เลือก</option><option v-for="item in options.groups" :key="item">{{ item }}</option></select></td>
-                <td><select v-model="row.product_1"><option value="">เลือก</option><option v-for="item in options.products" :key="item">{{ item }}</option></select></td>
+                <td><select v-model="row.specialty"><option value="">เลือก</option><option v-for="item in optionValues('specialties', row.specialty || '')" :key="item">{{ item }}</option></select></td>
+                <td><select v-model="row.department"><option value="">เลือก</option><option v-for="item in optionValues('departments', row.department || '')" :key="item">{{ item }}</option></select></td>
+                <td><select v-model="row.customer_group"><option value="">เลือก</option><option v-for="item in optionValues('groups', row.customer_group || '')" :key="item">{{ item }}</option></select></td>
+                <td><select v-model="row.product_1"><option value="">เลือก</option><option v-for="item in optionValues('products', row.product_1 || '')" :key="item">{{ item }}</option></select></td>
                 <td><select v-model="row.objective"><option v-for="item in options.objectives" :key="item">{{ item }}</option></select></td>
                 <td><textarea v-model.trim="row.call_detail_objective" rows="2" placeholder="รายละเอียดวัตถุประสงค์"></textarea></td>
                 <td><select v-model="row.outcome"><option v-for="item in options.outcomes" :key="item">{{ item }}</option></select></td>
@@ -429,5 +527,6 @@ onMounted(async () => {
 .sale-total-table td:not(:first-child),.sale-total-table th:not(:first-child){text-align:center}.seller-username{display:block;margin-top:3px;color:#64748b;font-size:.68rem}.number-total{color:#1d4ed8;font-weight:900}
 .department-bar{grid-template-columns:minmax(120px,180px) 1fr 50px 130px}.department-bar small{text-align:right;color:#64748b}
 .hospital-ranking-table td:first-child,.hospital-ranking-table th:first-child{text-align:center;width:62px}.rank-badge{display:inline-grid;place-items:center;min-width:30px;height:30px;border-radius:50%;background:#fff0f2;color:#b82032}.hospital-ranking-table tr:nth-child(1) .rank-badge{background:#fbbf24;color:#713f12}.hospital-ranking-table tr:nth-child(2) .rank-badge{background:#cbd5e1;color:#334155}.hospital-ranking-table tr:nth-child(3) .rank-badge{background:#d97706;color:#fff}
-@media(max-width:1000px){.filter-grid,.report-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){.planner-heading,.planner-footer{padding:16px}.planner-footer,.report-grid{display:grid;grid-template-columns:1fr}.day-switcher{margin:0;justify-content:center}.planner-actions .btn{flex:1}.filter-grid,.report-metrics{grid-template-columns:1fr}.export-actions .btn{flex:1}.objective-chart>div{grid-template-columns:90px 1fr 30px}.history-heading{display:grid}.history-filters{margin-top:12px}.donut-layout,.specialty-layout{grid-template-columns:1fr;justify-items:center}.chart-legend{width:100%}.bubble-chart svg{min-width:580px}.bubble-chart{overflow-x:auto}.section-heading{align-items:flex-start}}
+.planner-option-header{display:flex;align-items:center;justify-content:center;gap:7px}.planner-option-header button{width:22px;height:22px;padding:0;border:1px solid #ffffff80;border-radius:6px;background:#ffffff20;color:#fff;font-size:1rem;font-weight:900;line-height:1;cursor:pointer}.planner-option-header button:hover{background:#fff;color:#a91e2e}.custom-option-editor{padding:14px 20px;border-bottom:1px solid #efcbd0;background:#fff6f7}.custom-option-editor>div:first-child{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.custom-option-editor strong{color:#8f1827}.custom-option-editor small{color:#697386}.custom-option-editor form{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:8px;margin-top:10px}.custom-option-editor input{min-height:39px;border:1px solid #d7aeb4;border-radius:8px;padding:8px 10px;background:#fff}.custom-option-list{display:flex!important;align-items:center!important;gap:7px!important;margin-top:10px;flex-wrap:wrap}.custom-option-list>span{display:inline-flex;align-items:center;gap:5px;padding:5px 7px 5px 10px;border:1px solid #e7c3c8;border-radius:99px;background:#fff;color:#6f2630;font-size:.72rem}.custom-option-list button{width:18px;height:18px;padding:0;border:0;border-radius:50%;background:#f5dce0;color:#9f1c2c;cursor:pointer}
+@media(max-width:1000px){.filter-grid,.report-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){.planner-heading,.planner-footer{padding:16px}.planner-footer,.report-grid{display:grid;grid-template-columns:1fr}.day-switcher{margin:0;justify-content:center}.planner-actions .btn{flex:1}.filter-grid,.report-metrics{grid-template-columns:1fr}.export-actions .btn{flex:1}.objective-chart>div{grid-template-columns:90px 1fr 30px}.history-heading{display:grid}.history-filters{margin-top:12px}.donut-layout,.specialty-layout{grid-template-columns:1fr;justify-items:center}.chart-legend{width:100%}.bubble-chart svg{min-width:580px}.bubble-chart{overflow-x:auto}.section-heading{align-items:flex-start}.custom-option-editor form{grid-template-columns:1fr}.custom-option-editor form .btn{width:100%}}
 </style>

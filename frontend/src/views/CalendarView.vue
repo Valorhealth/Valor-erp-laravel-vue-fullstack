@@ -28,13 +28,57 @@ const monthTasks = computed(() => {
 const todayTasks = computed(() => tasks.value.filter((task) => task.start_date <= todayIso() && task.end_date >= todayIso()))
 const statusLegend = [{ label: 'รอดำเนินการ', color: '#f2b705' }, { label: 'กำลังดำเนินการ', color: '#2f80ed' }, { label: 'สำเร็จ', color: '#2eaf5f' }, { label: 'ยกเลิก', color: '#c94a4a' }]
 function localIso(date: Date) { return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}` }
-const calendarDays = computed(() => { const [year, mon] = month.value.split('-').map(Number); const first = new Date(year, mon-1, 1); const offset = (first.getDay()+6)%7; const start = new Date(year, mon-1, 1-offset); return Array.from({length:42},(_,index)=>{ const date = new Date(start); date.setDate(start.getDate()+index); const iso=localIso(date); return { iso, day: date.getDate(), current: date.getMonth()===mon-1, today: iso===todayIso(), tasks: tasks.value.filter((task)=>task.start_date<=iso&&task.end_date>=iso) } }) })
+const calendarDays = computed(() => {
+  const [year, mon] = month.value.split('-').map(Number)
+  const first = new Date(year, mon - 1, 1)
+  const offset = (first.getDay() + 6) % 7
+  const start = new Date(year, mon - 1, 1 - offset)
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start)
+    date.setDate(start.getDate() + index)
+    const iso = localIso(date)
+    const dayTasks = tasks.value.filter(task => task.start_date <= iso && task.end_date >= iso)
+    return { iso, day: date.getDate(), current: date.getMonth() === mon - 1, today: iso === todayIso(), tasks: dayTasks }
+  })
+})
+const taskCalendarWeeks = computed(() => Array.from({ length: 6 }, (_, weekIndex) => {
+  const days = calendarDays.value.slice(weekIndex * 7, weekIndex * 7 + 7)
+  const weekStart = days[0].iso
+  const weekEnd = days[6].iso
+  const tracks: number[] = []
+  const segments = tasks.value
+    .filter(task => task.start_date <= weekEnd && task.end_date >= weekStart)
+    .map((task) => {
+      const start = Math.max(0, days.findIndex(day => task.start_date <= day.iso && task.end_date >= day.iso))
+      let end = start
+      days.forEach((day, index) => { if (task.start_date <= day.iso && task.end_date >= day.iso) end = index })
+      return {
+        task,
+        start,
+        end,
+        continuesBefore: task.start_date < weekStart,
+        continuesAfter: task.end_date > weekEnd,
+        track: 0,
+      }
+    })
+    .sort((a, b) => a.start - b.start || b.end - a.end || a.task.task_id - b.task.task_id)
+
+  segments.forEach((segment) => {
+    const freeTrack = tracks.findIndex(lastDay => lastDay < segment.start)
+    segment.track = freeTrack >= 0 ? freeTrack : tracks.length
+    tracks[segment.track] = segment.end
+  })
+
+  return { days, segments, trackCount: tracks.length }
+}))
 const selectedDateTasks = computed(() => tasks.value.filter((task) => task.start_date <= selectedDate.value && task.end_date >= selectedDate.value))
 const weekDays = computed(() => { const current = new Date(`${selectedDate.value}T00:00:00`); const offset=(current.getDay()+6)%7; current.setDate(current.getDate()-offset); return Array.from({length:7},(_,index)=>{const date=new Date(current);date.setDate(current.getDate()+index);const iso=localIso(date);return {iso,day:date.getDate(),tasks:tasks.value.filter((task)=>task.start_date<=iso&&task.end_date>=iso)}}) })
 function selectDate(iso: string) { selectedDate.value=iso; form.start_date=iso; form.end_date=iso }
 function shiftMonth(delta: number) { const [year,mon]=month.value.split('-').map(Number); const date=new Date(year,mon-1+delta,1); month.value=localIso(date).slice(0,7); selectedDate.value=`${month.value}-01` }
 function goToday() { month.value=todayIso().slice(0,7); selectedDate.value=todayIso() }
 function progressTime(value: string) { return new Intl.DateTimeFormat('th-TH', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) }
+function taskTimelineStyle(segment: { start: number; end: number; track: number }) { return { gridColumn: `${segment.start + 1} / ${segment.end + 2}`, gridRow: segment.track + 1 } }
+function openTask(task: SalesTask) { selected.value = task; selectedDate.value = task.start_date }
 
 watch(selected, (task) => {
   progressStatus.value = task?.status || 'รอดำเนินการ'
@@ -76,7 +120,33 @@ onMounted(load)
     <div class="calendar-layout">
       <section class="content-card">
         <div class="calendar-toolbar"><div class="actions"><button class="secondary-button" @click="shiftMonth(-1)">‹</button><button class="secondary-button" @click="shiftMonth(1)">›</button><button class="secondary-button" @click="goToday">วันนี้</button></div><input v-model="month" type="month"><div class="calendar-modes"><button v-for="mode in ['month','week','day','list']" :key="mode" :class="{active:calendarMode===mode}" @click="calendarMode=mode as typeof calendarMode">{{ {month:'เดือน',week:'สัปดาห์',day:'วัน',list:'รายการ'}[mode] }}</button></div></div>
-        <template v-if="calendarMode==='month'"><div class="calendar-weekdays"><span v-for="name in ['จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์','อาทิตย์']" :key="name">{{ name }}</span></div><div class="month-grid"><button v-for="day in calendarDays" :key="day.iso" class="calendar-day" :class="{muted:!day.current,today:day.today,selected:day.iso===selectedDate}" @click="selectDate(day.iso)"><b>{{ day.day }}</b><span v-for="task in day.tasks.slice(0,3)" :key="task.task_id" :class="`calendar-event event--${task.status}`" :title="`มอบหมายโดย ${task.assigned_by}`" @click.stop="selected=task;selectDate(day.iso)">{{ task.priority!=='ปกติ'?'!':'' }}{{ task.assigned_to }} - {{ task.title }}</span><small v-if="day.tasks.length>3">+{{ day.tasks.length-3 }} งาน</small></button></div></template>
+        <template v-if="calendarMode==='month'">
+          <div class="calendar-weekdays"><span v-for="name in ['จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์','อาทิตย์']" :key="name">{{ name }}</span></div>
+          <div class="task-calendar-weeks">
+            <section v-for="(week, weekIndex) in taskCalendarWeeks" :key="weekIndex" class="task-calendar-week" :style="{ minHeight: `${Math.max(118, 40 + week.trackCount * 30)}px` }">
+              <div class="task-week-days">
+                <article v-for="day in week.days" :key="day.iso" type="button" class="task-calendar-day" :class="{ muted: !day.current, today: day.today, selected: day.iso === selectedDate }" @click="selectDate(day.iso)">
+                  <header><b>{{ day.day }}</b><small v-if="day.tasks.length">{{ day.tasks.length }} งาน</small></header>
+                </article>
+              </div>
+              <div class="task-week-events">
+                <button
+                  v-for="segment in week.segments"
+                  :key="`${weekIndex}-${segment.task.task_id}`"
+                  type="button"
+                  class="task-timeline-event"
+                  :class="[
+                    `task-timeline-event--${segment.task.status}`,
+                    { 'continues-before': segment.continuesBefore, 'continues-after': segment.continuesAfter },
+                  ]"
+                  :style="taskTimelineStyle(segment)"
+                  :title="`${segment.task.title} · มอบหมายให้ ${segment.task.assigned_to} โดย ${segment.task.assigned_by}`"
+                  @click="openTask(segment.task)"
+                ><strong>{{ segment.task.priority !== 'ปกติ' ? '!' : '' }} {{ segment.task.title }}</strong><span>{{ segment.task.assigned_to }}</span></button>
+              </div>
+            </section>
+          </div>
+        </template>
         <template v-else-if="calendarMode==='week'"><div class="week-grid"><section v-for="day in weekDays" :key="day.iso" :class="{today:day.iso===todayIso()}" @click="selectDate(day.iso)"><header>{{ shortDate(day.iso) }}</header><button v-for="task in day.tasks" :key="task.task_id" :class="`calendar-event event--${task.status}`" @click.stop="selected=task">{{ task.title }}<small>{{ task.assigned_to }} · โดย {{ task.assigned_by }}</small></button></section></div></template>
         <div v-else class="calendar-list"><div class="section-heading"><h2>{{ calendarMode==='day' ? `งานวันที่ ${shortDate(selectedDate)}` : 'รายการงานประจำเดือน' }}</h2><input v-if="calendarMode==='day'" v-model="selectedDate" type="date"></div><button v-for="task in (calendarMode==='day'?selectedDateTasks:monthTasks)" :key="task.task_id" class="task-card" :class="`task-card--${task.status}`" @click="selected=task"><span>{{ shortDate(task.start_date) }}{{task.end_date!==task.start_date?` – ${shortDate(task.end_date)}`:''}}</span><strong>{{task.title}}</strong><small>{{task.assigned_to}} · มอบหมายโดย {{ task.assigned_by }} · {{task.priority}} · {{task.all_day?'ทั้งวัน':`${task.start_time?.slice(0,5)}–${task.end_time?.slice(0,5)}`}}</small></button><p v-if="!(calendarMode==='day'?selectedDateTasks:monthTasks).length" class="empty-state">ไม่มีงานในช่วงนี้</p></div>
       </section>

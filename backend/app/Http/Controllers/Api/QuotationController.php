@@ -157,6 +157,7 @@ class QuotationController extends Controller
         $bytes = $documents->quotationPdf($quotation, $copy, $draft, $revised);
         $quotation->forceFill(['quotation_printed_at' => now(), 'quotation_printed_by' => $request->user()->username])->save();
         $filename = $documents->quotationDownloadName($quotation, $copy, $revised);
+        \App\Services\Documents\DocumentDownloadAudit::capture($request, $copy ? 'quotation_copy' : ($revised ? 'quotation_revised' : 'quotation_original'), $quotation, $draft);
 
         return response($bytes, 200, [
             'Content-Type' => 'application/pdf',
@@ -185,6 +186,7 @@ class QuotationController extends Controller
         $bytes = $documents->quotationPdf($quotation, draft: $draft, revised: true, itemNameOverrides: $itemNames);
         $quotation->forceFill(['quotation_printed_at' => now(), 'quotation_printed_by' => $request->user()->username])->save();
         $filename = $documents->quotationDownloadName($quotation, revised: true);
+        \App\Services\Documents\DocumentDownloadAudit::capture($request, 'quotation_custom_names', $quotation, $draft);
 
         return response($bytes, 200, [
             'Content-Type' => 'application/pdf',

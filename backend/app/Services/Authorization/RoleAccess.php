@@ -24,6 +24,7 @@ final class RoleAccess
             ['key' => 'credit_request_status', 'label' => 'ติดตามอนุมัติวงเงิน', 'path' => '/credit-requests', 'icon' => '💵'],
             ['key' => 'sales_call_report', 'label' => 'บันทึก Call Sale', 'path' => '/sales-call-report', 'icon' => '☎️'],
             ['key' => 'calendar', 'label' => 'ตารางงาน', 'path' => '/calendar', 'icon' => '📆'],
+            ['key' => 'equipment_booking', 'label' => 'ตารางจองเครื่อง FibroScan', 'path' => '/fibroscan-bookings', 'icon' => '🩺'],
         ],
         self::GROUP_APPROVE => [
             ['key' => 'dashboard_stats', 'label' => 'แดชบอร์ดสถิติ', 'path' => '/dashboard', 'icon' => '📊'],
@@ -33,7 +34,9 @@ final class RoleAccess
             ['key' => 'all_bills', 'label' => 'รายการบิลทั้งหมด', 'path' => '/billing-records/all', 'icon' => '▤'],
             ['key' => 'sales_call_report', 'label' => 'Call Sale Report', 'path' => '/sales-call-report', 'icon' => '📈'],
             ['key' => 'calendar', 'label' => 'ตารางงาน', 'path' => '/calendar', 'icon' => '📆'],
+            ['key' => 'equipment_booking', 'label' => 'ตารางจองเครื่อง FibroScan', 'path' => '/fibroscan-bookings', 'icon' => '🩺'],
             ['key' => 'budget_analysis', 'label' => 'วิเคราะห์งบประมาณ', 'path' => '/budget-analysis', 'icon' => '💱'],
+            ['key' => 'document_center', 'label' => 'ศูนย์จัดการเอกสาร', 'path' => '/document-center', 'icon' => '🧾'],
         ],
         self::GROUP_ADMIN => [
             ['key' => 'system_admin', 'label' => 'จัดการระบบส่วนกลาง', 'path' => '/system-admin', 'icon' => '🗂️'],
@@ -43,6 +46,7 @@ final class RoleAccess
             ['key' => 'document_center', 'label' => 'ศูนย์จัดการเอกสาร', 'path' => '/document-center', 'icon' => '🧾'],
             ['key' => 'all_bills', 'label' => 'รายการบิลทั้งหมด', 'path' => '/billing-records/all', 'icon' => '▤'],
             ['key' => 'calendar', 'label' => 'ตารางงาน', 'path' => '/calendar', 'icon' => '📆'],
+            ['key' => 'equipment_booking', 'label' => 'ตารางจองเครื่อง FibroScan', 'path' => '/fibroscan-bookings', 'icon' => '🩺'],
         ],
         self::GROUP_DEFAULT => [
             ['key' => 'create_bill', 'label' => 'เปิดบิลใหม่', 'path' => '/bills/new', 'icon' => '🌼'],
@@ -113,8 +117,9 @@ final class RoleAccess
             ...array_slice($admin, 0, 5),
             ...array_slice($approve, 0, 5),
             ['key' => 'audit_logs', 'label' => 'บันทึกกิจกรรมระบบ', 'path' => '/audit-logs', 'icon' => '▤'],
-            $approve[7],
+            $approve[8],
             $admin[6],
+            $admin[7],
         ];
     }
 
