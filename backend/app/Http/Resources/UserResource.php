@@ -11,7 +11,8 @@ class UserResource extends JsonResource
     /** @return array<string, mixed> */
     public function toArray(Request $request): array
     {
-        $roleAccess = RoleAccess::detailsForRole($this->role);
+        $roleAccess = RoleAccess::detailsForUser($this->resource);
+        $baseAccess = RoleAccess::detailsForRole($this->role);
 
         return [
             'id' => $this->id,
@@ -22,6 +23,9 @@ class UserResource extends JsonResource
             'department' => $this->department,
             'role' => $this->role,
             'quotation_signing_authorized' => (bool) $this->quotation_signing_authorized,
+            'has_signature' => (bool) ($this->has_signature ?? false),
+            'permission_overrides' => (object) ($this->permission_overrides ?? []),
+            'base_abilities' => $baseAccess['abilities'],
             ...$roleAccess,
         ];
     }

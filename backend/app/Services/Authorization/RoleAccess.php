@@ -2,6 +2,8 @@
 
 namespace App\Services\Authorization;
 
+use App\Models\User;
+
 final class RoleAccess
 {
     public const GROUP_SUPER_ADMIN = 'super_admin';
@@ -19,10 +21,10 @@ final class RoleAccess
         self::GROUP_SALE => [
             ['key' => 'create_bill', 'label' => 'สร้างใบเสนอราคา/เปิดบิลใหม่', 'path' => '/bills/new', 'icon' => '🌼'],
             ['key' => 'edit_bill', 'label' => 'แก้ไขบิล/Draft(ใบเสนอราคา)', 'path' => '/bills/edit', 'icon' => '🖊️'],
-            ['key' => 'sales_documents', 'label' => 'ใบเสนอราคา', 'path' => '/sales-documents', 'icon' => '🧾'],
+            ['key' => 'sales_documents', 'label' => 'ศูนย์จัดการเอกสาร', 'path' => '/sales-documents', 'icon' => '🧾'],
             ['key' => 'my_billing_history', 'label' => 'ประวัติการเปิดบิลของฉัน', 'path' => '/billing-records/my', 'icon' => '◷'],
             ['key' => 'credit_request_status', 'label' => 'ติดตามอนุมัติวงเงิน', 'path' => '/credit-requests', 'icon' => '💵'],
-            ['key' => 'sales_call_report', 'label' => 'บันทึก Call Sale', 'path' => '/sales-call-report', 'icon' => '☎️'],
+            ['key' => 'sales_call_entry', 'label' => 'บันทึก Call Sale', 'path' => '/sales-call-entry', 'icon' => '☎️'],
             ['key' => 'calendar', 'label' => 'ตารางงาน', 'path' => '/calendar', 'icon' => '📆'],
             ['key' => 'equipment_booking', 'label' => 'ตารางจองเครื่อง FibroScan', 'path' => '/fibroscan-bookings', 'icon' => '🩺'],
         ],
@@ -47,6 +49,7 @@ final class RoleAccess
             ['key' => 'all_bills', 'label' => 'รายการบิลทั้งหมด', 'path' => '/billing-records/all', 'icon' => '▤'],
             ['key' => 'calendar', 'label' => 'ตารางงาน', 'path' => '/calendar', 'icon' => '📆'],
             ['key' => 'equipment_booking', 'label' => 'ตารางจองเครื่อง FibroScan', 'path' => '/fibroscan-bookings', 'icon' => '🩺'],
+            ['key' => 'sales_call_report', 'label' => 'Call Sale Report', 'path' => '/sales-call-report', 'icon' => '📈'],
         ],
         self::GROUP_DEFAULT => [
             ['key' => 'create_bill', 'label' => 'เปิดบิลใหม่', 'path' => '/bills/new', 'icon' => '🌼'],
@@ -68,6 +71,77 @@ final class RoleAccess
             ])),
             'menu' => $menu,
         ];
+    }
+
+    /** @return array{role_group: string, abilities: array<int, string>, menu: array<int, array{key: string, label: string, path: string, icon: string}>} */
+    public static function detailsForUser(User $user): array
+    {
+        $details = self::detailsForRole($user->role);
+        if ($details['role_group'] === self::GROUP_SUPER_ADMIN) {
+            return $details;
+        }
+
+        $catalog = collect(self::permissionCatalog())->keyBy('key');
+        $menu = collect($details['menu'])->keyBy('key');
+        $abilities = collect($details['abilities'])->flip();
+
+        foreach ((array) ($user->permission_overrides ?? []) as $ability => $enabled) {
+            if (! is_bool($enabled) || ! $catalog->has($ability)) {
+                continue;
+            }
+
+            if ($enabled) {
+                $abilities->put($ability, true);
+                if (! $menu->has($ability)) {
+                    $item = $catalog->get($ability);
+                    $menu->put($ability, collect($item)->only(['key', 'label', 'path', 'icon'])->all());
+                }
+            } else {
+                $abilities->forget($ability);
+                $menu->forget($ability);
+            }
+        }
+
+        return [
+            'role_group' => $details['role_group'],
+            'abilities' => $abilities->keys()->values()->all(),
+            'menu' => $menu->values()->all(),
+        ];
+    }
+
+    /** @return array<int, array{key: string, label: string, path: string, icon: string, default_groups: array<int, string>, role_variants: array<string, array{label: string, path: string, icon: string}>}> */
+    public static function permissionCatalog(): array
+    {
+        $catalog = [];
+        foreach ([self::GROUP_SALE, self::GROUP_APPROVE, self::GROUP_ADMIN] as $group) {
+            foreach (self::MENUS[$group] as $item) {
+                if (! isset($catalog[$item['key']])) {
+                    $catalog[$item['key']] = [
+                        ...$item,
+                        'default_groups' => [$group],
+                        'role_variants' => [
+                            $group => collect($item)->only(['label', 'path', 'icon'])->all(),
+                        ],
+                    ];
+                } else {
+                    $catalog[$item['key']]['default_groups'][] = $group;
+                    $catalog[$item['key']]['role_variants'][$group] = collect($item)
+                        ->only(['label', 'path', 'icon'])
+                        ->all();
+                }
+            }
+        }
+
+        $catalog['audit_logs'] = [
+            'key' => 'audit_logs',
+            'label' => 'บันทึกกิจกรรมระบบ',
+            'path' => '/audit-logs',
+            'icon' => '▤',
+            'default_groups' => [],
+            'role_variants' => [],
+        ];
+
+        return array_values($catalog);
     }
 
     public static function groupForRole(?string $role): string
@@ -100,6 +174,13 @@ final class RoleAccess
         return count(array_intersect($allowed, $abilities)) > 0;
     }
 
+    public static function canUser(User $user, string ...$abilities): bool
+    {
+        $allowed = self::detailsForUser($user)['abilities'];
+
+        return count(array_intersect($allowed, $abilities)) > 0;
+    }
+
     /** @return array<int, array{key: string, label: string, path: string, icon: string}> */
     private static function menuForGroup(string $group): array
     {
@@ -113,6 +194,7 @@ final class RoleAccess
 
         return [
             ...array_slice($sale, 0, 5),
+            $sale[5],
             $approve[5],
             ...array_slice($admin, 0, 5),
             ...array_slice($approve, 0, 5),

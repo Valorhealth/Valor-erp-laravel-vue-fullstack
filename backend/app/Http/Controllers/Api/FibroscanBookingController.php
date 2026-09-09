@@ -184,7 +184,7 @@ class FibroscanBookingController extends Controller
     private function authorizeChange(Request $request, FibroscanBooking $booking): void
     {
         $ownsBooking = (int) $booking->booked_by_user_id === (int) $request->user()->id;
-        $managesAll = RoleAccess::can($request->user()->role, 'approve_bills', 'system_admin');
+        $managesAll = RoleAccess::canUser($request->user(), 'approve_bills', 'system_admin');
         abort_unless($ownsBooking || $managesAll, 403, 'แก้ไขได้เฉพาะรายการที่คุณเป็นผู้จอง');
     }
 
@@ -195,7 +195,7 @@ class FibroscanBookingController extends Controller
 
         return [
             ...$booking->toArray(),
-            'can_edit' => $ownsBooking || RoleAccess::can($request->user()->role, 'approve_bills', 'system_admin'),
+            'can_edit' => $ownsBooking || RoleAccess::canUser($request->user(), 'approve_bills', 'system_admin'),
         ];
     }
 

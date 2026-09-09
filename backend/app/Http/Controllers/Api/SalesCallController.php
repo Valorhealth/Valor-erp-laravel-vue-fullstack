@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\SalesCallActivity;
+use App\Services\Authorization\RoleAccess;
 use App\Services\SalesCalls\SalesCallReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -31,24 +32,37 @@ class SalesCallController extends Controller
     public function saveDay(Request $request, SalesCallReportService $reports): JsonResponse
     {
         $this->authorizeSale($request, $reports);
+        $date = $request->validate(['date' => ['required', 'date']])['date'];
+        $existingDayRows = SalesCallActivity::query()
+            ->where('seller_user_id', $request->user()->id)
+            ->whereDate('activity_date', $date)
+            ->get();
+        $allowed = fn (string $category, string $column): array => collect($reports->allowedOptions($category))
+            ->merge($existingDayRows->pluck($column))
+            ->map(fn (mixed $value): string => trim((string) $value))
+            ->filter()
+            ->unique(fn (string $value): string => mb_strtolower($value))
+            ->values()
+            ->all();
+
         $data = $request->validate([
             'date' => ['required', 'date'],
             'rows' => ['required', 'array', 'max:100'],
             'rows.*.call_id' => ['nullable', 'integer', 'distinct'],
             'rows.*.place_of_work' => ['nullable', 'string', 'max:500'],
             'rows.*.customer_name' => ['nullable', 'string', 'max:500'],
-            'rows.*.specialty' => ['nullable', 'string', 'max:255'],
-            'rows.*.department' => ['nullable', 'string', 'max:100'],
-            'rows.*.customer_group' => ['nullable', 'string', 'max:100'],
-            'rows.*.product_1' => ['nullable', 'string', 'max:100'],
-            'rows.*.objective' => ['required', Rule::in(SalesCallReportService::OBJECTIVES)],
+            'rows.*.specialty' => ['nullable', 'string', 'max:255', Rule::in($allowed('specialty', 'specialty'))],
+            'rows.*.department' => ['nullable', 'string', 'max:100', Rule::in($allowed('department', 'department'))],
+            'rows.*.customer_group' => ['nullable', 'string', 'max:100', Rule::in($allowed('group', 'customer_group'))],
+            'rows.*.product_1' => ['nullable', 'string', 'max:100', Rule::in($allowed('product', 'product_1'))],
+            'rows.*.objective' => ['required', Rule::in($allowed('objective', 'objective'))],
             'rows.*.call_detail_objective' => ['nullable', 'string', 'max:10000'],
-            'rows.*.outcome' => ['required', Rule::in(SalesCallReportService::OUTCOMES)],
+            'rows.*.outcome' => ['required', Rule::in($allowed('outcome', 'outcome'))],
             'rows.*.call_detail_outcome' => ['nullable', 'string', 'max:10000'],
             'rows.*.next_follow_up_date' => ['nullable', 'date'],
             'rows.*.notes' => ['nullable', 'string', 'max:10000'],
             'rows.*.sm_comment' => ['nullable', 'string', 'max:10000'],
-            'rows.*.status' => ['required', Rule::in(SalesCallReportService::STATUSES)],
+            'rows.*.status' => ['required', Rule::in($allowed('status', 'status'))],
         ]);
 
         $meaningfulRows = collect($data['rows'])->filter(fn (array $row): bool => collect([
@@ -137,7 +151,7 @@ class SalesCallController extends Controller
             'date_to' => ['required', 'date', 'after_or_equal:date_from'],
             'per_page' => ['nullable', 'integer', 'in:25,50,100'],
         ]);
-        $page = $reports->filteredQuery($request->user(), $filters)
+        $page = $reports->filteredQuery($request->user(), $filters, forceOwn: true)
             ->orderByDesc('activity_date')->orderBy('call_no')->orderByDesc('call_id')
             ->paginate($filters['per_page'] ?? 50)->withQueryString();
 
@@ -191,11 +205,11 @@ class SalesCallController extends Controller
             'products' => ['nullable', 'array'],
             'products.*' => ['string', 'max:100'],
             'outcomes' => ['nullable', 'array'],
-            'outcomes.*' => ['string', Rule::in(SalesCallReportService::OUTCOMES)],
+            'outcomes.*' => ['string', 'max:100'],
             'stages' => ['nullable', 'array'],
             'stages.*' => ['string', Rule::in(SalesCallReportService::STAGES)],
             'statuses' => ['nullable', 'array'],
-            'statuses.*' => ['string', Rule::in(SalesCallReportService::STATUSES)],
+            'statuses.*' => ['string', 'max:100'],
             'customer' => ['nullable', 'string', 'max:500'],
             'per_page' => ['nullable', 'integer', 'in:10,25,50,100'],
         ]);
@@ -203,12 +217,12 @@ class SalesCallController extends Controller
 
     private function authorizeManager(Request $request, SalesCallReportService $reports): void
     {
-        abort_unless($reports->canViewTeam($request->user()), 403, 'รายงาน Call Sale สำหรับ Approve และ Super Admin เท่านั้น');
+        abort_unless($reports->canViewTeam($request->user()), 403, 'บัญชีนี้ไม่มีสิทธิ์ดู Call Sale Report');
     }
 
     private function authorizeSale(Request $request, SalesCallReportService $reports): void
     {
-        abort_if($reports->canViewTeam($request->user()), 403, 'บัญชี Approve ใช้หน้ารายงาน Call Sale');
+        abort_unless(RoleAccess::canUser($request->user(), 'sales_call_entry'), 403, 'บัญชีนี้ไม่มีสิทธิ์บันทึก Call Sale');
     }
 
     private function nullableText(mixed $value): ?string

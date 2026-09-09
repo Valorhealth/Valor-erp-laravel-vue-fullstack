@@ -23,6 +23,7 @@ use App\Http\Controllers\Api\QuotationController;
 use App\Http\Controllers\Api\ReceiptOcrController;
 use App\Http\Controllers\Api\ReferenceDataController;
 use App\Http\Controllers\Api\SalesCallController;
+use App\Http\Controllers\Api\SalesCallLookupOptionController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\UserManagementController;
 use App\Http\Controllers\Api\UserSignatureController;
@@ -59,9 +60,12 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/sales-calls/dashboard', [SalesCallController::class, 'dashboard'])->middleware('ability:sales_call_report');
         Route::get('/sales-calls/export.xlsx', [SalesCallController::class, 'exportExcel'])->middleware('ability:sales_call_report');
         Route::get('/sales-calls/dashboard.pdf', [SalesCallController::class, 'exportDashboard'])->middleware('ability:sales_call_report');
-        Route::get('/sales-calls/history', [SalesCallController::class, 'history'])->middleware('ability:sales_call_report');
-        Route::get('/sales-calls/day', [SalesCallController::class, 'day'])->middleware('ability:sales_call_report');
-        Route::put('/sales-calls/day', [SalesCallController::class, 'saveDay'])->middleware('ability:sales_call_report');
+        Route::get('/sales-calls/history', [SalesCallController::class, 'history'])->middleware('ability:sales_call_entry');
+        Route::get('/sales-calls/day', [SalesCallController::class, 'day'])->middleware('ability:sales_call_entry');
+        Route::put('/sales-calls/day', [SalesCallController::class, 'saveDay'])->middleware('ability:sales_call_entry');
+        Route::get('/sales-call-options', [SalesCallLookupOptionController::class, 'index'])->middleware('ability:approve_bills,system_admin');
+        Route::post('/sales-call-options', [SalesCallLookupOptionController::class, 'store'])->middleware('ability:approve_bills,system_admin');
+        Route::put('/sales-call-options/{option}', [SalesCallLookupOptionController::class, 'update'])->middleware('ability:approve_bills,system_admin');
         Route::get('/billing-records', [BillingRecordController::class, 'index'])
             ->middleware('ability:my_billing_history,approved_bills,rejected_bills,all_bills,system_admin,document_center');
         Route::get('/catalog/customers', [CatalogController::class, 'customers'])->middleware('ability:master_data');
@@ -92,13 +96,13 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::put('/fibroscan-machines/{machine}', [FibroscanMachineController::class, 'update'])->middleware('ability:system_admin');
 
         Route::get('/credit-requests', [CreditRequestController::class, 'index'])
-            ->middleware('ability:credit_request_status,approve_bills,system_admin');
+            ->middleware('ability:credit_request_status,approve_bills,system_admin,sales_documents,document_center');
         Route::post('/credit-requests', [CreditRequestController::class, 'store'])->middleware('ability:create_bill,edit_bill');
         Route::post('/credit-requests/{creditRequest}/approve', [CreditRequestController::class, 'approve'])->middleware('ability:approve_bills');
         Route::post('/credit-requests/{creditRequest}/reject', [CreditRequestController::class, 'reject'])->middleware('ability:approve_bills');
         Route::post('/credit-requests/{creditRequest}/open', [CreditRequestController::class, 'open'])->middleware('ability:system_admin');
         Route::get('/credit-requests/{creditRequest}/documents/{document}', [CreditRequestController::class, 'document'])
-            ->middleware('ability:approve_bills,system_admin');
+            ->middleware('ability:approve_bills,system_admin,sales_documents,document_center');
 
         Route::get('/credit-profiles', [CreditProfileController::class, 'index'])->middleware('ability:credit_profiles,create_bill,edit_bill,system_admin');
         Route::post('/credit-profiles', [CreditProfileController::class, 'store'])->middleware('ability:credit_profiles');
@@ -148,6 +152,7 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::post('/master-data/products', [MasterDataController::class, 'storeProduct'])->middleware('ability:master_data');
 
         Route::get('/users', [UserManagementController::class, 'index'])->middleware('ability:user_management');
+        Route::get('/users/permission-catalog', [UserManagementController::class, 'permissionCatalog'])->middleware('ability:user_management');
         Route::post('/users', [UserManagementController::class, 'store'])->middleware('ability:user_management');
         Route::put('/users/{user}', [UserManagementController::class, 'update'])->middleware('ability:user_management');
         Route::post('/users/{user}/signature', [UserSignatureController::class, 'store'])->middleware('ability:user_management');

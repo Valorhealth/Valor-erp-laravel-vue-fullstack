@@ -16,6 +16,8 @@ export interface User {
   department: string | null
   role: string | null
   quotation_signing_authorized: boolean
+  permission_overrides?: Record<string, boolean>
+  base_abilities?: string[]
   role_group: RoleGroup
   abilities: string[]
   menu: MenuItem[]

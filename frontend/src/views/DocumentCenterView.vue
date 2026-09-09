@@ -4,14 +4,16 @@ import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import StatusPill from '../components/StatusPill.vue'
 import { auth } from '../stores/auth'
-import type { BillingRecord, Paginated, Quotation } from '../types/api'
+import type { BillingRecord, CreditRequest, Paginated, Quotation } from '../types/api'
 import { apiError, money, shortDate, todayIso } from '../utils/format'
 
-const tab = ref<'quotations' | 'bills' | 'purchase-orders'>('quotations')
+const tab = ref<'quotations' | 'bills' | 'purchase-orders' | 'credit-documents'>('quotations')
 const purchaseOrders = ref<Paginated<BillingRecord> | null>(null)
 const downloadingPo = ref<number | null>(null)
 const quotations = ref<Paginated<Quotation> | null>(null)
 const bills = ref<Paginated<BillingRecord> | null>(null)
+const creditRequests = ref<Paginated<CreditRequest> | null>(null)
+const downloadingCreditDocument = ref<number | null>(null)
 const search = ref('')
 const error = ref('')
 const message = ref('')
@@ -28,10 +30,27 @@ async function loadBills(page = 1) {
   const response = await api.get<Paginated<BillingRecord>>('/api/v1/billing-records', { params: { page, search: search.value || undefined, per_page: 25 } })
   bills.value = response.data
 }
+async function loadCreditRequests(page = 1) {
+  const response = await api.get<Paginated<CreditRequest>>('/api/v1/credit-requests', {
+    params: { page, search: search.value || undefined, per_page: 25 },
+  })
+  creditRequests.value = response.data
+}
 async function load() {
   error.value = ''
-  try { await Promise.all([loadQuotes(), loadBills(), loadPurchaseOrders()]) }
+  try { await Promise.all([loadQuotes(), loadBills(), loadPurchaseOrders(), loadCreditRequests()]) }
   catch (cause) { error.value = apiError(cause) }
+}
+async function downloadCreditDocument(request: CreditRequest, document: NonNullable<CreditRequest['documents']>[number]) {
+  downloadingCreditDocument.value = document.doc_id
+  error.value = ''
+  try {
+    await downloadFile(`/api/v1/credit-requests/${request.request_id}/documents/${document.doc_id}`, document.file_name)
+  } catch (cause) {
+    error.value = apiError(cause, 'ดาวน์โหลดเอกสารวงเงินไม่สำเร็จ')
+  } finally {
+    downloadingCreditDocument.value = null
+  }
 }
 async function loadPurchaseOrders(page = 1) {
   try {
@@ -114,6 +133,7 @@ onMounted(() => {
         loadQuotes(quotations.value?.current_page || 1),
         loadBills(bills.value?.current_page || 1),
         loadPurchaseOrders(purchaseOrders.value?.current_page || 1),
+        loadCreditRequests(creditRequests.value?.current_page || 1),
       ]).catch((cause) => { error.value = apiError(cause, 'อัปเดตสถานะเอกสารไม่สำเร็จ') })
     }
   }, 15_000)
@@ -124,10 +144,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <AppShell title="ศูนย์จัดการเอกสาร" subtitle="ดาวน์โหลดใบเสนอราคาและหลักฐาน PO ย้อนหลัง รวมถึงรายการที่อนุมัติและปิดงานแล้ว">
+  <AppShell title="ศูนย์จัดการเอกสาร" subtitle="ดาวน์โหลดใบเสนอราคา หลักฐาน PO และเอกสารประกอบการขอวงเงินย้อนหลัง">
     <div class="tabs"><button :class="{ active: tab === 'quotations' }" @click="tab = 'quotations'">ใบเสนอราคา</button>
     <!-- <button :class="{ active: tab === 'bills' }" @click="tab = 'bills'">ใบกำกับภาษี / ใบขนส่ง</button> -->
     <button :class="{ active: tab === 'purchase-orders' }" @click="tab = 'purchase-orders'">ประวัติ PO</button>
+    <button :class="{ active: tab === 'credit-documents' }" @click="tab = 'credit-documents'">เอกสารวงเงิน</button>
   </div>
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="message" class="success-message">{{ message }}</p>
@@ -157,6 +178,48 @@ onBeforeUnmount(() => {
         <button class="secondary-button" :disabled="!purchaseOrders.prev_page_url" @click="loadPurchaseOrders(purchaseOrders.current_page - 1)">ก่อนหน้า</button>
         <span>หน้า {{ purchaseOrders.current_page }} / {{ purchaseOrders.last_page }}</span>
         <button class="secondary-button" :disabled="!purchaseOrders.next_page_url" @click="loadPurchaseOrders(purchaseOrders.current_page + 1)">ถัดไป</button>
+      </div></div>
+    </section>
+
+    <section v-else-if="tab === 'credit-documents'" class="content-card section-gap">
+      <p>เอกสารประกอบคำขอเปิดหรือแก้ไขวงเงินทุกสถานะ โดย Sale จะเห็นเฉพาะคำขอของตนเอง</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>คำขอ</th><th>วันที่</th><th>ลูกค้า</th><th>Sale</th><th>วงเงินที่ขอ</th><th>Credit Term</th><th>สถานะ</th><th>เอกสาร</th></tr></thead>
+        <tbody>
+          <tr v-for="request in creditRequests?.data" :key="request.request_id">
+            <td class="strong">#{{ request.request_id }}</td>
+            <td>{{ shortDate(request.created_at) }}</td>
+            <td>{{ request.company_name }}</td>
+            <td>{{ request.created_by || '-' }}</td>
+            <td>{{ money(request.requested_credit_limit) }}</td>
+            <td>{{ request.requested_credit_term }} วัน</td>
+            <td><StatusPill :status="request.status" /></td>
+            <td>
+              <details v-if="request.documents?.length" class="document-download-menu">
+                <summary>ดาวน์โหลดเอกสาร ({{ request.documents.length }})</summary>
+                <div class="document-download-options">
+                  <button
+                    v-for="document in request.documents"
+                    :key="document.doc_id"
+                    type="button"
+                    class="secondary-button"
+                    :disabled="downloadingCreditDocument !== null"
+                    @click="downloadCreditDocument(request, document)"
+                  >
+                    {{ downloadingCreditDocument === document.doc_id ? 'กำลังดาวน์โหลด…' : document.doc_type }}
+                  </button>
+                </div>
+              </details>
+              <span v-else class="muted">ไม่มีเอกสารแนบ</span>
+            </td>
+          </tr>
+          <tr v-if="!creditRequests?.data.length"><td colspan="8" class="empty-cell">ไม่พบเอกสารวงเงินตามคำค้นหา</td></tr>
+        </tbody>
+      </table></div>
+      <div v-if="creditRequests" class="pagination"><span>ทั้งหมด {{ creditRequests.total }} รายการ</span><div>
+        <button class="secondary-button" :disabled="!creditRequests.prev_page_url" @click="loadCreditRequests(creditRequests.current_page - 1)">ก่อนหน้า</button>
+        <span>หน้า {{ creditRequests.current_page }} / {{ creditRequests.last_page }}</span>
+        <button class="secondary-button" :disabled="!creditRequests.next_page_url" @click="loadCreditRequests(creditRequests.current_page + 1)">ถัดไป</button>
       </div></div>
     </section>
 

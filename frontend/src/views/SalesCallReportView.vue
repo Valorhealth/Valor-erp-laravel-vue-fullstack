@@ -7,26 +7,49 @@ import { auth } from '../stores/auth'
 import type { Paginated, SalesCallActivity, SalesCallDashboard, SalesCallOptions } from '../types/api'
 import { money } from '../utils/format'
 
+const props = withDefaults(defineProps<{ mode?: 'entry' | 'report' }>(), { mode: 'entry' })
+
 type DailyRow = Pick<SalesCallActivity, 'call_id' | 'place_of_work' | 'customer_name' | 'specialty' | 'department' | 'customer_group' | 'product_1' | 'call_detail_objective' | 'call_detail_outcome' | 'next_follow_up_date' | 'notes' | 'sm_comment'> & {
   objective: string
   outcome: string
   status: string
 }
 
-type CustomOptionKey = 'specialties' | 'departments' | 'groups' | 'products'
-
-const customOptionLabels: Record<CustomOptionKey, string> = {
-  specialties: 'Specialty', departments: 'Department', groups: 'Group', products: 'Product-1',
+type OptionKey = 'specialties' | 'departments' | 'groups' | 'products' | 'objectives' | 'outcomes' | 'statuses'
+type LookupCategory = 'specialty' | 'department' | 'group' | 'product' | 'objective' | 'outcome' | 'status'
+type LookupOption = {
+  id: number
+  category: LookupCategory
+  label: string
+  is_active: boolean
+  sort_order: number
+  creator?: { username: string; first_name?: string | null; last_name?: string | null } | null
 }
 
-const managerView = computed(() => ['approve', 'super_admin'].includes(auth.user.value?.role_group ?? ''))
+const lookupCategories: Array<{ value: LookupCategory; key: OptionKey; label: string }> = [
+  { value: 'specialty', key: 'specialties', label: 'Specialty' },
+  { value: 'department', key: 'departments', label: 'Department' },
+  { value: 'group', key: 'groups', label: 'Group' },
+  { value: 'product', key: 'products', label: 'Product-1' },
+  { value: 'objective', key: 'objectives', label: 'Call Objective' },
+  { value: 'outcome', key: 'outcomes', label: 'Call Outcome' },
+  { value: 'status', key: 'statuses', label: 'Status' },
+]
+
+const managerView = computed(() => props.mode === 'report')
+const canManageLookupOptions = computed(() => auth.can('approve_bills') || auth.can('system_admin'))
 const loading = ref(true)
 const saving = ref(false)
+const lookupLoading = ref(false)
+const lookupSavingId = ref<number | 'new' | null>(null)
 const error = ref('')
 const notice = ref('')
 const options = ref<SalesCallOptions>({ sellers: [], seller_departments: [], specialties: [], departments: [], groups: [], products: [], objectives: [], outcomes: [], stages: [], statuses: [] })
-const customOptions = reactive<Record<CustomOptionKey, string[]>>({ specialties: [], departments: [], groups: [], products: [] })
-const customOptionEditor = reactive<{ field: CustomOptionKey | null; value: string }>({ field: null, value: '' })
+const lookupOptions = ref<LookupOption[]>([])
+const selectedLookupCategory = ref<LookupCategory>('specialty')
+const newLookupLabel = ref('')
+const dropdownModalOpen = ref(false)
+const selectedLookupRows = computed(() => lookupOptions.value.filter(item => item.category === selectedLookupCategory.value))
 
 const selectedDate = ref(localDate(new Date()))
 const dailyRows = ref<DailyRow[]>([])
@@ -74,80 +97,83 @@ const trendArea = computed(() => trendPoints.value.length ? `35,190 ${trendLine.
 function blankRow(): DailyRow {
   return {
     call_id: 0, place_of_work: '', customer_name: '', specialty: '', department: '', customer_group: '',
-    product_1: '', objective: 'Awareness', call_detail_objective: '', outcome: 'No Call',
-    call_detail_outcome: '', next_follow_up_date: null, notes: '', sm_comment: '', status: 'ทำงาน',
+    product_1: '', objective: options.value.objectives.includes('Awareness') ? 'Awareness' : (options.value.objectives[0] ?? 'Awareness'), call_detail_objective: '',
+    outcome: options.value.outcomes.includes('No Call') ? 'No Call' : (options.value.outcomes[0] ?? 'No Call'), call_detail_outcome: '',
+    next_follow_up_date: null, notes: '', sm_comment: '', status: options.value.statuses.includes('ทำงาน') ? 'ทำงาน' : (options.value.statuses[0] ?? 'ทำงาน'),
   }
 }
 
-function customOptionsStorageKey(): string {
-  return `valor-call-sale-options-v1:${auth.user.value?.id ?? 'anonymous'}`
-}
-
-function loadCustomOptions() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(customOptionsStorageKey()) || '{}') as Partial<Record<CustomOptionKey, unknown>>
-    ;(Object.keys(customOptions) as CustomOptionKey[]).forEach((field) => {
-      customOptions[field] = Array.isArray(saved[field])
-        ? saved[field].filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean).slice(0, 50)
-        : []
-    })
-  } catch {
-    ;(Object.keys(customOptions) as CustomOptionKey[]).forEach(field => { customOptions[field] = [] })
-  }
-}
-
-function persistCustomOptions() {
-  try {
-    localStorage.setItem(customOptionsStorageKey(), JSON.stringify(customOptions))
-  } catch {
-    error.value = 'Browser ไม่อนุญาตให้บันทึกตัวเลือกส่วนตัว กรุณาตรวจสอบการตั้งค่าเว็บไซต์หรือโหมดไม่ระบุตัวตน'
-  }
-}
-
-function optionValues(field: CustomOptionKey, currentValue = ''): string[] {
-  const values = [...options.value[field], ...customOptions[field], currentValue]
+function optionValues(field: OptionKey, currentValue = ''): string[] {
+  const values = [...options.value[field], currentValue]
   const unique = new Map<string, string>()
   values.map(value => String(value || '').trim()).filter(Boolean).forEach((value) => {
     const key = value.toLocaleLowerCase('th-TH')
     if (!unique.has(key)) unique.set(key, value)
   })
-  return [...unique.values()].sort((a, b) => a.localeCompare(b, 'th'))
+  return [...unique.values()]
 }
 
-function openCustomOptionEditor(field: CustomOptionKey) {
-  customOptionEditor.field = field
-  customOptionEditor.value = ''
+function syncActiveLookupOptions() {
+  lookupCategories.forEach(({ value, key }) => {
+    options.value[key] = lookupOptions.value
+      .filter(item => item.category === value && item.is_active)
+      .sort((a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label, 'th'))
+      .map(item => item.label)
+  })
 }
 
-function closeCustomOptionEditor() {
-  customOptionEditor.field = null
-  customOptionEditor.value = ''
-}
-
-function saveCustomOption() {
-  const field = customOptionEditor.field
-  const value = customOptionEditor.value.trim()
-  if (!field || !value) return
-  if (value.length > 100) { error.value = 'ตัวเลือกต้องมีความยาวไม่เกิน 100 ตัวอักษร'; return }
-  if (optionValues(field).some(item => item.toLocaleLowerCase('th-TH') === value.toLocaleLowerCase('th-TH'))) {
-    notice.value = `${value} มีอยู่ใน ${customOptionLabels[field]} แล้ว`
-    closeCustomOptionEditor()
-    return
+async function loadLookupOptions() {
+  lookupLoading.value = true
+  try {
+    const response = await api.get<{ data: LookupOption[] }>('/api/v1/sales-call-options')
+    lookupOptions.value = response.data.data
+    syncActiveLookupOptions()
+  } catch (cause) {
+    error.value = apiMessage(cause, 'โหลดรายการ Dropdown ส่วนกลางไม่สำเร็จ กรุณารัน sales_call_lookup_options.sql')
+  } finally {
+    lookupLoading.value = false
   }
-  if (customOptions[field].length >= 50) { error.value = `เพิ่มตัวเลือกส่วนตัวใน ${customOptionLabels[field]} ได้สูงสุด 50 รายการ`; return }
-  customOptions[field].push(value)
-  persistCustomOptions()
-  notice.value = `เพิ่ม ${value} ใน ${customOptionLabels[field]} แล้ว`
-  closeCustomOptionEditor()
 }
 
-function removeCustomOption(field: CustomOptionKey, value: string) {
-  customOptions[field] = customOptions[field].filter(item => item !== value)
-  persistCustomOptions()
+async function addLookupOption() {
+  const label = newLookupLabel.value.trim()
+  if (!label) return
+  lookupSavingId.value = 'new'
+  error.value = ''
+  notice.value = ''
+  try {
+    const response = await api.post<{ message: string }>('/api/v1/sales-call-options', {
+      category: selectedLookupCategory.value,
+      label,
+    })
+    newLookupLabel.value = ''
+    notice.value = response.data.message
+    await loadLookupOptions()
+  } catch (cause) {
+    error.value = apiMessage(cause, 'เพิ่มตัวเลือกไม่สำเร็จ')
+  } finally {
+    lookupSavingId.value = null
+  }
 }
 
-function removeCurrentCustomOption(value: string) {
-  if (customOptionEditor.field) removeCustomOption(customOptionEditor.field, value)
+async function saveLookupOption(option: LookupOption) {
+  lookupSavingId.value = option.id
+  error.value = ''
+  notice.value = ''
+  try {
+    const response = await api.put<{ message: string }>(`/api/v1/sales-call-options/${option.id}`, {
+      label: option.label,
+      is_active: option.is_active,
+      sort_order: option.sort_order,
+    })
+    notice.value = response.data.message
+    await loadLookupOptions()
+  } catch (cause) {
+    error.value = apiMessage(cause, 'บันทึกตัวเลือกไม่สำเร็จ')
+    await loadLookupOptions()
+  } finally {
+    lookupSavingId.value = null
+  }
 }
 
 function donutStyle(rows: Array<{ total: number }>, colors: string[]): Record<string, string> {
@@ -307,8 +333,7 @@ function apiMessage(cause: unknown, fallback: string): string {
 }
 
 onMounted(async () => {
-  loadCustomOptions()
-  if (managerView.value) await loadReport()
+  if (managerView.value) await Promise.all([loadReport(), ...(canManageLookupOptions.value ? [loadLookupOptions()] : [])])
   else await Promise.all([loadDay(), loadHistory()])
 })
 </script>
@@ -332,31 +357,13 @@ onMounted(async () => {
           <div class="row-count">{{ dailyRows.length }} Call</div>
         </div>
 
-        <div v-if="customOptionEditor.field" class="custom-option-editor">
-          <div>
-            <strong>เพิ่มตัวเลือก {{ customOptionLabels[customOptionEditor.field] }}</strong>
-            <small>บันทึกเฉพาะบัญชีนี้ใน Browser เครื่องนี้ และค่าที่เลือกใน Call จะถูกส่งให้ Approve ตามปกติ</small>
-          </div>
-          <form @submit.prevent="saveCustomOption">
-            <input v-model.trim="customOptionEditor.value" maxlength="100" autofocus :placeholder="`กรอก ${customOptionLabels[customOptionEditor.field]} ใหม่`">
-            <button class="btn btn-primary" type="submit" :disabled="!customOptionEditor.value.trim()">เพิ่มใน Dropdown</button>
-            <button class="btn" type="button" @click="closeCustomOptionEditor">ปิด</button>
-          </form>
-          <div v-if="customOptions[customOptionEditor.field].length" class="custom-option-list">
-            <span v-for="item in customOptions[customOptionEditor.field]" :key="item">{{ item }}<button type="button" :aria-label="`ลบ ${item}`" @click="removeCurrentCustomOption(item)">×</button></span>
-          </div>
-        </div>
-
         <div v-if="loading" class="loading-box">กำลังโหลดตาราง...</div>
         <div v-else class="planner-scroll">
           <table class="planner-table">
             <thead>
               <tr>
                 <th class="col-no">Call No.</th><th class="col-date">Date</th><th>PLACE OF WORK</th><th>CUSTOMER NAME</th>
-                <th><div class="planner-option-header"><span>SPECIALTY</span><button type="button" title="เพิ่ม Specialty ส่วนตัว" @click="openCustomOptionEditor('specialties')">＋</button></div></th>
-                <th><div class="planner-option-header"><span>DEPARTMENT</span><button type="button" title="เพิ่ม Department ส่วนตัว" @click="openCustomOptionEditor('departments')">＋</button></div></th>
-                <th><div class="planner-option-header"><span>GROUP</span><button type="button" title="เพิ่ม Group ส่วนตัว" @click="openCustomOptionEditor('groups')">＋</button></div></th>
-                <th><div class="planner-option-header"><span>PRODUCT-1</span><button type="button" title="เพิ่ม Product ส่วนตัว" @click="openCustomOptionEditor('products')">＋</button></div></th><th>CALL OBJECTIVE</th>
+                <th>SPECIALTY</th><th>DEPARTMENT</th><th>GROUP</th><th>PRODUCT-1</th><th>CALL OBJECTIVE</th>
                 <th>CALL DETAIL (Obj)</th><th>CALL OUTCOME</th><th>CALL DETAIL (Out)</th><th>F/U DATE</th>
                 <th>NOTE</th><th>SM Comment</th><th>Status</th><th class="col-remove"></th>
               </tr>
@@ -371,14 +378,14 @@ onMounted(async () => {
                 <td><select v-model="row.department"><option value="">เลือก</option><option v-for="item in optionValues('departments', row.department || '')" :key="item">{{ item }}</option></select></td>
                 <td><select v-model="row.customer_group"><option value="">เลือก</option><option v-for="item in optionValues('groups', row.customer_group || '')" :key="item">{{ item }}</option></select></td>
                 <td><select v-model="row.product_1"><option value="">เลือก</option><option v-for="item in optionValues('products', row.product_1 || '')" :key="item">{{ item }}</option></select></td>
-                <td><select v-model="row.objective"><option v-for="item in options.objectives" :key="item">{{ item }}</option></select></td>
+                <td><select v-model="row.objective"><option v-for="item in optionValues('objectives', row.objective)" :key="item">{{ item }}</option></select></td>
                 <td><textarea v-model.trim="row.call_detail_objective" rows="2" placeholder="รายละเอียดวัตถุประสงค์"></textarea></td>
-                <td><select v-model="row.outcome"><option v-for="item in options.outcomes" :key="item">{{ item }}</option></select></td>
+                <td><select v-model="row.outcome"><option v-for="item in optionValues('outcomes', row.outcome)" :key="item">{{ item }}</option></select></td>
                 <td><textarea v-model.trim="row.call_detail_outcome" rows="2" placeholder="รายละเอียดผลลัพธ์"></textarea></td>
                 <td><input v-model="row.next_follow_up_date" type="date"></td>
                 <td><textarea v-model.trim="row.notes" rows="2" placeholder="หมายเหตุ"></textarea></td>
                 <td><textarea v-model.trim="row.sm_comment" rows="2" placeholder="SM Comment"></textarea></td>
-                <td><select v-model="row.status"><option v-for="item in options.statuses" :key="item">{{ item }}</option></select></td>
+                <td><select v-model="row.status"><option v-for="item in optionValues('statuses', row.status)" :key="item">{{ item }}</option></select></td>
                 <td class="col-remove"><button class="remove-row" type="button" title="ลบแถว" @click="removeRow(index)">×</button></td>
               </tr>
             </tbody>
@@ -431,7 +438,7 @@ onMounted(async () => {
       <section class="content-card">
         <div class="section-heading">
           <div><p class="eyebrow">REPORT FILTERS</p><h2>ตัวกรองรายงานทีมขาย</h2></div>
-          <div class="export-actions"><button class="btn" @click="downloadFile(exportUrl('/api/v1/sales-calls/export.xlsx'), 'Call_Sale_Report.xlsx')">Export Excel + Raw Data</button><button class="btn btn-primary" @click="downloadFile(exportUrl('/api/v1/sales-calls/dashboard.pdf'), 'Call_Sale_Dashboard.pdf')">Export Dashboard PDF</button></div>
+          <div class="export-actions"><button v-if="canManageLookupOptions" class="btn" type="button" @click="dropdownModalOpen = true">⚙ จัดการ Dropdown</button><button class="btn" @click="downloadFile(exportUrl('/api/v1/sales-calls/export.xlsx'), 'Call_Sale_Report.xlsx')">Export Excel + Raw Data</button><button class="btn btn-primary" @click="downloadFile(exportUrl('/api/v1/sales-calls/dashboard.pdf'), 'Call_Sale_Dashboard.pdf')">Export Dashboard PDF</button></div>
         </div>
         <div class="filter-grid">
           <label>Sale (เลือกได้หลายคน)<select v-model="filters.seller_ids" multiple><option v-for="seller in options.sellers" :key="seller.id" :value="seller.id">{{ [seller.first_name, seller.last_name].filter(Boolean).join(' ') || seller.username }}</option></select></label>
@@ -445,6 +452,58 @@ onMounted(async () => {
         </div>
         <div class="filter-actions"><button class="btn btn-primary" @click="loadReport()">ใช้ตัวกรอง</button><small class="muted">กด Ctrl ค้างเพื่อเลือกหลายรายการ</small></div>
       </section>
+
+      <Teleport to="body">
+      <div v-if="dropdownModalOpen" class="lookup-modal-backdrop" role="presentation" @click.self="dropdownModalOpen = false" @keydown.esc="dropdownModalOpen = false">
+      <section class="lookup-modal" role="dialog" aria-modal="true" aria-labelledby="lookup-modal-title">
+        <div class="section-heading lookup-modal-header">
+          <div>
+            <p class="eyebrow">CALL SALE MASTER OPTIONS</p>
+            <h2 id="lookup-modal-title">จัดการ Dropdown ส่วนกลาง</h2>
+            <p class="muted">รายการที่เปิดใช้งานจะเหมือนกันสำหรับ Sale ทุกคน การปิดใช้งานไม่ลบข้อมูล Call เดิม</p>
+          </div>
+          <button class="lookup-modal-close" type="button" aria-label="ปิดหน้าต่างจัดการ Dropdown" @click="dropdownModalOpen = false">×</button>
+        </div>
+
+        <div class="lookup-tabs" role="tablist" aria-label="หมวด Dropdown">
+          <button
+            v-for="category in lookupCategories"
+            :key="category.value"
+            type="button"
+            :class="{ active: selectedLookupCategory === category.value }"
+            @click="selectedLookupCategory = category.value"
+          >{{ category.label }}</button>
+        </div>
+
+        <form class="lookup-add" @submit.prevent="addLookupOption">
+          <label>
+            เพิ่มรายการใน {{ lookupCategories.find(item => item.value === selectedLookupCategory)?.label }}
+            <input v-model.trim="newLookupLabel" maxlength="255" placeholder="กรอกชื่อตัวเลือกใหม่">
+          </label>
+          <button class="btn btn-primary" type="submit" :disabled="lookupSavingId !== null || !newLookupLabel.trim()">
+            {{ lookupSavingId === 'new' ? 'กำลังเพิ่ม...' : '＋ เพิ่มตัวเลือก' }}
+          </button>
+        </form>
+
+        <div v-if="lookupLoading" class="loading-box">กำลังโหลดตัวเลือก...</div>
+        <div v-else class="lookup-table-wrap">
+          <table class="lookup-table">
+            <thead><tr><th>ลำดับ</th><th>ชื่อตัวเลือก</th><th>สถานะ</th><th>ผู้เพิ่ม</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="option in selectedLookupRows" :key="option.id" :class="{ inactive: !option.is_active }">
+                <td><input v-model.number="option.sort_order" class="sort-input" type="number" min="0" max="100000"></td>
+                <td><input v-model.trim="option.label" maxlength="255"></td>
+                <td><label class="active-toggle"><input v-model="option.is_active" type="checkbox"><span>{{ option.is_active ? 'เปิดใช้งาน' : 'ปิดใช้งาน' }}</span></label></td>
+                <td>{{ option.creator?.username || 'ข้อมูลเริ่มต้น' }}</td>
+                <td><button class="btn" type="button" :disabled="lookupSavingId !== null || !option.label.trim()" @click="saveLookupOption(option)">{{ lookupSavingId === option.id ? 'กำลังบันทึก...' : 'บันทึก' }}</button></td>
+              </tr>
+              <tr v-if="!selectedLookupRows.length"><td colspan="5" class="empty-cell">ยังไม่มีตัวเลือกในหมวดนี้</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      </div>
+      </Teleport>
 
       <template v-if="dashboard && !loading">
         <div class="report-metrics section-gap">
@@ -527,6 +586,6 @@ onMounted(async () => {
 .sale-total-table td:not(:first-child),.sale-total-table th:not(:first-child){text-align:center}.seller-username{display:block;margin-top:3px;color:#64748b;font-size:.68rem}.number-total{color:#1d4ed8;font-weight:900}
 .department-bar{grid-template-columns:minmax(120px,180px) 1fr 50px 130px}.department-bar small{text-align:right;color:#64748b}
 .hospital-ranking-table td:first-child,.hospital-ranking-table th:first-child{text-align:center;width:62px}.rank-badge{display:inline-grid;place-items:center;min-width:30px;height:30px;border-radius:50%;background:#fff0f2;color:#b82032}.hospital-ranking-table tr:nth-child(1) .rank-badge{background:#fbbf24;color:#713f12}.hospital-ranking-table tr:nth-child(2) .rank-badge{background:#cbd5e1;color:#334155}.hospital-ranking-table tr:nth-child(3) .rank-badge{background:#d97706;color:#fff}
-.planner-option-header{display:flex;align-items:center;justify-content:center;gap:7px}.planner-option-header button{width:22px;height:22px;padding:0;border:1px solid #ffffff80;border-radius:6px;background:#ffffff20;color:#fff;font-size:1rem;font-weight:900;line-height:1;cursor:pointer}.planner-option-header button:hover{background:#fff;color:#a91e2e}.custom-option-editor{padding:14px 20px;border-bottom:1px solid #efcbd0;background:#fff6f7}.custom-option-editor>div:first-child{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.custom-option-editor strong{color:#8f1827}.custom-option-editor small{color:#697386}.custom-option-editor form{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:8px;margin-top:10px}.custom-option-editor input{min-height:39px;border:1px solid #d7aeb4;border-radius:8px;padding:8px 10px;background:#fff}.custom-option-list{display:flex!important;align-items:center!important;gap:7px!important;margin-top:10px;flex-wrap:wrap}.custom-option-list>span{display:inline-flex;align-items:center;gap:5px;padding:5px 7px 5px 10px;border:1px solid #e7c3c8;border-radius:99px;background:#fff;color:#6f2630;font-size:.72rem}.custom-option-list button{width:18px;height:18px;padding:0;border:0;border-radius:50%;background:#f5dce0;color:#9f1c2c;cursor:pointer}
-@media(max-width:1000px){.filter-grid,.report-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){.planner-heading,.planner-footer{padding:16px}.planner-footer,.report-grid{display:grid;grid-template-columns:1fr}.day-switcher{margin:0;justify-content:center}.planner-actions .btn{flex:1}.filter-grid,.report-metrics{grid-template-columns:1fr}.export-actions .btn{flex:1}.objective-chart>div{grid-template-columns:90px 1fr 30px}.history-heading{display:grid}.history-filters{margin-top:12px}.donut-layout,.specialty-layout{grid-template-columns:1fr;justify-items:center}.chart-legend{width:100%}.bubble-chart svg{min-width:580px}.bubble-chart{overflow-x:auto}.section-heading{align-items:flex-start}.custom-option-editor form{grid-template-columns:1fr}.custom-option-editor form .btn{width:100%}}
+.lookup-modal-backdrop{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;padding:24px;background:#11182799;backdrop-filter:blur(3px)}.lookup-modal{display:flex;flex-direction:column;width:min(960px,100%);max-height:calc(100vh - 48px);padding:22px;border-radius:16px;background:#fff;box-shadow:0 24px 70px #11182755;overflow:hidden}.lookup-modal-header{flex-shrink:0;margin:0 0 15px}.lookup-modal-close{width:38px;height:38px;flex-shrink:0;border:0;border-radius:10px;background:#f3f4f6;color:#475569;font-size:1.6rem;line-height:1;cursor:pointer}.lookup-modal-close:hover{background:#fee2e2;color:#991b1b}.lookup-tabs{display:flex;flex-shrink:0;gap:7px;overflow-x:auto;padding:2px 0 13px;border-bottom:1px solid #e7e9ed}.lookup-tabs button{border:1px solid #d7dbe2;border-radius:99px;background:#fff;color:#475569;padding:7px 12px;white-space:nowrap;cursor:pointer}.lookup-tabs button.active{border-color:#b82032;background:#b82032;color:#fff}.lookup-add{display:grid;grid-template-columns:minmax(240px,1fr) auto;flex-shrink:0;gap:10px;align-items:end;padding:15px 0}.lookup-add label{display:grid;gap:6px;font-size:.8rem;font-weight:700}.lookup-add input,.lookup-table input{width:100%;border:1px solid #d5d9e0;border-radius:8px;padding:8px 10px;background:#fff;color:#172033}.lookup-table-wrap{min-height:0;overflow:auto;border:1px solid #e2e5ea;border-radius:10px}.lookup-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.8rem}.lookup-table th{position:sticky;top:0;z-index:2;background:#263142;color:#fff;text-align:left;padding:9px 10px;white-space:nowrap}.lookup-table td{padding:8px 10px;border-bottom:1px solid #e7e9ed;vertical-align:middle}.lookup-table tbody tr:nth-child(even){background:#f8fafc}.lookup-table tr.inactive{background:#f5f5f5;color:#8a93a2}.lookup-table .sort-input{width:85px}.active-toggle{display:flex;align-items:center;gap:7px;white-space:nowrap}.active-toggle input{width:17px;height:17px;accent-color:#b82032}
+@media(max-width:1000px){.filter-grid,.report-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){.planner-heading,.planner-footer{padding:16px}.planner-footer,.report-grid{display:grid;grid-template-columns:1fr}.day-switcher{margin:0;justify-content:center}.planner-actions .btn{flex:1}.filter-grid,.report-metrics{grid-template-columns:1fr}.export-actions .btn{flex:1}.objective-chart>div{grid-template-columns:90px 1fr 30px}.history-heading{display:grid}.history-filters{margin-top:12px}.donut-layout,.specialty-layout{grid-template-columns:1fr;justify-items:center}.chart-legend{width:100%}.bubble-chart svg{min-width:580px}.bubble-chart{overflow-x:auto}.section-heading{align-items:flex-start}.lookup-modal-backdrop{padding:10px}.lookup-modal{max-height:calc(100vh - 20px);padding:16px}.lookup-add{grid-template-columns:1fr}.lookup-add .btn{width:100%}}
 </style>

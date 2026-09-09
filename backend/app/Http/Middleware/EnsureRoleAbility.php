@@ -14,7 +14,7 @@ class EnsureRoleAbility
         $user = $request->user();
 
         abort_unless(
-            $user !== null && RoleAccess::can($user->role, ...$abilities),
+            $user !== null && RoleAccess::canUser($user, ...$abilities),
             Response::HTTP_FORBIDDEN,
             'บัญชีนี้ไม่มีสิทธิ์ใช้งานส่วนนี้',
         );

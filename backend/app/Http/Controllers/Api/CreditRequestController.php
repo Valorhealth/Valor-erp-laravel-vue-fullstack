@@ -18,7 +18,17 @@ class CreditRequestController extends Controller
     {
         $group = RoleAccess::groupForRole($request->user()->role);
         $baseQuery = CreditRequest::query()
-            ->when(in_array($group, [RoleAccess::GROUP_SALE, RoleAccess::GROUP_DEFAULT], true), fn ($query) => $query->where('created_by', $request->user()->username));
+            ->when(in_array($group, [RoleAccess::GROUP_SALE, RoleAccess::GROUP_DEFAULT], true), fn ($query) => $query->where('created_by', $request->user()->username))
+            ->when($request->filled('search'), function ($query) use ($request): void {
+                $search = '%'.str_replace(['%', '_'], ['\\%', '\\_'], trim($request->string('search')->toString())).'%';
+
+                $query->where(function ($query) use ($search): void {
+                    $query->where('company_name', 'ilike', $search)
+                        ->orWhere('tax_id', 'ilike', $search)
+                        ->orWhere('ar_code', 'ilike', $search)
+                        ->orWhere('created_by', 'ilike', $search);
+                });
+            });
         $statusSummary = (clone $baseQuery)
             ->selectRaw('status, COUNT(*) AS total')
             ->groupBy('status')
@@ -152,8 +162,13 @@ class CreditRequestController extends Controller
         return response()->json(['data' => $creditRequest]);
     }
 
-    public function document(CreditRequest $creditRequest, int $document): mixed
+    public function document(Request $request, CreditRequest $creditRequest, int $document): mixed
     {
+        $group = RoleAccess::groupForRole($request->user()->role);
+        if (in_array($group, [RoleAccess::GROUP_SALE, RoleAccess::GROUP_DEFAULT], true)) {
+            abort_unless($creditRequest->created_by === $request->user()->username, 403, 'ไม่มีสิทธิ์ดาวน์โหลดเอกสารของคำขอนี้');
+        }
+
         $row = DB::selectOne("SELECT file_name, mime_type, encode(file_bytes, 'base64') AS encoded FROM credit_request_documents WHERE request_id = ? AND doc_id = ?", [$creditRequest->request_id, $document]);
         abort_unless($row, 404);
 

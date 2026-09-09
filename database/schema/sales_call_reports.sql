@@ -73,13 +73,8 @@ ALTER TABLE sales_call_activities
     DROP CONSTRAINT IF EXISTS sales_call_activities_outcome_check,
     DROP CONSTRAINT IF EXISTS sales_call_activities_status_check;
 
-ALTER TABLE sales_call_activities
-    ADD CONSTRAINT sales_call_activities_objective_check
-        CHECK (objective IN ('Awareness', 'Trial', 'Sales', 'Usage', 'List', 'Event', 'Others')),
-    ADD CONSTRAINT sales_call_activities_outcome_check
-        CHECK (outcome IN ('Success', 'Failure', 'No Call')),
-    ADD CONSTRAINT sales_call_activities_status_check
-        CHECK (status IN ('ทำงาน', 'ลา', 'วันหยุดบริษัท'));
+-- ค่า objective, outcome และ status จัดการจาก sales_call_lookup_options
+-- จึงไม่ใช้ CHECK แบบรายการตายตัวซึ่งจะขัดขวางตัวเลือกใหม่จากหน้าเว็บ
 
 CREATE UNIQUE INDEX IF NOT EXISTS sales_call_activities_daily_no_unique
     ON sales_call_activities (seller_user_id, activity_date, call_no);

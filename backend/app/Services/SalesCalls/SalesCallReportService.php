@@ -3,11 +3,13 @@
 namespace App\Services\SalesCalls;
 
 use App\Models\SalesCallActivity;
+use App\Models\SalesCallLookupOption;
 use App\Models\User;
 use App\Services\Authorization\RoleAccess;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Schema;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
@@ -17,6 +19,9 @@ use RuntimeException;
 
 final class SalesCallReportService
 {
+    /** @var array<string, array<int, string>>|null */
+    private ?array $activeLookupCache = null;
+
     public const SPECIALTIES = [
         'Internal Medicine', 'Surgery', 'Pediatric', 'Anesthesiologist', 'Radiologist/X-ray',
         'Radio Intervention', 'Family Physician', 'ENT', 'Rehabilitation Medicine', 'Physiotherapist',
@@ -41,11 +46,22 @@ final class SalesCallReportService
 
     public const STATUSES = ['ทำงาน', 'ลา', 'วันหยุดบริษัท'];
 
+    /** @var array<string, array<int, string>> */
+    private const LOOKUP_DEFAULTS = [
+        'specialty' => self::SPECIALTIES,
+        'department' => self::DEPARTMENTS,
+        'group' => self::GROUPS,
+        'product' => self::PRODUCTS,
+        'objective' => self::OBJECTIVES,
+        'outcome' => self::OUTCOMES,
+        'status' => self::STATUSES,
+    ];
+
     /** @param array<string, mixed> $filters */
-    public function filteredQuery(User $actor, array $filters): Builder
+    public function filteredQuery(User $actor, array $filters, bool $forceOwn = false): Builder
     {
         $query = SalesCallActivity::query()->with('seller:id,username,first_name,last_name,department');
-        $manager = $this->canViewTeam($actor);
+        $manager = ! $forceOwn && $this->canViewTeam($actor);
 
         if (! $manager) {
             $query->where('seller_user_id', $actor->id);
@@ -149,18 +165,59 @@ final class SalesCallReportService
         $savedOptions = SalesCallActivity::query()
             ->when(! $manager, fn (Builder $query) => $query->where('seller_user_id', $actor->id));
 
+        $specialties = $this->allowedOptions('specialty');
+        $departments = $this->allowedOptions('department');
+        $groups = $this->allowedOptions('group');
+        $products = $this->allowedOptions('product');
+        $objectives = $this->allowedOptions('objective');
+        $outcomes = $this->allowedOptions('outcome');
+        $statuses = $this->allowedOptions('status');
+
         return [
             'sellers' => $sellers->values(),
             'seller_departments' => $sellers->pluck('department')->filter()->unique()->sort()->values(),
-            'specialties' => $this->mergeSavedOptions($savedOptions, 'specialty', self::SPECIALTIES),
-            'departments' => $this->mergeSavedOptions($savedOptions, 'department', self::DEPARTMENTS),
-            'groups' => $this->mergeSavedOptions($savedOptions, 'customer_group', self::GROUPS),
-            'products' => $this->mergeSavedOptions($savedOptions, 'product_1', self::PRODUCTS),
-            'objectives' => self::OBJECTIVES,
-            'outcomes' => self::OUTCOMES,
+            'specialties' => $manager ? $this->mergeSavedOptions($savedOptions, 'specialty', $specialties) : $specialties,
+            'departments' => $manager ? $this->mergeSavedOptions($savedOptions, 'department', $departments) : $departments,
+            'groups' => $manager ? $this->mergeSavedOptions($savedOptions, 'customer_group', $groups) : $groups,
+            'products' => $manager ? $this->mergeSavedOptions($savedOptions, 'product_1', $products) : $products,
+            'objectives' => $manager ? $this->mergeSavedOptions($savedOptions, 'objective', $objectives) : $objectives,
+            'outcomes' => $manager ? $this->mergeSavedOptions($savedOptions, 'outcome', $outcomes) : $outcomes,
             'stages' => self::STAGES,
-            'statuses' => self::STATUSES,
+            'statuses' => $manager ? $this->mergeSavedOptions($savedOptions, 'status', $statuses) : $statuses,
         ];
+    }
+
+    /** @return array<int, string> */
+    public function allowedOptions(string $category): array
+    {
+        if ($this->activeLookupCache === null) {
+            $this->activeLookupCache = self::LOOKUP_DEFAULTS;
+
+            if (Schema::hasTable('sales_call_lookup_options')) {
+                $grouped = SalesCallLookupOption::query()
+                    ->where('is_active', true)
+                    ->orderBy('category')
+                    ->orderBy('sort_order')
+                    ->orderBy('label')
+                    ->get(['category', 'label'])
+                    ->groupBy('category');
+
+                foreach (array_keys(self::LOOKUP_DEFAULTS) as $lookupCategory) {
+                    $values = ($grouped->get($lookupCategory) ?? collect())
+                        ->pluck('label')
+                        ->map(fn (mixed $value): string => trim((string) $value))
+                        ->filter()
+                        ->values()
+                        ->all();
+
+                    if ($values !== []) {
+                        $this->activeLookupCache[$lookupCategory] = $values;
+                    }
+                }
+            }
+        }
+
+        return $this->activeLookupCache[$category] ?? [];
     }
 
     /** @param Builder<SalesCallActivity> $query @param array<int, string> $defaults @return array<int, string> */
@@ -184,7 +241,7 @@ final class SalesCallReportService
 
     public function canViewTeam(User $user): bool
     {
-        return in_array(RoleAccess::groupForRole($user->role), [RoleAccess::GROUP_APPROVE, RoleAccess::GROUP_SUPER_ADMIN], true);
+        return RoleAccess::canUser($user, 'sales_call_report');
     }
 
     /** @param Collection<int, SalesCallActivity> $activities @param array<string, mixed> $dashboard */

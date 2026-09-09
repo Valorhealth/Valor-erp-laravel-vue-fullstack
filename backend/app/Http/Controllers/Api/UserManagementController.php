@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\BillingRecord;
 use App\Models\Quotation;
 use App\Models\SalesTask;
+use App\Services\Authorization\RoleAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -35,12 +36,25 @@ class UserManagementController extends Controller
                 ->orWhere('last_name', 'ilike', "%{$search}%"))
             ->orderBy('id')->paginate(min(max($request->integer('per_page', 25), 5), 100));
 
-        return response()->json($users);
+        return response()->json($users->through(
+            fn (User $user): array => (new UserResource($user))->resolve($request),
+        ));
+    }
+
+    public function permissionCatalog(Request $request): JsonResponse
+    {
+        abort_unless(
+            RoleAccess::groupForRole($request->user()->role) === RoleAccess::GROUP_SUPER_ADMIN,
+            403,
+            'เฉพาะ Super Admin เท่านั้นที่กำหนดสิทธิ์รายบัญชีได้',
+        );
+
+        return response()->json(['data' => RoleAccess::permissionCatalog()]);
     }
 
     public function store(Request $request): JsonResponse
     {
-        $data = $request->validate($this->rules());
+        $data = $this->validatedData($request);
         if ($data['quotation_signing_authorized']) {
             throw ValidationException::withMessages(['quotation_signing_authorized' => 'กรุณาสร้างบัญชีก่อน แล้วแนบ PNG ลายเซ็นในหน้าแก้ไข จึงจะเปิดสิทธิ์ลงนามได้']);
         }
@@ -55,7 +69,7 @@ class UserManagementController extends Controller
 
     public function update(Request $request, User $user): JsonResponse
     {
-        $data = $request->validate($this->rules($user));
+        $data = $this->validatedData($request, $user);
         if ($data['quotation_signing_authorized'] && ! $user->signatureAssets()->where('is_current', true)->exists()) {
             throw ValidationException::withMessages(['quotation_signing_authorized' => 'ต้องแนบ PNG ลายเซ็นประจำบัญชีก่อนเปิดสิทธิ์ลงนาม']);
         }
@@ -88,6 +102,12 @@ class UserManagementController extends Controller
 
     public function destroy(Request $request, User $user): JsonResponse
     {
+        abort_if(
+            RoleAccess::groupForRole($user->role) === RoleAccess::GROUP_SUPER_ADMIN
+                && RoleAccess::groupForRole($request->user()->role) !== RoleAccess::GROUP_SUPER_ADMIN,
+            403,
+            'เฉพาะ Super Admin เท่านั้นที่ลบบัญชี Super Admin ได้',
+        );
         if ($request->user()->is($user)) {
             throw ValidationException::withMessages(['user' => 'ไม่สามารถลบบัญชีที่กำลังใช้งานอยู่']);
         }
@@ -124,6 +144,51 @@ class UserManagementController extends Controller
             'role' => ['required', Rule::in(self::ROLES)],
             'department' => ['nullable', 'string', 'max:255'],
             'quotation_signing_authorized' => ['required', 'boolean'],
+            'permission_overrides' => ['nullable', 'array'],
+            'permission_overrides.*' => ['boolean'],
         ];
+    }
+
+    /** @return array<string, mixed> */
+    private function validatedData(Request $request, ?User $user = null): array
+    {
+        $data = $request->validate($this->rules($user));
+        $isSuperAdmin = RoleAccess::groupForRole($request->user()->role) === RoleAccess::GROUP_SUPER_ADMIN;
+
+        if (! $isSuperAdmin) {
+            abort_if(
+                $user && RoleAccess::groupForRole($user->role) === RoleAccess::GROUP_SUPER_ADMIN,
+                403,
+                'เฉพาะ Super Admin เท่านั้นที่แก้ไขบัญชี Super Admin ได้',
+            );
+            if (RoleAccess::groupForRole($data['role']) === RoleAccess::GROUP_SUPER_ADMIN) {
+                throw ValidationException::withMessages([
+                    'role' => 'เฉพาะ Super Admin เท่านั้นที่สร้างหรือเลื่อนระดับบัญชีเป็น Super Admin ได้',
+                ]);
+            }
+            unset($data['permission_overrides']);
+
+            return $data;
+        }
+
+        $overrides = (array) ($data['permission_overrides'] ?? []);
+        if (RoleAccess::groupForRole($data['role']) === RoleAccess::GROUP_SUPER_ADMIN) {
+            $data['permission_overrides'] = [];
+
+            return $data;
+        }
+        $allowedKeys = array_column(RoleAccess::permissionCatalog(), 'key');
+        $unknownKeys = array_diff(array_keys($overrides), $allowedKeys);
+        if ($unknownKeys !== []) {
+            throw ValidationException::withMessages([
+                'permission_overrides' => 'พบสิทธิ์ที่ระบบไม่รองรับ: '.implode(', ', $unknownKeys),
+            ]);
+        }
+
+        $data['permission_overrides'] = collect($overrides)
+            ->filter(fn (mixed $enabled): bool => is_bool($enabled))
+            ->all();
+
+        return $data;
     }
 }
