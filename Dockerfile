@@ -50,6 +50,7 @@ COPY --from=backend-dependencies /build/backend/vendor /app/backend/vendor
 COPY --from=frontend-build /build/frontend/dist /app/frontend/dist
 COPY docker/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY docker/supervisord.conf /etc/supervisor/conf.d/valor.conf
+COPY docker/php-uploads.ini /usr/local/etc/php/conf.d/valor-uploads.ini
 COPY docker/entrypoint.sh /usr/local/bin/valor-entrypoint
 
 RUN chmod +x /usr/local/bin/valor-entrypoint \

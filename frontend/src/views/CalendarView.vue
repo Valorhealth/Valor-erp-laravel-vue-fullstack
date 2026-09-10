@@ -8,7 +8,7 @@ import type { SalesTask, User } from '../types/api'
 import { apiError, shortDate, todayIso } from '../utils/format'
 
 const tasks = ref<SalesTask[]>([])
-const sales = ref<User[]>([])
+const assignableUsers = ref<User[]>([])
 const selected = ref<SalesTask | null>(null)
 const error = ref('')
 const progressStatus = ref<SalesTask['status']>('รอดำเนินการ')
@@ -79,6 +79,10 @@ function goToday() { month.value=todayIso().slice(0,7); selectedDate.value=today
 function progressTime(value: string) { return new Intl.DateTimeFormat('th-TH', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) }
 function taskTimelineStyle(segment: { start: number; end: number; track: number }) { return { gridColumn: `${segment.start + 1} / ${segment.end + 2}`, gridRow: segment.track + 1 } }
 function openTask(task: SalesTask) { selected.value = task; selectedDate.value = task.start_date }
+function assigneeLabel(user: User): string {
+  const name = [user.first_name, user.last_name].filter(Boolean).join(' ')
+  return `${user.username}${name ? ` · ${name}` : ''} · ${user.role || 'ไม่ระบุ Role'} · ${user.department || 'ไม่ระบุแผนก'}`
+}
 
 watch(selected, (task) => {
   progressStatus.value = task?.status || 'รอดำเนินการ'
@@ -87,8 +91,8 @@ watch(selected, (task) => {
 
 async function load() {
   try {
-    const response = await api.get<{ data: { tasks: SalesTask[]; sales_team: User[] } }>('/api/v1/tasks')
-    tasks.value = response.data.data.tasks; sales.value = response.data.data.sales_team
+    const response = await api.get<{ data: { tasks: SalesTask[]; assignable_users: User[] } }>('/api/v1/tasks')
+    tasks.value = response.data.data.tasks; assignableUsers.value = response.data.data.assignable_users
   } catch (cause) { error.value = apiError(cause, 'โหลดตารางงานไม่สำเร็จ') }
 }
 async function createTask() {
@@ -160,7 +164,7 @@ onMounted(load)
       <label><span>หัวข้องาน *</span><input v-model="form.title" required></label>
       <label><span>ความสำคัญ</span><select v-model="form.priority"><option>ปกติ</option><option>ด่วน</option><option>สำคัญมาก</option></select></label>
       <label class="span-2"><span>รายละเอียด</span><textarea v-model="form.description" rows="3"></textarea></label>
-      <label class="span-2"><span>มอบหมายให้ *</span><select v-model="form.assigned_to" multiple required><option v-for="person in sales" :key="person.username" :value="person.username">{{ person.username }} · {{ person.department || '-' }}</option></select><small>ระบบจะบันทึกผู้มอบหมายเป็น {{ auth.user.value?.username }}</small></label>
+      <label class="span-2"><span>มอบหมายให้ (เลือกได้ทุก Role) *</span><select v-model="form.assigned_to" multiple required><option v-for="person in assignableUsers" :key="person.id" :value="person.username">{{ assigneeLabel(person) }}</option></select><small>เลือกได้หลายบัญชี ระบบจะสร้างงานแยกให้แต่ละคน และบันทึกผู้มอบหมายเป็น {{ auth.user.value?.username }}</small></label>
       <label><span>วันที่เริ่ม</span><input v-model="form.start_date" type="date" required></label><label><span>วันที่สิ้นสุด</span><input v-model="form.end_date" type="date" required></label>
       <label class="check-field"><input v-model="form.all_day" type="checkbox"> ทั้งวัน</label><div></div>
       <label v-if="!form.all_day"><span>เวลาเริ่ม</span><input v-model="form.start_time" type="time"></label><label v-if="!form.all_day"><span>เวลาสิ้นสุด</span><input v-model="form.end_time" type="time"></label>

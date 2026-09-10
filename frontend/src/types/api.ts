@@ -305,6 +305,7 @@ export interface FibroscanBooking {
   booked_by: string
   booked_by_department: string | null
   can_edit: boolean
+  can_manage_all: boolean
   machine: Pick<FibroscanMachine, 'machine_id' | 'machine_code' | 'machine_name' | 'status'>
   owner?: Pick<User, 'id' | 'username' | 'first_name' | 'last_name' | 'department'> | null
 }

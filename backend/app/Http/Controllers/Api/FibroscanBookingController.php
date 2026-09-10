@@ -73,7 +73,11 @@ class FibroscanBookingController extends Controller
     public function update(Request $request, FibroscanBooking $booking): JsonResponse
     {
         $this->authorizeChange($request, $booking);
-        abort_if(in_array($booking->status, ['คืนแล้ว', 'ยกเลิก'], true), 422, 'รายการที่คืนเครื่องหรือยกเลิกแล้วไม่สามารถแก้ไขได้');
+        abort_if(
+            in_array($booking->status, ['คืนแล้ว', 'ยกเลิก'], true) && ! $this->canManageAllBookings($request),
+            422,
+            'รายการที่คืนเครื่องหรือยกเลิกแล้วไม่สามารถแก้ไขได้',
+        );
 
         $data = $this->validatedBooking($request);
         $updated = $this->saveBooking($request, $data, $booking);
@@ -88,14 +92,19 @@ class FibroscanBookingController extends Controller
             'status' => ['required', Rule::in(['จองแล้ว', 'กำลังใช้งาน', 'คืนแล้ว', 'ยกเลิก'])],
         ]);
 
-        if (in_array($booking->status, ['คืนแล้ว', 'ยกเลิก'], true) && $data['status'] !== $booking->status) {
+        if (
+            in_array($booking->status, ['คืนแล้ว', 'ยกเลิก'], true)
+            && $data['status'] !== $booking->status
+            && ! $this->canManageAllBookings($request)
+        ) {
             abort(422, 'สถานะสิ้นสุดแล้ว ไม่สามารถนำรายการกลับมาใช้งานได้ กรุณาสร้างรายการใหม่');
         }
 
         try {
             DB::transaction(function () use ($booking, $data): void {
-                FibroscanMachine::query()->whereKey($booking->machine_id)->lockForUpdate()->firstOrFail();
+                $machine = FibroscanMachine::query()->whereKey($booking->machine_id)->lockForUpdate()->firstOrFail();
                 if (in_array($data['status'], self::ACTIVE_STATUSES, true)) {
+                    abort_unless($machine->status === 'พร้อมใช้งาน', 422, 'เครื่องนี้ไม่พร้อมใช้งาน กรุณาเลือกเครื่องอื่น');
                     $this->ensureAvailable(
                         (int) $booking->machine_id,
                         Carbon::parse($booking->reserved_from),
@@ -136,8 +145,11 @@ class FibroscanBookingController extends Controller
         try {
             return DB::transaction(function () use ($request, $data, $from, $until, $booking): FibroscanBooking {
                 $machine = FibroscanMachine::query()->lockForUpdate()->findOrFail($data['machine_id']);
-                abort_unless($machine->status === 'พร้อมใช้งาน', 422, 'เครื่องนี้ไม่พร้อมใช้งาน กรุณาเลือกเครื่องอื่น');
-                $this->ensureAvailable((int) $machine->machine_id, $from, $until, $booking?->booking_id);
+                $occupiesSchedule = $booking === null || in_array($booking->status, self::ACTIVE_STATUSES, true);
+                if ($occupiesSchedule) {
+                    abort_unless($machine->status === 'พร้อมใช้งาน', 422, 'เครื่องนี้ไม่พร้อมใช้งาน กรุณาเลือกเครื่องอื่น');
+                    $this->ensureAvailable((int) $machine->machine_id, $from, $until, $booking?->booking_id);
+                }
 
                 $values = [
                     ...$data,
@@ -184,18 +196,25 @@ class FibroscanBookingController extends Controller
     private function authorizeChange(Request $request, FibroscanBooking $booking): void
     {
         $ownsBooking = (int) $booking->booked_by_user_id === (int) $request->user()->id;
-        $managesAll = RoleAccess::canUser($request->user(), 'approve_bills', 'system_admin');
+        $managesAll = $this->canManageAllBookings($request);
         abort_unless($ownsBooking || $managesAll, 403, 'แก้ไขได้เฉพาะรายการที่คุณเป็นผู้จอง');
+    }
+
+    private function canManageAllBookings(Request $request): bool
+    {
+        return RoleAccess::canUser($request->user(), 'approve_bills', 'system_admin');
     }
 
     /** @return array<string, mixed> */
     private function present(Request $request, FibroscanBooking $booking): array
     {
         $ownsBooking = (int) $booking->booked_by_user_id === (int) $request->user()->id;
+        $managesAll = $this->canManageAllBookings($request);
 
         return [
             ...$booking->toArray(),
-            'can_edit' => $ownsBooking || RoleAccess::canUser($request->user(), 'approve_bills', 'system_admin'),
+            'can_edit' => $ownsBooking || $managesAll,
+            'can_manage_all' => $managesAll,
         ];
     }
 

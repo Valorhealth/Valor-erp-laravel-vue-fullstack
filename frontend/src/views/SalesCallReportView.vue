@@ -26,6 +26,23 @@ type LookupOption = {
   creator?: { username: string; first_name?: string | null; last_name?: string | null } | null
 }
 
+type ImportPreviewRow = Omit<DailyRow, 'call_id'> & { activity_date: string }
+type ImportPreview = {
+  summary: {
+    file_name: string
+    sheets_scanned: number
+    sheets_used: number
+    total_rows: number
+    dates_count: number
+    date_from: string | null
+    date_to: string | null
+    preview_rows: number
+    existing_rows_to_replace: number
+  }
+  preview: ImportPreviewRow[]
+  warnings: string[]
+}
+
 const lookupCategories: Array<{ value: LookupCategory; key: OptionKey; label: string }> = [
   { value: 'specialty', key: 'specialties', label: 'Specialty' },
   { value: 'department', key: 'departments', label: 'Department' },
@@ -49,6 +66,12 @@ const lookupOptions = ref<LookupOption[]>([])
 const selectedLookupCategory = ref<LookupCategory>('specialty')
 const newLookupLabel = ref('')
 const dropdownModalOpen = ref(false)
+const importInput = ref<HTMLInputElement | null>(null)
+const importFile = ref<File | null>(null)
+const importPreview = ref<ImportPreview | null>(null)
+const importModalOpen = ref(false)
+const importLoading = ref(false)
+const importSaving = ref(false)
 const selectedLookupRows = computed(() => lookupOptions.value.filter(item => item.category === selectedLookupCategory.value))
 
 const selectedDate = ref(localDate(new Date()))
@@ -240,6 +263,67 @@ async function saveDay() {
   }
 }
 
+function chooseImportFile() {
+  importInput.value?.click()
+}
+
+async function previewImport(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  if (!file) return
+
+  importFile.value = file
+  importPreview.value = null
+  importModalOpen.value = true
+  importLoading.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await api.post<{ data: ImportPreview }>('/api/v1/sales-calls/import/preview', form)
+    importPreview.value = response.data.data
+  } catch (cause) {
+    error.value = apiMessage(cause, 'ตรวจสอบไฟล์ Excel ไม่สำเร็จ')
+    closeImportModal()
+  } finally {
+    importLoading.value = false
+  }
+}
+
+function closeImportModal() {
+  importModalOpen.value = false
+  importPreview.value = null
+  importFile.value = null
+  if (importInput.value) importInput.value.value = ''
+}
+
+async function confirmImport() {
+  if (!importFile.value || !importPreview.value?.summary.total_rows) return
+
+  importSaving.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const form = new FormData()
+    form.append('file', importFile.value)
+    form.append('replace_existing_dates', '1')
+    const response = await api.post<{ data: { imported_rows: number; imported_dates: number; replaced_rows: number; date_from: string | null; date_to: string | null }; message: string }>('/api/v1/sales-calls/import', form)
+    const result = response.data.data
+    const successMessage = `${response.data.message}${result.replaced_rows ? ` และแทนที่ข้อมูลเดิม ${result.replaced_rows} รายการ` : ''}`
+    if (result.date_to) selectedDate.value = result.date_to
+    if (result.date_from) historyFilters.date_from = result.date_from
+    if (result.date_to) historyFilters.date_to = result.date_to
+    closeImportModal()
+    await Promise.all([loadDay(), loadHistory()])
+    notice.value = successMessage
+  } catch (cause) {
+    error.value = apiMessage(cause, 'นำเข้าข้อมูล Call Sale ไม่สำเร็จ')
+  } finally {
+    importSaving.value = false
+  }
+}
+
 async function loadHistory(page = 1) {
   historyLoading.value = true
   error.value = ''
@@ -354,7 +438,13 @@ onMounted(async () => {
             <h2>ตาราง Call Sale ประจำวันที่ {{ displayDate(selectedDate) }}</h2>
             <p class="muted">วันที่ในทุกแถวถูกกำหนดตามวันที่ที่เลือก และบันทึกพร้อมกันทั้งตาราง</p>
           </div>
-          <div class="row-count">{{ dailyRows.length }} Call</div>
+          <div class="planner-heading-actions">
+            <input ref="importInput" class="visually-hidden" type="file" accept=".xlsx,.xls" @change="previewImport">
+            <button class="btn import-button" type="button" :disabled="importLoading || saving" @click="chooseImportFile">
+              {{ importLoading ? 'กำลังอ่าน Excel...' : 'นำเข้า Excel' }}
+            </button>
+            <div class="row-count">{{ dailyRows.length }} Call</div>
+          </div>
         </div>
 
         <div v-if="loading" class="loading-box">กำลังโหลดตาราง...</div>
@@ -405,6 +495,52 @@ onMounted(async () => {
           </div>
         </div>
       </section>
+
+      <Teleport to="body">
+        <div v-if="importModalOpen" class="lookup-modal-backdrop" role="presentation" @click.self="!importSaving && closeImportModal()" @keydown.esc="!importSaving && closeImportModal()">
+          <section class="lookup-modal import-modal" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
+            <div class="section-heading lookup-modal-header">
+              <div>
+                <p class="eyebrow">EXCEL IMPORT PREVIEW</p>
+                <h2 id="import-modal-title">ตรวจสอบข้อมูลก่อนนำเข้า</h2>
+                <p class="muted">รองรับไฟล์ที่แยกชีตตามวัน และไฟล์ตารางรวมหลายวัน ระบบจะค้นหาหัวคอลัมน์ให้อัตโนมัติ</p>
+              </div>
+              <button class="lookup-modal-close" type="button" aria-label="ปิดหน้าต่างนำเข้า Excel" :disabled="importSaving" @click="closeImportModal">×</button>
+            </div>
+
+            <div v-if="importLoading" class="loading-box">กำลังอ่านโครงสร้างและตรวจสอบข้อมูลในไฟล์...</div>
+            <template v-else-if="importPreview">
+              <div class="import-summary">
+                <article><span>รายการพร้อมนำเข้า</span><strong>{{ importPreview.summary.total_rows }}</strong></article>
+                <article><span>จำนวนวัน</span><strong>{{ importPreview.summary.dates_count }}</strong></article>
+                <article><span>ช่วงวันที่</span><strong>{{ displayDate(importPreview.summary.date_from) }} – {{ displayDate(importPreview.summary.date_to) }}</strong></article>
+                <article :class="{ warning: importPreview.summary.existing_rows_to_replace > 0 }"><span>ข้อมูลเดิมที่จะถูกแทนที่</span><strong>{{ importPreview.summary.existing_rows_to_replace }}</strong></article>
+              </div>
+
+              <div v-if="importPreview.warnings.length" class="import-warnings">
+                <strong>รายการที่ควรตรวจสอบ ({{ importPreview.warnings.length }})</strong>
+                <ul><li v-for="warning in importPreview.warnings.slice(0, 30)" :key="warning">{{ warning }}</li></ul>
+                <small v-if="importPreview.warnings.length > 30">แสดง 30 รายการแรกจากทั้งหมด {{ importPreview.warnings.length }} รายการ</small>
+              </div>
+
+              <div class="import-preview-scroll">
+                <table class="import-preview-table">
+                  <thead><tr><th>Date</th><th>PLACE OF WORK</th><th>CUSTOMER</th><th>SPECIALTY</th><th>DEPARTMENT</th><th>GROUP</th><th>PRODUCT</th><th>OBJECTIVE</th><th>OUTCOME</th><th>Status</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(row, index) in importPreview.preview" :key="`${row.activity_date}-${index}`"><td>{{ displayDate(row.activity_date) }}</td><td>{{ row.place_of_work || '-' }}</td><td>{{ row.customer_name || '-' }}</td><td>{{ row.specialty || '-' }}</td><td>{{ row.department || '-' }}</td><td>{{ row.customer_group || '-' }}</td><td>{{ row.product_1 || '-' }}</td><td>{{ row.objective }}</td><td>{{ row.outcome }}</td><td>{{ row.status }}</td></tr>
+                    <tr v-if="!importPreview.preview.length"><td colspan="10" class="empty-cell">ไม่พบแถวข้อมูลที่สามารถนำเข้าได้</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p v-if="importPreview.summary.total_rows > importPreview.summary.preview_rows" class="muted import-preview-note">ตารางแสดงตัวอย่าง {{ importPreview.summary.preview_rows }} รายการแรก ระบบจะนำเข้าทั้งหมด {{ importPreview.summary.total_rows }} รายการ</p>
+              <div class="import-confirmation">
+                <p><strong>โปรดตรวจสอบก่อนยืนยัน:</strong> ข้อมูลเดิมของบัญชีนี้เฉพาะวันที่ที่พบในไฟล์จะถูกแทนที่ เพื่อป้องกันรายการซ้ำ ส่วนวันอื่นจะไม่เปลี่ยนแปลง</p>
+                <div><button class="btn" type="button" :disabled="importSaving" @click="closeImportModal">ยกเลิก</button><button class="btn btn-primary" type="button" :disabled="importSaving || !importPreview.summary.total_rows" @click="confirmImport">{{ importSaving ? 'กำลังนำเข้า...' : `ยืนยันนำเข้า ${importPreview.summary.total_rows} รายการ` }}</button></div>
+              </div>
+            </template>
+          </section>
+        </div>
+      </Teleport>
 
       <section class="content-card section-gap history-card">
         <div class="section-heading history-heading">
@@ -586,6 +722,7 @@ onMounted(async () => {
 .sale-total-table td:not(:first-child),.sale-total-table th:not(:first-child){text-align:center}.seller-username{display:block;margin-top:3px;color:#64748b;font-size:.68rem}.number-total{color:#1d4ed8;font-weight:900}
 .department-bar{grid-template-columns:minmax(120px,180px) 1fr 50px 130px}.department-bar small{text-align:right;color:#64748b}
 .hospital-ranking-table td:first-child,.hospital-ranking-table th:first-child{text-align:center;width:62px}.rank-badge{display:inline-grid;place-items:center;min-width:30px;height:30px;border-radius:50%;background:#fff0f2;color:#b82032}.hospital-ranking-table tr:nth-child(1) .rank-badge{background:#fbbf24;color:#713f12}.hospital-ranking-table tr:nth-child(2) .rank-badge{background:#cbd5e1;color:#334155}.hospital-ranking-table tr:nth-child(3) .rank-badge{background:#d97706;color:#fff}
+.planner-heading-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}.visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}.import-button{border-color:#b82032;color:#a61b2b;background:#fff}.import-modal{width:min(1180px,100%)}.import-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:13px}.import-summary article{padding:12px;border:1px solid #e2e5ea;border-radius:10px;background:#f8fafc}.import-summary article.warning{border-color:#f5c26b;background:#fff8e8}.import-summary span{display:block;color:#667085;font-size:.72rem}.import-summary strong{display:block;margin-top:5px;font-size:1rem}.import-warnings{max-height:150px;overflow:auto;margin-bottom:13px;padding:12px 14px;border:1px solid #f3c66f;border-radius:10px;background:#fff9e9;color:#7a4b00;font-size:.76rem}.import-warnings ul{margin:7px 0;padding-left:20px}.import-preview-scroll{min-height:180px;overflow:auto;border:1px solid #e2e5ea;border-radius:10px}.import-preview-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;font-size:.75rem}.import-preview-table th{position:sticky;top:0;z-index:2;padding:9px 10px;background:#263142;color:#fff;text-align:left;white-space:nowrap}.import-preview-table td{max-width:220px;padding:8px 10px;border-bottom:1px solid #e7e9ed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.import-preview-note{margin:8px 0 0}.import-confirmation{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:13px;padding-top:13px;border-top:1px solid #e2e5ea}.import-confirmation p{max-width:760px;margin:0;font-size:.78rem;color:#475569}.import-confirmation>div{display:flex;gap:8px;flex-shrink:0}
 .lookup-modal-backdrop{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;padding:24px;background:#11182799;backdrop-filter:blur(3px)}.lookup-modal{display:flex;flex-direction:column;width:min(960px,100%);max-height:calc(100vh - 48px);padding:22px;border-radius:16px;background:#fff;box-shadow:0 24px 70px #11182755;overflow:hidden}.lookup-modal-header{flex-shrink:0;margin:0 0 15px}.lookup-modal-close{width:38px;height:38px;flex-shrink:0;border:0;border-radius:10px;background:#f3f4f6;color:#475569;font-size:1.6rem;line-height:1;cursor:pointer}.lookup-modal-close:hover{background:#fee2e2;color:#991b1b}.lookup-tabs{display:flex;flex-shrink:0;gap:7px;overflow-x:auto;padding:2px 0 13px;border-bottom:1px solid #e7e9ed}.lookup-tabs button{border:1px solid #d7dbe2;border-radius:99px;background:#fff;color:#475569;padding:7px 12px;white-space:nowrap;cursor:pointer}.lookup-tabs button.active{border-color:#b82032;background:#b82032;color:#fff}.lookup-add{display:grid;grid-template-columns:minmax(240px,1fr) auto;flex-shrink:0;gap:10px;align-items:end;padding:15px 0}.lookup-add label{display:grid;gap:6px;font-size:.8rem;font-weight:700}.lookup-add input,.lookup-table input{width:100%;border:1px solid #d5d9e0;border-radius:8px;padding:8px 10px;background:#fff;color:#172033}.lookup-table-wrap{min-height:0;overflow:auto;border:1px solid #e2e5ea;border-radius:10px}.lookup-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.8rem}.lookup-table th{position:sticky;top:0;z-index:2;background:#263142;color:#fff;text-align:left;padding:9px 10px;white-space:nowrap}.lookup-table td{padding:8px 10px;border-bottom:1px solid #e7e9ed;vertical-align:middle}.lookup-table tbody tr:nth-child(even){background:#f8fafc}.lookup-table tr.inactive{background:#f5f5f5;color:#8a93a2}.lookup-table .sort-input{width:85px}.active-toggle{display:flex;align-items:center;gap:7px;white-space:nowrap}.active-toggle input{width:17px;height:17px;accent-color:#b82032}
-@media(max-width:1000px){.filter-grid,.report-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){.planner-heading,.planner-footer{padding:16px}.planner-footer,.report-grid{display:grid;grid-template-columns:1fr}.day-switcher{margin:0;justify-content:center}.planner-actions .btn{flex:1}.filter-grid,.report-metrics{grid-template-columns:1fr}.export-actions .btn{flex:1}.objective-chart>div{grid-template-columns:90px 1fr 30px}.history-heading{display:grid}.history-filters{margin-top:12px}.donut-layout,.specialty-layout{grid-template-columns:1fr;justify-items:center}.chart-legend{width:100%}.bubble-chart svg{min-width:580px}.bubble-chart{overflow-x:auto}.section-heading{align-items:flex-start}.lookup-modal-backdrop{padding:10px}.lookup-modal{max-height:calc(100vh - 20px);padding:16px}.lookup-add{grid-template-columns:1fr}.lookup-add .btn{width:100%}}
+@media(max-width:1000px){.filter-grid,.report-metrics,.import-summary{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){.planner-heading,.planner-footer{padding:16px}.planner-footer,.report-grid{display:grid;grid-template-columns:1fr}.planner-heading-actions{width:100%;justify-content:space-between}.day-switcher{margin:0;justify-content:center}.planner-actions .btn{flex:1}.filter-grid,.report-metrics,.import-summary{grid-template-columns:1fr}.export-actions .btn{flex:1}.objective-chart>div{grid-template-columns:90px 1fr 30px}.history-heading{display:grid}.history-filters{margin-top:12px}.donut-layout,.specialty-layout{grid-template-columns:1fr;justify-items:center}.chart-legend{width:100%}.bubble-chart svg{min-width:580px}.bubble-chart{overflow-x:auto}.section-heading{align-items:flex-start}.lookup-modal-backdrop{padding:10px}.lookup-modal{max-height:calc(100vh - 20px);padding:16px}.lookup-add{grid-template-columns:1fr}.lookup-add .btn{width:100%}.import-confirmation{display:grid}.import-confirmation>div{justify-content:flex-end}}
 </style>

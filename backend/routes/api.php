@@ -2,8 +2,8 @@
 
 use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\BillingRecordController;
 use App\Http\Controllers\Api\BillingDocumentController;
+use App\Http\Controllers\Api\BillingRecordController;
 use App\Http\Controllers\Api\BillingWorkflowController;
 use App\Http\Controllers\Api\BudgetAnalysisController;
 use App\Http\Controllers\Api\CatalogController;
@@ -63,6 +63,8 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/sales-calls/history', [SalesCallController::class, 'history'])->middleware('ability:sales_call_entry');
         Route::get('/sales-calls/day', [SalesCallController::class, 'day'])->middleware('ability:sales_call_entry');
         Route::put('/sales-calls/day', [SalesCallController::class, 'saveDay'])->middleware('ability:sales_call_entry');
+        Route::post('/sales-calls/import/preview', [SalesCallController::class, 'importPreview'])->middleware('ability:sales_call_entry');
+        Route::post('/sales-calls/import', [SalesCallController::class, 'import'])->middleware('ability:sales_call_entry');
         Route::get('/sales-call-options', [SalesCallLookupOptionController::class, 'index'])->middleware('ability:approve_bills,system_admin');
         Route::post('/sales-call-options', [SalesCallLookupOptionController::class, 'store'])->middleware('ability:approve_bills,system_admin');
         Route::put('/sales-call-options/{option}', [SalesCallLookupOptionController::class, 'update'])->middleware('ability:approve_bills,system_admin');

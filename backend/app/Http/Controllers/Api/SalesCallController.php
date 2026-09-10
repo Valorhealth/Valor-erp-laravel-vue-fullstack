@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\SalesCallActivity;
 use App\Services\Authorization\RoleAccess;
+use App\Services\SalesCalls\SalesCallImportService;
 use App\Services\SalesCalls\SalesCallReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -13,6 +14,43 @@ use Illuminate\Validation\Rule;
 
 class SalesCallController extends Controller
 {
+    public function importPreview(Request $request, SalesCallReportService $reports, SalesCallImportService $imports): JsonResponse
+    {
+        $this->authorizeSale($request, $reports);
+        $file = $request->validate([
+            'file' => ['required', 'file', 'max:10240', 'extensions:xlsx,xls'],
+        ])['file'];
+        $parsed = $imports->parse($file, $reports);
+        $dates = collect($parsed['rows'])->pluck('activity_date')->unique()->values();
+        $existingRows = $dates->isEmpty() ? 0 : SalesCallActivity::query()
+            ->where('seller_user_id', $request->user()->id)
+            ->whereIn('activity_date', $dates)
+            ->count();
+
+        return response()->json(['data' => [
+            'summary' => [...$parsed['summary'], 'existing_rows_to_replace' => $existingRows],
+            'preview' => $parsed['preview'],
+            'warnings' => $parsed['warnings'],
+        ]]);
+    }
+
+    public function import(Request $request, SalesCallReportService $reports, SalesCallImportService $imports): JsonResponse
+    {
+        $this->authorizeSale($request, $reports);
+        $file = $request->validate([
+            'file' => ['required', 'file', 'max:10240', 'extensions:xlsx,xls'],
+            'replace_existing_dates' => ['accepted'],
+        ])['file'];
+        $parsed = $imports->parse($file, $reports);
+        $result = $imports->replaceUserDates($request->user(), $parsed['rows']);
+
+        return response()->json([
+            'data' => $result,
+            'warnings' => $parsed['warnings'],
+            'message' => "นำเข้า Call Sale {$result['imported_rows']} รายการ จาก {$result['imported_dates']} วันเรียบร้อยแล้ว",
+        ]);
+    }
+
     public function day(Request $request, SalesCallReportService $reports): JsonResponse
     {
         $this->authorizeSale($request, $reports);

@@ -16,16 +16,26 @@ class TaskController extends Controller
     public function index(Request $request): JsonResponse
     {
         $group = RoleAccess::groupForRole($request->user()->role);
+        $canAssignTasks = RoleAccess::canUser($request->user(), 'approve_bills', 'system_admin');
         $tasks = SalesTask::query()
             ->when(in_array($group, [RoleAccess::GROUP_SALE, RoleAccess::GROUP_DEFAULT], true), fn ($query) => $query->where(
                 fn ($owned) => $owned->where('assigned_to_user_id', $request->user()->id)
                     ->orWhere(fn ($legacy) => $legacy->whereNull('assigned_to_user_id')->where('assigned_to', $request->user()->username))
             ))
             ->orderBy('start_date')->orderByDesc('task_id')->get();
-        $sales = User::query()->select(['username', 'department', 'role'])->orderBy('username')->get()
-            ->filter(fn (User $user) => RoleAccess::groupForRole($user->role) === RoleAccess::GROUP_SALE)->values();
+        $assignableUsers = User::query()
+            ->select(['id', 'username', 'first_name', 'last_name', 'department', 'role'])
+            ->orderBy('role')
+            ->orderBy('username')
+            ->get()
+            ->when(
+                ! $canAssignTasks,
+                fn ($users) => $users
+                    ->filter(fn (User $user) => RoleAccess::groupForRole($user->role) === RoleAccess::GROUP_SALE)
+                    ->values(),
+            );
 
-        return response()->json(['data' => ['tasks' => $tasks, 'sales_team' => $sales]]);
+        return response()->json(['data' => ['tasks' => $tasks, 'assignable_users' => $assignableUsers]]);
     }
 
     public function store(Request $request): JsonResponse

@@ -85,6 +85,8 @@ final class AuditLogger
         'BudgetAnalysisController@clear' => ['budget.clear', 'วิเคราะห์งบประมาณ', 'ล้างผลวิเคราะห์งบประมาณ'],
         'DashboardController@report' => ['dashboard.export', 'เอกสาร', 'ส่งออก Sales Report'],
         'SalesCallController@saveDay' => ['sales_call.save_day', 'Call Sale', 'บันทึกตาราง Call Sale ประจำวัน'],
+        'SalesCallController@importPreview' => ['sales_call.import_preview', 'Call Sale', 'ตรวจสอบไฟล์ Excel Call Sale ก่อนนำเข้า'],
+        'SalesCallController@import' => ['sales_call.import', 'Call Sale', 'นำเข้าข้อมูล Call Sale จาก Excel'],
         'SalesCallController@exportExcel' => ['sales_call.export_excel', 'เอกสาร', 'ส่งออก Call Sale เป็น Excel'],
         'SalesCallController@exportDashboard' => ['sales_call.export_dashboard', 'เอกสาร', 'ส่งออก Call Sale Dashboard'],
     ];

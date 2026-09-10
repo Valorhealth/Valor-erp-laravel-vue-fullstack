@@ -25,6 +25,10 @@ const purposes = ['ทดลองใช้', 'Event', 'เช่า', 'สา�
 const bookingStatuses: FibroscanBookingStatus[] = ['จองแล้ว', 'กำลังใช้งาน', 'คืนแล้ว', 'ยกเลิก']
 const machineStatuses: FibroscanMachineStatus[] = ['พร้อมใช้งาน', 'ซ่อมบำรุง', 'เลิกใช้งาน']
 
+function canChangeBooking(booking: FibroscanBooking): boolean {
+  return booking.can_edit && (booking.can_manage_all || !['คืนแล้ว', 'ยกเลิก'].includes(booking.status))
+}
+
 function localDateTime(date: Date): string {
   const offset = date.getTimezoneOffset() * 60_000
   return new Date(date.getTime() - offset).toISOString().slice(0, 16)
@@ -379,7 +383,7 @@ onBeforeUnmount(() => { if (availabilityTimer) clearTimeout(availabilityTimer) }
             <div><dt>ผู้ประสานงานลูกค้า</dt><dd>{{ selectedBooking.contact_name || '-' }}<br><small>{{ selectedBooking.contact_phone || '-' }}</small></dd></div>
             <div class="equipment-booking-detail__wide"><dt>รายละเอียดงาน/หมายเหตุ</dt><dd>{{ selectedBooking.note || '-' }}</dd></div>
           </dl>
-          <div v-if="selectedBooking.can_edit && !['คืนแล้ว','ยกเลิก'].includes(selectedBooking.status)" class="equipment-detail-actions">
+          <div v-if="canChangeBooking(selectedBooking)" class="equipment-detail-actions">
             <label><span>อัปเดตสถานะงาน</span><select v-model="selectedBookingStatus"><option v-for="status in bookingStatuses" :key="status">{{ status }}</option></select></label>
             <button type="button" class="primary-button" :disabled="selectedBookingStatus === selectedBooking.status" @click="changeBookingStatus(selectedBooking, selectedBookingStatus)">บันทึกสถานะ</button>
             <button type="button" class="secondary-button" @click="editBooking(selectedBooking)">แก้ไขรายละเอียดงาน</button>
@@ -437,7 +441,7 @@ onBeforeUnmount(() => { if (availabilityTimer) clearTimeout(availabilityTimer) }
               <td>{{ booking.contact_name || '-' }}<small>{{ booking.contact_phone || '-' }}</small></td>
               <td class="equipment-note">{{ booking.note || '-' }}</td>
               <td><StatusPill :status="booking.status" /></td>
-              <td><div v-if="booking.can_edit" class="booking-actions"><button v-if="!['คืนแล้ว','ยกเลิก'].includes(booking.status)" class="secondary-button" @click="editBooking(booking)">แก้ไข</button><select v-if="!['คืนแล้ว','ยกเลิก'].includes(booking.status)" :value="booking.status" @change="changeBookingStatus(booking, ($event.target as HTMLSelectElement).value as FibroscanBookingStatus)"><option v-for="status in bookingStatuses" :key="status">{{ status }}</option></select></div><span v-else class="muted">ดูอย่างเดียว</span></td>
+              <td><div v-if="canChangeBooking(booking)" class="booking-actions"><button class="secondary-button" @click="editBooking(booking)">แก้ไข</button><select :value="booking.status" @change="changeBookingStatus(booking, ($event.target as HTMLSelectElement).value as FibroscanBookingStatus)"><option v-for="status in bookingStatuses" :key="status">{{ status }}</option></select></div><span v-else class="muted">ดูอย่างเดียว</span></td>
             </tr>
             <tr v-if="!bookings.length"><td colspan="8" class="empty-state">{{ loading ? 'กำลังโหลดข้อมูล…' : 'ไม่พบรายการจองในช่วงที่เลือก' }}</td></tr>
           </tbody>
