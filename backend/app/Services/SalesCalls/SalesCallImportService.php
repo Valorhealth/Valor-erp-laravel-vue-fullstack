@@ -22,6 +22,36 @@ final class SalesCallImportService
     private const MAX_ROWS = 5000;
 
     /** @var array<string, string> */
+    private const COLUMN_LABELS = [
+        'call_no' => 'Call No.', 'activity_date' => 'Date', 'place_of_work' => 'PLACE OF WORK',
+        'customer_name' => 'CUSTOMER NAME', 'specialty' => 'SPECIALTY', 'department' => 'DEPARTMENT',
+        'customer_group' => 'GROUP', 'product_1' => 'PRODUCT-1', 'objective' => 'CALL OBJECTIVE',
+        'call_detail_objective' => 'CALL DETAIL (Obj)', 'outcome' => 'CALL OUTCOME',
+        'call_detail_outcome' => 'CALL DETAIL (Out)', 'next_follow_up_date' => 'F/U DATE',
+        'notes' => 'NOTE', 'sm_comment' => 'SM Comment', 'status' => 'Status',
+    ];
+
+    /** @var array<string, string> */
+    private const IMPORTANT_FIELDS = [
+        'place_of_work' => 'PLACE OF WORK', 'customer_name' => 'CUSTOMER NAME',
+        'specialty' => 'SPECIALTY', 'department' => 'DEPARTMENT', 'customer_group' => 'GROUP',
+        'product_1' => 'PRODUCT-1', 'objective' => 'CALL OBJECTIVE',
+        'outcome' => 'CALL OUTCOME', 'status' => 'Status',
+    ];
+
+    /** @var array<string, string> */
+    private const REQUIRED_CALL_FIELDS = [
+        'place_of_work' => 'PLACE OF WORK',
+        'customer_name' => 'CUSTOMER NAME',
+        'specialty' => 'SPECIALTY',
+        'department' => 'DEPARTMENT',
+        'customer_group' => 'GROUP',
+        'product_1' => 'PRODUCT-1',
+        'objective' => 'CALL OBJECTIVE',
+        'outcome' => 'CALL OUTCOME',
+    ];
+
+    /** @var array<string, string> */
     private const HEADER_ALIASES = [
         'CALLNO' => 'call_no', 'CALLNUMBER' => 'call_no', 'NO' => 'call_no', 'ลำดับ' => 'call_no',
         'DATE' => 'activity_date', 'CALLDATE' => 'activity_date', 'วันที่' => 'activity_date',
@@ -60,6 +90,11 @@ final class SalesCallImportService
             $warnings = [];
             $usedSheets = 0;
             $scannedSheets = 0;
+            $detectedColumns = [];
+            $blankImportant = array_fill_keys(array_keys(self::IMPORTANT_FIELDS), 0);
+            $skippedWithoutSpecialty = 0;
+            $skippedWithoutDate = 0;
+            $invalidRequiredRows = [];
             $dominantSheetMonth = $this->dominantSheetMonth($spreadsheet->getAllSheets());
 
             foreach ($worksheets as $sheet) {
@@ -75,6 +110,12 @@ final class SalesCallImportService
                 }
 
                 $usedSheets++;
+                $detectedColumns = array_values(array_unique([...$detectedColumns, ...array_keys($header['columns'])]));
+                $sheetMissing = array_diff(array_keys(self::COLUMN_LABELS), array_keys($header['columns']));
+                if ($sheetMissing !== []) {
+                    $labels = collect($sheetMissing)->map(fn (string $field): string => self::COLUMN_LABELS[$field])->implode(', ');
+                    $warnings['missing-columns-'.$sheet->getTitle()] = "ชีต {$sheet->getTitle()}: ไม่พบคอลัมน์ {$labels}";
+                }
                 $sheetDate = $this->dateFromSheetName($sheet->getTitle());
                 if ($sheetDate !== null && $dominantSheetMonth !== null && ! str_starts_with($sheetDate, $dominantSheetMonth.'-')) {
                     $day = (int) substr($sheetDate, 8, 2);
@@ -84,7 +125,7 @@ final class SalesCallImportService
                         $sheetDate = $correctedDate;
                     }
                 }
-                foreach ($this->rowsFromSheet($sheet, $header, $sheetDate, $reports, $warnings) as $row) {
+                foreach ($this->rowsFromSheet($sheet, $header, $sheetDate, $reports, $warnings, $blankImportant, $invalidRequiredRows, $skippedWithoutSpecialty, $skippedWithoutDate) as $row) {
                     $rows[] = $row;
                     if (count($rows) >= self::MAX_ROWS) {
                         $warnings['row-limit'] = 'อ่านสูงสุด '.number_format(self::MAX_ROWS).' รายการต่อไฟล์ ส่วนรายการที่เหลือถูกข้าม';
@@ -96,10 +137,16 @@ final class SalesCallImportService
             usort($rows, fn (array $left, array $right): int => [$left['activity_date'], $left['_source_sheet'], $left['_source_row']] <=> [$right['activity_date'], $right['_source_sheet'], $right['_source_row']]);
             $dates = array_values(array_unique(array_column($rows, 'activity_date')));
             $preview = array_map(function (array $row): array {
-                unset($row['_source_sheet'], $row['_source_row']);
+                unset($row['_source_sheet'], $row['_source_row'], $row['_counts_as_call']);
 
                 return $row;
             }, array_slice($rows, 0, 150));
+            $missingColumns = array_values(array_diff(array_keys(self::COLUMN_LABELS), $detectedColumns));
+            $blankFields = collect($blankImportant)
+                ->filter(fn (int $count): bool => $count > 0)
+                ->map(fn (int $count, string $field): array => ['field' => $field, 'label' => self::IMPORTANT_FIELDS[$field], 'count' => $count])
+                ->values()
+                ->all();
 
             return [
                 'summary' => [
@@ -107,10 +154,20 @@ final class SalesCallImportService
                     'sheets_scanned' => $scannedSheets,
                     'sheets_used' => $usedSheets,
                     'total_rows' => count($rows),
+                    'counted_calls' => count(array_filter($rows, fn (array $row): bool => $row['_counts_as_call'])),
                     'dates_count' => count($dates),
                     'date_from' => $dates[0] ?? null,
                     'date_to' => $dates === [] ? null : $dates[array_key_last($dates)],
                     'preview_rows' => count($preview),
+                ],
+                'quality' => [
+                    'detected_columns' => collect($detectedColumns)->map(fn (string $field): string => self::COLUMN_LABELS[$field])->values()->all(),
+                    'missing_columns' => collect($missingColumns)->map(fn (string $field): string => self::COLUMN_LABELS[$field])->values()->all(),
+                    'blank_important_fields' => $blankFields,
+                    'invalid_required_rows' => $invalidRequiredRows,
+                    'invalid_required_rows_count' => count($invalidRequiredRows),
+                    'skipped_without_specialty' => $skippedWithoutSpecialty,
+                    'skipped_without_date' => $skippedWithoutDate,
                 ],
                 'preview' => $preview,
                 'warnings' => array_values($warnings),
@@ -121,7 +178,7 @@ final class SalesCallImportService
         }
     }
 
-    /** @param array<int, array<string, mixed>> $rows @return array{imported_rows: int, imported_dates: int, replaced_rows: int, date_from: string|null, date_to: string|null} */
+    /** @param array<int, array<string, mixed>> $rows @return array{imported_rows: int, counted_calls: int, imported_dates: int, replaced_rows: int, date_from: string|null, date_to: string|null} */
     public function replaceUserDates(User $user, array $rows): array
     {
         if ($rows === []) {
@@ -131,8 +188,9 @@ final class SalesCallImportService
         }
 
         $grouped = collect($rows)->groupBy('activity_date')->sortKeys();
+        $countedCalls = collect($rows)->filter(fn (array $row): bool => (bool) ($row['_counts_as_call'] ?? false))->count();
 
-        return DB::transaction(function () use ($user, $grouped): array {
+        return DB::transaction(function () use ($user, $grouped, $countedCalls): array {
             DB::select('SELECT pg_advisory_xact_lock(hashtext(?))', ['sales-call-import-'.$user->id]);
             $dates = $grouped->keys()->values()->all();
             $replacedRows = SalesCallActivity::query()
@@ -186,6 +244,7 @@ final class SalesCallImportService
 
             return [
                 'imported_rows' => count($records),
+                'counted_calls' => $countedCalls,
                 'imported_dates' => count($dates),
                 'replaced_rows' => $replacedRows,
                 'date_from' => $dates[0] ?? null,
@@ -211,7 +270,7 @@ final class SalesCallImportService
             }
 
             $score = count($columns);
-            if ($score > $bestScore && isset($columns['call_no']) && (isset($columns['customer_name']) || isset($columns['place_of_work']))) {
+            if ($score > $bestScore && (isset($columns['call_no']) || isset($columns['specialty'])) && (isset($columns['customer_name']) || isset($columns['place_of_work']))) {
                 $best = ['row' => $row, 'columns' => $columns];
                 $bestScore = $score;
             }
@@ -235,11 +294,12 @@ final class SalesCallImportService
         return ['row' => $best['row'], 'columns' => $columns];
     }
 
-    /** @param array{row: int, columns: array<string, int>} $header @param array<string, string> $warnings @return array<int, array<string, mixed>> */
-    private function rowsFromSheet(Worksheet $sheet, array $header, ?string $sheetDate, SalesCallReportService $reports, array &$warnings): array
+    /** @param array{row: int, columns: array<string, int>} $header @param array<string, string> $warnings @param array<string, int> $blankImportant @param array<int, array<string, mixed>> $invalidRequiredRows @return array<int, array<string, mixed>> */
+    private function rowsFromSheet(Worksheet $sheet, array $header, ?string $sheetDate, SalesCallReportService $reports, array &$warnings, array &$blankImportant, array &$invalidRequiredRows, int &$skippedWithoutSpecialty, int &$skippedWithoutDate): array
     {
         $rows = [];
         $lastRow = min($sheet->getHighestDataRow(), $header['row'] + 5000);
+        $currentDate = $sheetDate;
 
         for ($rowNumber = $header['row'] + 1; $rowNumber <= $lastRow; $rowNumber++) {
             $raw = [];
@@ -251,32 +311,69 @@ final class SalesCallImportService
                 continue;
             }
 
-            $hasContent = collect($raw)
-                ->except(['call_no', 'activity_date'])
-                ->contains(fn (mixed $value): bool => $this->text($value) !== null);
-            if (! $hasContent) {
+            $rowDate = $this->parseDate($raw['activity_date'] ?? null);
+            if ($rowDate !== null) {
+                $currentDate = $rowDate;
+            }
+            $specialtyText = $this->text($raw['specialty'] ?? null, 255);
+            // A non-call row represents work only when PLACE OF WORK describes
+            // the activity. This avoids importing empty template rows that only
+            // contain a default Status value.
+            $hasWorkActivity = $this->text($raw['place_of_work'] ?? null, 500) !== null;
+            if ($specialtyText === null && ! $hasWorkActivity) {
                 continue;
             }
 
-            $date = $this->parseDate($raw['activity_date'] ?? null) ?? $sheetDate;
+            $date = $currentDate;
             if ($date === null) {
                 $warnings['missing-date-'.$sheet->getTitle().'-'.$rowNumber] = "ข้ามชีต {$sheet->getTitle()} แถว {$rowNumber}: ไม่พบวันที่และไม่สามารถอ่านวันที่จากชื่อชีตได้";
+                $skippedWithoutDate++;
 
                 continue;
             }
 
             $source = $sheet->getTitle().' แถว '.$rowNumber;
+            if ($specialtyText !== null) {
+                $missingRequired = collect(self::REQUIRED_CALL_FIELDS)
+                    ->filter(fn (string $label, string $field): bool => $this->text($raw[$field] ?? null) === null)
+                    ->values()
+                    ->all();
+                if ($missingRequired !== []) {
+                    $invalidRequiredRows[] = [
+                        'date' => $date,
+                        'sheet' => $sheet->getTitle(),
+                        'row' => $rowNumber,
+                        'missing_fields' => $missingRequired,
+                    ];
+                }
+            } else {
+                // Keep non-call work rows so Working Day can be calculated from
+                // actual activity, while excluding them from every Call KPI.
+                $skippedWithoutSpecialty++;
+            }
             $place = $this->text($raw['place_of_work'] ?? null, 500);
             $status = $this->canonical($raw['status'] ?? null, 'status', $reports, $warnings, $source)
                 ?? $this->statusFromText($place);
             $objective = $this->canonical($raw['objective'] ?? null, 'objective', $reports, $warnings, $source) ?? 'Others';
-            $outcome = $this->canonical($raw['outcome'] ?? null, 'outcome', $reports, $warnings, $source) ?? 'No Call';
+            $outcome = $this->canonical($raw['outcome'] ?? null, 'outcome', $reports, $warnings, $source) ?? '';
+            if ($specialtyText !== null && $outcome === '') {
+                $warnings['blank-outcome-'.$sheet->getTitle().'-'.$rowNumber] = "{$source}: CALL OUTCOME ว่าง ระบบเก็บเป็นค่าว่างและจะไม่ตีความเป็น No Call";
+            }
+            if ($specialtyText !== null) {
+                foreach (self::IMPORTANT_FIELDS as $field => $label) {
+                    if ($this->text($raw[$field] ?? null) === null) {
+                        $blankImportant[$field]++;
+                    }
+                }
+            }
+
+            $specialty = $this->canonical($raw['specialty'] ?? null, 'specialty', $reports, $warnings, $source);
 
             $rows[] = [
                 'activity_date' => $date,
                 'place_of_work' => $place,
                 'customer_name' => $this->text($raw['customer_name'] ?? null, 500),
-                'specialty' => $this->canonical($raw['specialty'] ?? null, 'specialty', $reports, $warnings, $source),
+                'specialty' => $specialty,
                 'department' => $this->canonical($raw['department'] ?? null, 'department', $reports, $warnings, $source),
                 'customer_group' => $this->canonical($raw['customer_group'] ?? null, 'group', $reports, $warnings, $source),
                 'product_1' => $this->canonical($raw['product_1'] ?? null, 'product', $reports, $warnings, $source),
@@ -290,6 +387,7 @@ final class SalesCallImportService
                 'status' => $status,
                 '_source_sheet' => $sheet->getTitle(),
                 '_source_row' => $rowNumber,
+                '_counts_as_call' => $specialty !== null && $outcome !== 'No Call',
             ];
         }
 
@@ -319,8 +417,8 @@ final class SalesCallImportService
             return $allowed->get($this->normalizeValue($text));
         }
 
-        if (in_array($category, ['objective', 'outcome', 'status'], true)) {
-            $fallback = ['objective' => 'Others', 'outcome' => 'No Call', 'status' => 'ทำงาน'][$category];
+        if (in_array($category, ['objective', 'status'], true)) {
+            $fallback = ['objective' => 'Others', 'status' => 'ทำงาน'][$category];
             $warnings['fallback-'.$category.'-'.$lookup] = "{$source}: ค่า {$text} ไม่อยู่ใน Dropdown {$category} จึงใช้ {$fallback}";
 
             return $fallback;

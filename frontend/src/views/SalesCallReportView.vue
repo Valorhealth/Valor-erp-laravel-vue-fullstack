@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import axios from 'axios'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import AppShell from '../components/AppShell.vue'
 import { api, downloadFile } from '../api/client'
 import { auth } from '../stores/auth'
@@ -33,14 +33,36 @@ type ImportPreview = {
     sheets_scanned: number
     sheets_used: number
     total_rows: number
+    counted_calls: number
     dates_count: number
     date_from: string | null
     date_to: string | null
     preview_rows: number
     existing_rows_to_replace: number
   }
+  quality: {
+    detected_columns: string[]
+    missing_columns: string[]
+    blank_important_fields: Array<{ field: string; label: string; count: number }>
+    invalid_required_rows: Array<{ date: string; sheet: string; row: number; missing_fields: string[] }>
+    invalid_required_rows_count: number
+    skipped_without_specialty: number
+    skipped_without_date: number
+  }
   preview: ImportPreviewRow[]
   warnings: string[]
+}
+
+type SalesCallSubmission = {
+  seller_user_id: number
+  username: string
+  name: string
+  department: string | null
+  submitted: boolean
+  archived_only: boolean
+  activity_count: number
+  call_count: number
+  files: Array<{ id: number; original_filename: string; file_size: number; imported_rows: number; source_activity_rows: number; data_deleted_at: string | null; created_at: string | null }>
 }
 
 const lookupCategories: Array<{ value: LookupCategory; key: OptionKey; label: string }> = [
@@ -75,9 +97,11 @@ const importSaving = ref(false)
 const selectedLookupRows = computed(() => lookupOptions.value.filter(item => item.category === selectedLookupCategory.value))
 
 const selectedDate = ref(localDate(new Date()))
-const dailyRows = ref<DailyRow[]>([])
+const periodRows = ref<Array<DailyRow & { activity_date: string }>>([])
 const history = ref<Paginated<SalesCallActivity> | null>(null)
 const historyLoading = ref(false)
+const historyActionLoading = ref(false)
+const selectedHistoryIds = ref<number[]>([])
 const historyFilters = reactive({
   date_from: localDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1)),
   date_to: localDate(new Date()),
@@ -86,6 +110,13 @@ const historyFilters = reactive({
 
 const dashboard = ref<SalesCallDashboard | null>(null)
 const activities = ref<Paginated<SalesCallActivity> | null>(null)
+const submissionMonth = ref(localDate(new Date()).slice(0, 7))
+const submissionDepartment = ref('')
+const submissions = ref<SalesCallSubmission[]>([])
+const submissionsLoading = ref(false)
+const selectedSubmissionSellerIds = ref<number[]>([])
+const editingManagedCall = ref<SalesCallActivity | null>(null)
+const managerSaving = ref(false)
 const filters = reactive({
   seller_ids: [] as number[],
   seller_departments: [] as string[],
@@ -100,11 +131,29 @@ const filters = reactive({
 })
 
 const maxSeller = computed(() => Math.max(...(dashboard.value?.by_seller.map(row => Number(row.total)) ?? [1]), 1))
+const submissionDepartments = computed(() => [...new Set(
+  submissions.value.map(row => row.department?.trim() || 'ไม่ระบุแผนก'),
+)].sort((a, b) => a.localeCompare(b, 'th')))
+const filteredSubmissions = computed(() => submissionDepartment.value
+  ? submissions.value.filter(row => (row.department?.trim() || 'ไม่ระบุแผนก') === submissionDepartment.value)
+  : submissions.value)
 const maxSellerDepartment = computed(() => Math.max(...(dashboard.value?.by_seller_department.map(row => Number(row.total)) ?? [1]), 1))
 const chartColors = ['#22c55e', '#ef4444', '#94a3b8', '#2563eb', '#7c3aed', '#f59e0b', '#06b6d4', '#db2777', '#65a30d', '#ea580c', '#475569', '#c92d3e']
-const outcomeRows = computed(() => ['Success', 'Failure', 'No Call'].map(label => dashboard.value?.by_outcome.find(row => row.label === label) ?? { label, total: 0 }))
-const outcomeDonut = computed(() => donutStyle(outcomeRows.value, ['#22c55e', '#ef4444', '#94a3b8']))
+const outcomeRows = computed(() => {
+  const rows = dashboard.value?.by_outcome ?? []
+  const totalFor = (label: string) => Number(rows.find(row => row.label === label)?.total ?? 0)
+  return [
+    { label: 'Success', total: totalFor('Success') },
+    { label: 'Failure + No Call', total: totalFor('Failure') + totalFor('No Call') },
+  ]
+})
+const outcomeAttemptTotal = computed(() => outcomeRows.value.reduce((sum, row) => sum + Number(row.total), 0))
+const outcomeDonut = computed(() => donutStyle(outcomeRows.value, ['#22c55e', '#ef4444']))
 const specialtyDonut = computed(() => donutStyle(dashboard.value?.by_specialty.slice(0, 10) ?? [], chartColors))
+const objectiveOutcomeTotal = computed(() => (dashboard.value?.by_objective ?? []).reduce(
+  (sum, row) => sum + Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls),
+  0,
+))
 const trendPoints = computed(() => {
   const rows = dashboard.value?.daily_trend ?? []
   const max = Math.max(...rows.map(row => Number(row.total)), 1)
@@ -116,14 +165,62 @@ const trendPoints = computed(() => {
 })
 const trendLine = computed(() => trendPoints.value.map(point => `${point.x},${point.y}`).join(' '))
 const trendArea = computed(() => trendPoints.value.length ? `35,190 ${trendLine.value} ${trendPoints.value.at(-1)?.x ?? 965},190` : '')
+const reportTotal = computed(() => dashboard.value?.summary.total_activities ?? 0)
+const periodBounds = computed(() => halfMonthBounds(selectedDate.value))
+const periodDays = computed(() => dateRange(periodBounds.value.date_from, periodBounds.value.date_to).map(date => ({
+  date,
+  rows: periodRows.value.filter(row => row.activity_date === date),
+})))
+const periodCallCount = computed(() => periodRows.value.filter(isCountedCallRow).length)
+const allHistoryPageSelected = computed(() => Boolean(history.value?.data.length) && history.value!.data.every(row => selectedHistoryIds.value.includes(row.call_id)))
 
-function blankRow(): DailyRow {
+function blankRow(activityDate = selectedDate.value): DailyRow & { activity_date: string } {
   return {
+    activity_date: activityDate,
     call_id: 0, place_of_work: '', customer_name: '', specialty: '', department: '', customer_group: '',
     product_1: '', objective: options.value.objectives.includes('Awareness') ? 'Awareness' : (options.value.objectives[0] ?? 'Awareness'), call_detail_objective: '',
-    outcome: options.value.outcomes.includes('No Call') ? 'No Call' : (options.value.outcomes[0] ?? 'No Call'), call_detail_outcome: '',
+    outcome: '', call_detail_outcome: '',
     next_follow_up_date: null, notes: '', sm_comment: '', status: options.value.statuses.includes('ทำงาน') ? 'ทำงาน' : (options.value.statuses[0] ?? 'ทำงาน'),
   }
+}
+
+function isCountedCallRow(row: DailyRow): boolean {
+  return Boolean(row.specialty?.trim()) && row.outcome !== 'No Call'
+}
+
+function activityToPlannerRow(row: SalesCallActivity): DailyRow & { activity_date: string } {
+  return {
+    call_id: row.call_id, activity_date: row.activity_date.slice(0, 10), place_of_work: row.place_of_work ?? '', customer_name: row.customer_name ?? '',
+    specialty: row.specialty ?? '', department: row.department ?? '', customer_group: row.customer_group ?? '',
+    product_1: row.product_1 ?? '', objective: row.objective, call_detail_objective: row.call_detail_objective ?? '',
+    outcome: row.outcome, call_detail_outcome: row.call_detail_outcome ?? '', next_follow_up_date: row.next_follow_up_date,
+    notes: row.notes ?? '', sm_comment: row.sm_comment ?? '', status: row.status,
+  }
+}
+
+function halfMonthBounds(value: string): { date_from: string; date_to: string } {
+  const [year, month, day] = value.split('-').map(Number)
+  const fromDay = day <= 15 ? 1 : 16
+  const toDay = day <= 15 ? 15 : new Date(year, month, 0).getDate()
+  return {
+    date_from: `${year}-${String(month).padStart(2, '0')}-${String(fromDay).padStart(2, '0')}`,
+    date_to: `${year}-${String(month).padStart(2, '0')}-${String(toDay).padStart(2, '0')}`,
+  }
+}
+
+function dateRange(from: string, to: string): string[] {
+  const dates: string[] = []
+  const current = new Date(`${from}T12:00:00`)
+  const end = new Date(`${to}T12:00:00`)
+  while (current <= end) {
+    dates.push(localDate(current))
+    current.setDate(current.getDate() + 1)
+  }
+  return dates
+}
+
+function percent(value: number | string, total = reportTotal.value): string {
+  return total ? `${(Number(value) / total * 100).toFixed(1)}%` : '0.0%'
 }
 
 function optionValues(field: OptionKey, currentValue = ''): string[] {
@@ -212,52 +309,40 @@ function donutStyle(rows: Array<{ total: number }>, colors: string[]): Record<st
   return { background: `conic-gradient(${stops.join(',')})` }
 }
 
-async function loadDay() {
+async function loadPeriod() {
   loading.value = true
   error.value = ''
   notice.value = ''
   try {
-    const response = await api.get<{ data: { date: string; rows: SalesCallActivity[] }; options: SalesCallOptions }>('/api/v1/sales-calls/day', { params: { date: selectedDate.value } })
+    const response = await api.get<{ data: { date_from: string; date_to: string; rows: SalesCallActivity[] }; options: SalesCallOptions }>('/api/v1/sales-calls/period', { params: periodBounds.value })
     options.value = response.data.options
-    dailyRows.value = response.data.data.rows.length
-      ? response.data.data.rows.map(row => ({
-          call_id: row.call_id, place_of_work: row.place_of_work ?? '', customer_name: row.customer_name ?? '',
-          specialty: row.specialty ?? '', department: row.department ?? '', customer_group: row.customer_group ?? '',
-          product_1: row.product_1 ?? '', objective: row.objective, call_detail_objective: row.call_detail_objective ?? '',
-          outcome: row.outcome, call_detail_outcome: row.call_detail_outcome ?? '', next_follow_up_date: row.next_follow_up_date,
-          notes: row.notes ?? '', sm_comment: row.sm_comment ?? '', status: row.status,
-        }))
-      : [blankRow()]
+    const loaded = response.data.data.rows.map(activityToPlannerRow)
+    periodRows.value = dateRange(response.data.data.date_from, response.data.data.date_to)
+      .flatMap(date => loaded.some(row => row.activity_date === date) ? loaded.filter(row => row.activity_date === date) : [blankRow(date)])
   } catch (cause) {
-    error.value = apiMessage(cause, 'โหลดตาราง Call Sale ไม่สำเร็จ')
-    if (!dailyRows.value.length) dailyRows.value = [blankRow()]
+    error.value = apiMessage(cause, 'โหลดตาราง Call Sale ช่วงครึ่งเดือนไม่สำเร็จ')
+    periodRows.value = dateRange(periodBounds.value.date_from, periodBounds.value.date_to).map(date => blankRow(date))
   } finally {
     loading.value = false
   }
 }
 
-async function saveDay() {
+async function savePeriod() {
   saving.value = true
   error.value = ''
   notice.value = ''
   try {
-    const response = await api.put<{ data: { date: string; rows: SalesCallActivity[] }; message: string }>('/api/v1/sales-calls/day', {
-      date: selectedDate.value,
-      rows: dailyRows.value.map(row => ({ ...row, call_id: row.call_id || null })),
+    const response = await api.put<{ data: { date_from: string; date_to: string; rows: SalesCallActivity[] }; message: string }>('/api/v1/sales-calls/period', {
+      ...periodBounds.value,
+      rows: periodRows.value.map(row => ({ ...row, call_id: row.call_id || null })),
     })
-    dailyRows.value = response.data.data.rows.length
-      ? response.data.data.rows.map(row => ({
-          call_id: row.call_id, place_of_work: row.place_of_work ?? '', customer_name: row.customer_name ?? '',
-          specialty: row.specialty ?? '', department: row.department ?? '', customer_group: row.customer_group ?? '',
-          product_1: row.product_1 ?? '', objective: row.objective, call_detail_objective: row.call_detail_objective ?? '',
-          outcome: row.outcome, call_detail_outcome: row.call_detail_outcome ?? '', next_follow_up_date: row.next_follow_up_date,
-          notes: row.notes ?? '', sm_comment: row.sm_comment ?? '', status: row.status,
-        }))
-      : [blankRow()]
+    const saved = response.data.data.rows.map(activityToPlannerRow)
+    periodRows.value = dateRange(response.data.data.date_from, response.data.data.date_to)
+      .flatMap(date => saved.some(row => row.activity_date === date) ? saved.filter(row => row.activity_date === date) : [blankRow(date)])
     notice.value = response.data.message
     await loadHistory(history.value?.current_page ?? 1)
   } catch (cause) {
-    error.value = apiMessage(cause, 'บันทึกตาราง Call Sale ไม่สำเร็จ')
+    error.value = apiMessage(cause, 'บันทึกตาราง Call Sale ช่วงครึ่งเดือนไม่สำเร็จ')
   } finally {
     saving.value = false
   }
@@ -308,14 +393,15 @@ async function confirmImport() {
     const form = new FormData()
     form.append('file', importFile.value)
     form.append('replace_existing_dates', '1')
-    const response = await api.post<{ data: { imported_rows: number; imported_dates: number; replaced_rows: number; date_from: string | null; date_to: string | null }; message: string }>('/api/v1/sales-calls/import', form)
+    const response = await api.post<{ data: { imported_rows: number; counted_calls: number; imported_dates: number; replaced_rows: number; date_from: string | null; date_to: string | null }; message: string }>('/api/v1/sales-calls/import', form)
     const result = response.data.data
     const successMessage = `${response.data.message}${result.replaced_rows ? ` และแทนที่ข้อมูลเดิม ${result.replaced_rows} รายการ` : ''}`
-    if (result.date_to) selectedDate.value = result.date_to
+    // Import บันทึกทุกวันที่พบในไฟล์ทั้งเดือน ส่วนหน้าตารางแบ่งแสดงครั้งละครึ่งเดือนเท่านั้น
+    if (result.date_from) selectedDate.value = result.date_from
     if (result.date_from) historyFilters.date_from = result.date_from
     if (result.date_to) historyFilters.date_to = result.date_to
     closeImportModal()
-    await Promise.all([loadDay(), loadHistory()])
+    await Promise.all([loadPeriod(), loadHistory()])
     notice.value = successMessage
   } catch (cause) {
     error.value = apiMessage(cause, 'นำเข้าข้อมูล Call Sale ไม่สำเร็จ')
@@ -332,6 +418,7 @@ async function loadHistory(page = 1) {
       params: { ...historyFilters, page },
     })
     history.value = response.data.data
+    selectedHistoryIds.value = []
   } catch (cause) {
     error.value = apiMessage(cause, 'โหลดประวัติ Call Plan ไม่สำเร็จ')
   } finally {
@@ -339,24 +426,69 @@ async function loadHistory(page = 1) {
   }
 }
 
-function addRow() {
-  if (dailyRows.value.length >= 100) {
+function addRow(date: string) {
+  const rowsForDate = periodRows.value.filter(row => row.activity_date === date)
+  if (rowsForDate.length >= 100) {
     error.value = 'เพิ่มได้สูงสุด 100 Call ต่อวัน'
     return
   }
-  dailyRows.value.push(blankRow())
+  const lastIndex = periodRows.value.reduce((found, row, index) => row.activity_date === date ? index : found, -1)
+  periodRows.value.splice(lastIndex + 1, 0, blankRow(date))
 }
 
-function removeRow(index: number) {
-  dailyRows.value.splice(index, 1)
-  if (!dailyRows.value.length) dailyRows.value.push(blankRow())
+function removeRow(row: DailyRow & { activity_date: string }) {
+  const index = periodRows.value.indexOf(row)
+  if (index >= 0) periodRows.value.splice(index, 1)
+  if (!periodRows.value.some(item => item.activity_date === row.activity_date)) periodRows.value.splice(index, 0, blankRow(row.activity_date))
 }
 
-async function changeDay(days: number) {
-  const date = new Date(`${selectedDate.value}T12:00:00`)
-  date.setDate(date.getDate() + days)
-  selectedDate.value = localDate(date)
-  await loadDay()
+async function changePeriod(direction: number) {
+  const [year, month, day] = selectedDate.value.split('-').map(Number)
+  if (direction > 0) {
+    selectedDate.value = day <= 15
+      ? `${year}-${String(month).padStart(2, '0')}-16`
+      : localDate(new Date(year, month, 1))
+  } else {
+    selectedDate.value = day > 15
+      ? `${year}-${String(month).padStart(2, '0')}-01`
+      : localDate(new Date(year, month - 2, 16))
+  }
+  await loadPeriod()
+}
+
+function toggleHistoryPage(checked: boolean) {
+  const pageIds = history.value?.data.map(row => row.call_id) ?? []
+  selectedHistoryIds.value = checked
+    ? [...new Set([...selectedHistoryIds.value, ...pageIds])]
+    : selectedHistoryIds.value.filter(id => !pageIds.includes(id))
+}
+
+async function editSelectedHistory() {
+  if (selectedHistoryIds.value.length !== 1) {
+    error.value = 'กรุณาเลือก 1 รายการสำหรับแก้ไข'
+    return
+  }
+  const row = history.value?.data.find(item => item.call_id === selectedHistoryIds.value[0])
+  if (!row) return
+  selectedDate.value = row.activity_date.slice(0, 10)
+  await loadPeriod()
+  await nextTick()
+  document.getElementById(`call-row-${row.call_id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+async function deleteSelectedHistory() {
+  if (!selectedHistoryIds.value.length || !confirm(`ลบ Call Sale ที่เลือก ${selectedHistoryIds.value.length} รายการหรือไม่?`)) return
+  historyActionLoading.value = true
+  error.value = ''
+  try {
+    const response = await api.delete<{ message: string }>('/api/v1/sales-calls/history', { data: { call_ids: selectedHistoryIds.value } })
+    notice.value = response.data.message
+    await Promise.all([loadPeriod(), loadHistory()])
+  } catch (cause) {
+    error.value = apiMessage(cause, 'ลบประวัติ Call Sale ไม่สำเร็จ')
+  } finally {
+    historyActionLoading.value = false
+  }
 }
 
 async function loadReport(page = 1) {
@@ -375,6 +507,81 @@ async function loadReport(page = 1) {
     error.value = apiMessage(cause, 'โหลด Call Sale Report ไม่สำเร็จ')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadSubmissions() {
+  submissionsLoading.value = true
+  selectedSubmissionSellerIds.value = []
+  try {
+    const response = await api.get<{ data: { month: string; rows: SalesCallSubmission[] } }>('/api/v1/sales-calls/submissions', { params: { month: submissionMonth.value } })
+    submissions.value = response.data.data.rows
+    if (submissionDepartment.value && !submissionDepartments.value.includes(submissionDepartment.value)) {
+      submissionDepartment.value = ''
+    }
+  } catch (cause) {
+    error.value = apiMessage(cause, 'โหลด Checklist การส่ง Call Sale ไม่สำเร็จ กรุณาตรวจสอบว่าได้รัน sales_call_reports.sql รุ่นล่าสุดแล้ว')
+  } finally {
+    submissionsLoading.value = false
+  }
+}
+
+async function showSubmission(row: SalesCallSubmission) {
+  const year = Number(submissionMonth.value.slice(0, 4))
+  const month = Number(submissionMonth.value.slice(5, 7))
+  filters.seller_ids = [row.seller_user_id]
+  filters.date_from = `${submissionMonth.value}-01`
+  filters.date_to = localDate(new Date(year, month, 0))
+  await loadReport()
+  await nextTick()
+  document.getElementById('sales-call-raw-data')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+async function deleteSelectedSubmissionMonths() {
+  if (!selectedSubmissionSellerIds.value.length || !confirm(`ลบข้อมูล Call Sale ทั้งเดือนของ Sale ที่เลือก ${selectedSubmissionSellerIds.value.length} คนหรือไม่? ไฟล์ Excel ต้นฉบับจะยังถูกเก็บไว้เป็นหลักฐาน`)) return
+  submissionsLoading.value = true
+  error.value = ''
+  try {
+    const response = await api.delete<{ message: string }>('/api/v1/sales-calls/months', {
+      data: { items: selectedSubmissionSellerIds.value.map(seller_user_id => ({ seller_user_id, month: submissionMonth.value })) },
+    })
+    notice.value = response.data.message
+    await Promise.all([loadSubmissions(), loadReport()])
+  } catch (cause) {
+    error.value = apiMessage(cause, 'ลบข้อมูล Call Sale รายเดือนไม่สำเร็จ')
+  } finally {
+    submissionsLoading.value = false
+  }
+}
+
+function editManagedCall(row: SalesCallActivity) {
+  editingManagedCall.value = { ...row }
+}
+
+async function saveManagedCall() {
+  if (!editingManagedCall.value) return
+  managerSaving.value = true
+  error.value = ''
+  try {
+    const row = editingManagedCall.value
+    const response = await api.put<{ message: string }>(`/api/v1/sales-calls/${row.call_id}`, {
+      place_of_work: row.place_of_work,
+      customer_name: row.customer_name,
+      specialty: row.specialty,
+      department: row.department,
+      customer_group: row.customer_group,
+      product_1: row.product_1,
+      objective: row.objective,
+      outcome: row.outcome,
+      status: row.status,
+    })
+    editingManagedCall.value = null
+    notice.value = response.data.message
+    await Promise.all([loadReport(activities.value?.current_page ?? 1), loadSubmissions()])
+  } catch (cause) {
+    error.value = apiMessage(cause, 'แก้ไขข้อมูล Call Sale ไม่สำเร็จ')
+  } finally {
+    managerSaving.value = false
   }
 }
 
@@ -417,84 +624,73 @@ function apiMessage(cause: unknown, fallback: string): string {
 }
 
 onMounted(async () => {
-  if (managerView.value) await Promise.all([loadReport(), ...(canManageLookupOptions.value ? [loadLookupOptions()] : [])])
-  else await Promise.all([loadDay(), loadHistory()])
+  if (managerView.value) await Promise.all([loadReport(), loadSubmissions(), ...(canManageLookupOptions.value ? [loadLookupOptions()] : [])])
+  else await Promise.all([loadPeriod(), loadHistory()])
 })
 </script>
 
 <template>
   <AppShell
     :title="managerView ? 'Call Sale Report' : 'Call Planner & Report'"
-    :subtitle="managerView ? 'วิเคราะห์กิจกรรมของทีมขายและดูข้อมูลดิบ' : 'บันทึกแผนและผลการเข้าพบลูกค้าประจำวัน'"
+    :subtitle="managerView ? 'วิเคราะห์กิจกรรมของทีมขายและดูข้อมูลดิบ' : 'บันทึกแผนและผลการเข้าพบลูกค้าครั้งละครึ่งเดือน'"
   >
     <div v-if="error" class="alert alert-error">{{ error }}</div>
     <div v-if="notice" class="alert alert-success">{{ notice }}</div>
 
     <template v-if="!managerView">
-      <section class="content-card daily-card">
+      <section class="content-card daily-card period-planner">
         <div class="section-heading planner-heading">
           <div>
-            <p class="eyebrow">DAILY CALL PLAN</p>
-            <h2>ตาราง Call Sale ประจำวันที่ {{ displayDate(selectedDate) }}</h2>
-            <p class="muted">วันที่ในทุกแถวถูกกำหนดตามวันที่ที่เลือก และบันทึกพร้อมกันทั้งตาราง</p>
+            <p class="eyebrow">HALF-MONTH CALL PLAN</p>
+            <h2>ตาราง Call Sale วันที่ {{ displayDate(periodBounds.date_from) }} – {{ displayDate(periodBounds.date_to) }}</h2>
+            <p class="muted">แสดงครั้งละครึ่งเดือน วันที่ของแต่ละแถวถูกล็อกตามตารางประจำวัน และบันทึกพร้อมกันทั้งช่วง</p>
           </div>
           <div class="planner-heading-actions">
             <input ref="importInput" class="visually-hidden" type="file" accept=".xlsx,.xls" @change="previewImport">
             <button class="btn import-button" type="button" :disabled="importLoading || saving" @click="chooseImportFile">
               {{ importLoading ? 'กำลังอ่าน Excel...' : 'นำเข้า Excel' }}
             </button>
-            <div class="row-count">{{ dailyRows.length }} Call</div>
+            <div class="row-count">{{ periodCallCount }} Call</div>
           </div>
         </div>
 
         <div v-if="loading" class="loading-box">กำลังโหลดตาราง...</div>
-        <div v-else class="planner-scroll">
-          <table class="planner-table">
-            <thead>
-              <tr>
-                <th class="col-no">Call No.</th><th class="col-date">Date</th><th>PLACE OF WORK</th><th>CUSTOMER NAME</th>
-                <th>SPECIALTY</th><th>DEPARTMENT</th><th>GROUP</th><th>PRODUCT-1</th><th>CALL OBJECTIVE</th>
-                <th>CALL DETAIL (Obj)</th><th>CALL OUTCOME</th><th>CALL DETAIL (Out)</th><th>F/U DATE</th>
-                <th>NOTE</th><th>SM Comment</th><th>Status</th><th class="col-remove"></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, index) in dailyRows" :key="row.call_id || `new-${index}`">
-                <td class="locked col-no"><strong>{{ index + 1 }}</strong></td>
-                <td class="locked col-date">{{ displayDate(selectedDate) }}</td>
-                <td><textarea v-model.trim="row.place_of_work" rows="2" placeholder="สถานที่ทำงาน"></textarea></td>
-                <td><textarea v-model.trim="row.customer_name" rows="2" placeholder="ชื่อลูกค้า"></textarea></td>
-                <td><select v-model="row.specialty"><option value="">เลือก</option><option v-for="item in optionValues('specialties', row.specialty || '')" :key="item">{{ item }}</option></select></td>
-                <td><select v-model="row.department"><option value="">เลือก</option><option v-for="item in optionValues('departments', row.department || '')" :key="item">{{ item }}</option></select></td>
-                <td><select v-model="row.customer_group"><option value="">เลือก</option><option v-for="item in optionValues('groups', row.customer_group || '')" :key="item">{{ item }}</option></select></td>
-                <td><select v-model="row.product_1"><option value="">เลือก</option><option v-for="item in optionValues('products', row.product_1 || '')" :key="item">{{ item }}</option></select></td>
-                <td><select v-model="row.objective"><option v-for="item in optionValues('objectives', row.objective)" :key="item">{{ item }}</option></select></td>
-                <td><textarea v-model.trim="row.call_detail_objective" rows="2" placeholder="รายละเอียดวัตถุประสงค์"></textarea></td>
-                <td><select v-model="row.outcome"><option v-for="item in optionValues('outcomes', row.outcome)" :key="item">{{ item }}</option></select></td>
-                <td><textarea v-model.trim="row.call_detail_outcome" rows="2" placeholder="รายละเอียดผลลัพธ์"></textarea></td>
-                <td><input v-model="row.next_follow_up_date" type="date"></td>
-                <td><textarea v-model.trim="row.notes" rows="2" placeholder="หมายเหตุ"></textarea></td>
-                <td><textarea v-model.trim="row.sm_comment" rows="2" placeholder="SM Comment"></textarea></td>
-                <td><select v-model="row.status"><option v-for="item in optionValues('statuses', row.status)" :key="item">{{ item }}</option></select></td>
-                <td class="col-remove"><button class="remove-row" type="button" title="ลบแถว" @click="removeRow(index)">×</button></td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-else class="period-days">
+          <article v-for="day in periodDays" :key="day.date" class="planner-day" :class="{ 'is-selected-day': day.date === selectedDate }">
+            <div class="planner-day-heading">
+              <div><strong>{{ displayDate(day.date) }}</strong><small>{{ day.rows.filter(isCountedCallRow).length }} Call</small></div>
+              <button class="btn add-row" type="button" @click="addRow(day.date)">＋ เพิ่ม Row วันนี้</button>
+            </div>
+            <div class="planner-scroll">
+              <table class="planner-table">
+                <thead><tr><th class="col-no">Call No.</th><th class="col-date">Date</th><th>PLACE OF WORK</th><th>CUSTOMER NAME</th><th>SPECIALTY</th><th>DEPARTMENT</th><th>GROUP</th><th>PRODUCT-1</th><th>CALL OBJECTIVE</th><th>CALL DETAIL (Obj)</th><th>CALL OUTCOME</th><th>CALL DETAIL (Out)</th><th>F/U DATE</th><th>NOTE</th><th>SM Comment</th><th>Status</th><th class="col-remove"></th></tr></thead>
+                <tbody>
+                  <tr v-for="(row, index) in day.rows" :id="row.call_id ? `call-row-${row.call_id}` : undefined" :key="row.call_id || `new-${day.date}-${index}`">
+                    <td class="locked col-no"><strong>{{ index + 1 }}</strong></td><td class="locked col-date">{{ displayDate(day.date) }}</td>
+                    <td><textarea v-model.trim="row.place_of_work" rows="2" placeholder="สถานที่ทำงาน"></textarea></td><td><textarea v-model.trim="row.customer_name" rows="2" placeholder="ชื่อลูกค้า"></textarea></td>
+                    <td><select v-model="row.specialty"><option value="">เลือก</option><option v-for="item in optionValues('specialties', row.specialty || '')" :key="item">{{ item }}</option></select></td><td><select v-model="row.department"><option value="">เลือก</option><option v-for="item in optionValues('departments', row.department || '')" :key="item">{{ item }}</option></select></td><td><select v-model="row.customer_group"><option value="">เลือก</option><option v-for="item in optionValues('groups', row.customer_group || '')" :key="item">{{ item }}</option></select></td><td><select v-model="row.product_1"><option value="">เลือก</option><option v-for="item in optionValues('products', row.product_1 || '')" :key="item">{{ item }}</option></select></td>
+                    <td><select v-model="row.objective"><option v-for="item in optionValues('objectives', row.objective)" :key="item">{{ item }}</option></select></td><td><textarea v-model.trim="row.call_detail_objective" rows="2" placeholder="รายละเอียดวัตถุประสงค์"></textarea></td><td><select v-model="row.outcome"><option value="">เลือกผลลัพธ์</option><option v-for="item in optionValues('outcomes', row.outcome)" :key="item">{{ item }}</option></select></td><td><textarea v-model.trim="row.call_detail_outcome" rows="2" placeholder="รายละเอียดผลลัพธ์"></textarea></td>
+                    <td><input v-model="row.next_follow_up_date" type="date"></td><td><textarea v-model.trim="row.notes" rows="2" placeholder="หมายเหตุ"></textarea></td><td><textarea v-model.trim="row.sm_comment" rows="2" placeholder="SM Comment"></textarea></td><td><select v-model="row.status"><option v-for="item in optionValues('statuses', row.status)" :key="item">{{ item }}</option></select></td><td class="col-remove"><button class="remove-row" type="button" title="ลบแถว" @click="removeRow(row)">×</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
         </div>
 
         <div class="planner-footer">
           <div class="planner-actions">
-            <button class="btn add-row" type="button" :disabled="loading" @click="addRow">＋ เพิ่ม Row</button>
-            <button style="background-color: #88E788; color: black;" class="btn btn-primary save-table" type="button" :disabled="loading || saving" @click="saveDay">{{ saving ? 'กำลังบันทึก...' : 'บันทึกข้อมูล' }}</button>
+            <button style="background-color: #88E788; color: black;" class="btn btn-primary save-table" type="button" :disabled="loading || saving" @click="savePeriod">{{ saving ? 'กำลังบันทึก...' : 'บันทึกข้อมูลทั้งครึ่งเดือน' }}</button>
           </div>
           <div class="day-switcher">
-            <button type="button" aria-label="วันก่อนหน้า" @click="changeDay(-1)">«</button>
-            <input v-model="selectedDate" type="date" aria-label="เลือกวันที่" @change="loadDay">
-            <strong>{{ displayDate(selectedDate) }}</strong>
-            <button type="button" aria-label="วันถัดไป" @click="changeDay(1)">»</button>
+            <button type="button" aria-label="ครึ่งเดือนก่อนหน้า" @click="changePeriod(-1)">«</button>
+            <input v-model="selectedDate" type="date" aria-label="เลือกช่วงครึ่งเดือน" @change="loadPeriod">
+            <strong>{{ displayDate(periodBounds.date_from) }} – {{ displayDate(periodBounds.date_to) }}</strong>
+            <button type="button" aria-label="ครึ่งเดือนถัดไป" @click="changePeriod(1)">»</button>
           </div>
         </div>
       </section>
+
 
       <Teleport to="body">
         <div v-if="importModalOpen" class="lookup-modal-backdrop" role="presentation" @click.self="!importSaving && closeImportModal()" @keydown.esc="!importSaving && closeImportModal()">
@@ -503,18 +699,51 @@ onMounted(async () => {
               <div>
                 <p class="eyebrow">EXCEL IMPORT PREVIEW</p>
                 <h2 id="import-modal-title">ตรวจสอบข้อมูลก่อนนำเข้า</h2>
-                <p class="muted">รองรับไฟล์ที่แยกชีตตามวัน และไฟล์ตารางรวมหลายวัน ระบบจะค้นหาหัวคอลัมน์ให้อัตโนมัติ</p>
+                <p class="muted">ระบบนำเข้าทุกวันที่พบในไฟล์ตลอดทั้งเดือน แล้วแบ่งหน้าแสดงผลครั้งละครึ่งเดือน โดยนับเฉพาะแถวที่มี Specialty เป็น Call</p>
               </div>
+
               <button class="lookup-modal-close" type="button" aria-label="ปิดหน้าต่างนำเข้า Excel" :disabled="importSaving" @click="closeImportModal">×</button>
             </div>
 
             <div v-if="importLoading" class="loading-box">กำลังอ่านโครงสร้างและตรวจสอบข้อมูลในไฟล์...</div>
             <template v-else-if="importPreview">
               <div class="import-summary">
-                <article><span>รายการพร้อมนำเข้า</span><strong>{{ importPreview.summary.total_rows }}</strong></article>
-                <article><span>จำนวนวัน</span><strong>{{ importPreview.summary.dates_count }}</strong></article>
-                <article><span>ช่วงวันที่</span><strong>{{ displayDate(importPreview.summary.date_from) }} – {{ displayDate(importPreview.summary.date_to) }}</strong></article>
+                <article><span>แถวกิจกรรมที่จะจัดเก็บ</span><strong>{{ importPreview.summary.total_rows }}</strong></article>
+                <article><span>Call ที่นำไปคำนวณ KPI</span><strong>{{ importPreview.summary.counted_calls }}</strong></article>
+                <article><span>จำนวนวันที่จะนำเข้า</span><strong>{{ importPreview.summary.dates_count }}</strong></article>
+                <article><span>ช่วงวันที่ทั้งหมดในไฟล์</span><strong>{{ displayDate(importPreview.summary.date_from) }} – {{ displayDate(importPreview.summary.date_to) }}</strong></article>
                 <article :class="{ warning: importPreview.summary.existing_rows_to_replace > 0 }"><span>ข้อมูลเดิมที่จะถูกแทนที่</span><strong>{{ importPreview.summary.existing_rows_to_replace }}</strong></article>
+              </div>
+
+              <div class="import-quality-grid">
+                <article class="quality-card quality-good">
+                  <strong>คอลัมน์ที่ตรวจพบ ({{ importPreview.quality.detected_columns.length }})</strong>
+                  <p>{{ importPreview.quality.detected_columns.join(', ') || 'ไม่พบหัวคอลัมน์ที่รองรับ' }}</p>
+                </article>
+                <article class="quality-card" :class="{ 'quality-warning': importPreview.quality.missing_columns.length }">
+                  <strong>คอลัมน์ที่ขาด ({{ importPreview.quality.missing_columns.length }})</strong>
+                  <p>{{ importPreview.quality.missing_columns.join(', ') || 'ครบทุกคอลัมน์' }}</p>
+                </article>
+                <article class="quality-card" :class="{ 'quality-warning': importPreview.quality.blank_important_fields.length }">
+                  <strong>ช่องสำคัญที่เว้นว่าง</strong>
+                  <p v-if="importPreview.quality.blank_important_fields.length"><span v-for="item in importPreview.quality.blank_important_fields" :key="item.field">{{ item.label }} {{ item.count }} แถว</span></p>
+                  <p v-else>ข้อมูลสำคัญครบทุกแถวที่พร้อมนำเข้า</p>
+                </article>
+                <article class="quality-card" :class="{ 'quality-warning': importPreview.quality.skipped_without_date }">
+                  <strong>กิจกรรมที่ไม่ใช่ Call</strong>
+                  <p>ไม่มี Specialty แต่ยังจัดเก็บเพื่อคำนวณวันทำงาน {{ importPreview.quality.skipped_without_specialty }} แถว · ระบุวันที่ไม่ได้และถูกข้าม {{ importPreview.quality.skipped_without_date }} แถว</p>
+                </article>
+              </div>
+
+              <div v-if="importPreview.quality.invalid_required_rows_count" class="required-errors">
+                <strong>ยังนำเข้าไม่ได้ — Call ที่มี Specialty ต้องกรอกข้อมูลบังคับครบ ({{ importPreview.quality.invalid_required_rows_count }} แถว)</strong>
+                <p>กรุณาแก้ PLACE OF WORK, CUSTOMER NAME, SPECIALTY, DEPARTMENT, GROUP, PRODUCT-1, CALL OBJECTIVE และ CALL OUTCOME ให้ครบทุก Call</p>
+                <div class="required-errors-scroll">
+                  <table class="required-errors-table">
+                    <thead><tr><th>วันที่</th><th>ชีต / แถว Excel</th><th>ข้อมูลที่ต้องกรอกเพิ่ม</th></tr></thead>
+                    <tbody><tr v-for="row in importPreview.quality.invalid_required_rows" :key="`${row.sheet}-${row.row}`"><td>{{ displayDate(row.date) }}</td><td>{{ row.sheet }} / {{ row.row }}</td><td>{{ row.missing_fields.join(', ') }}</td></tr></tbody>
+                  </table>
+                </div>
               </div>
 
               <div v-if="importPreview.warnings.length" class="import-warnings">
@@ -534,8 +763,8 @@ onMounted(async () => {
               </div>
               <p v-if="importPreview.summary.total_rows > importPreview.summary.preview_rows" class="muted import-preview-note">ตารางแสดงตัวอย่าง {{ importPreview.summary.preview_rows }} รายการแรก ระบบจะนำเข้าทั้งหมด {{ importPreview.summary.total_rows }} รายการ</p>
               <div class="import-confirmation">
-                <p><strong>โปรดตรวจสอบก่อนยืนยัน:</strong> ข้อมูลเดิมของบัญชีนี้เฉพาะวันที่ที่พบในไฟล์จะถูกแทนที่ เพื่อป้องกันรายการซ้ำ ส่วนวันอื่นจะไม่เปลี่ยนแปลง</p>
-                <div><button class="btn" type="button" :disabled="importSaving" @click="closeImportModal">ยกเลิก</button><button class="btn btn-primary" type="button" :disabled="importSaving || !importPreview.summary.total_rows" @click="confirmImport">{{ importSaving ? 'กำลังนำเข้า...' : `ยืนยันนำเข้า ${importPreview.summary.total_rows} รายการ` }}</button></div>
+                <p><strong>โปรดตรวจสอบก่อนยืนยัน:</strong> ระบบจะนำเข้าทุกวันที่พบในไฟล์พร้อมกันทั้งเดือน กิจกรรมที่ไม่มี Specialty จะช่วยคำนวณ Working Day แต่ไม่ถูกนับเป็น Call และ Outcome แบบ No Call จะไม่รวมใน Total Call</p>
+                <div><button class="btn" type="button" :disabled="importSaving" @click="closeImportModal">ยกเลิก</button><button class="btn btn-primary" type="button" :disabled="importSaving || !importPreview.summary.total_rows || importPreview.quality.invalid_required_rows_count > 0" @click="confirmImport">{{ importPreview.quality.invalid_required_rows_count ? 'กรุณาแก้ข้อมูลบังคับก่อน' : (importSaving ? 'กำลังนำเข้า...' : `ยืนยันนำเข้า ${importPreview.summary.total_rows} รายการ`) }}</button></div>
               </div>
             </template>
           </section>
@@ -556,13 +785,18 @@ onMounted(async () => {
             <button class="btn btn-primary" type="button" :disabled="historyLoading" @click="loadHistory()">ดูประวัติ</button>
           </div>
         </div>
+        <div class="history-bulk-actions">
+          <span>เลือกแล้ว <strong>{{ selectedHistoryIds.length }}</strong> รายการ</span>
+          <button class="btn" type="button" :disabled="selectedHistoryIds.length !== 1 || historyActionLoading" @click="editSelectedHistory">แก้ไขรายการที่เลือก</button>
+          <button class="btn danger-action" type="button" :disabled="!selectedHistoryIds.length || historyActionLoading" @click="deleteSelectedHistory">{{ historyActionLoading ? 'กำลังลบ...' : 'ลบรายการที่เลือก' }}</button>
+        </div>
         <div v-if="historyLoading" class="loading-box">กำลังโหลดประวัติ...</div>
         <div v-else class="history-scroll">
           <table class="history-table">
-            <thead><tr><th>Date</th><th>Call No.</th><th>PLACE OF WORK</th><th>CUSTOMER</th><th>PRODUCT</th><th>OBJECTIVE</th><th>OUTCOME</th><th>F/U DATE</th><th>Status</th></tr></thead>
+            <thead><tr><th class="history-check"><input type="checkbox" :checked="allHistoryPageSelected" aria-label="เลือกทั้งหมดในหน้านี้" @change="toggleHistoryPage(($event.target as HTMLInputElement).checked)"></th><th>Date</th><th>Call No.</th><th>PLACE OF WORK</th><th>CUSTOMER</th><th>PRODUCT</th><th>OBJECTIVE</th><th>OUTCOME</th><th>F/U DATE</th><th>Status</th></tr></thead>
             <tbody>
-              <tr v-for="row in history?.data" :key="row.call_id"><td>{{ displayDate(row.activity_date) }}</td><td>{{ row.call_no }}</td><td>{{ row.place_of_work || '-' }}</td><td>{{ row.customer_name || '-' }}</td><td>{{ row.product_1 || '-' }}</td><td>{{ row.objective }}</td><td><span class="outcome-chip" :class="row.outcome.toLowerCase().replace(' ', '-')">{{ row.outcome }}</span></td><td>{{ displayDate(row.next_follow_up_date) }}</td><td><span class="status-chip" :class="row.status === 'ทำงาน' ? 'work' : 'leave'">{{ row.status }}</span></td></tr>
-              <tr v-if="!history?.data.length"><td colspan="9" class="empty-cell">ยังไม่มี Call Plan ในช่วงวันที่เลือก</td></tr>
+              <tr v-for="row in history?.data" :key="row.call_id" :class="{ 'is-selected-history': selectedHistoryIds.includes(row.call_id) }"><td class="history-check"><input v-model="selectedHistoryIds" type="checkbox" :value="row.call_id" :aria-label="`เลือก Call ${row.call_no} วันที่ ${displayDate(row.activity_date)}`"></td><td>{{ displayDate(row.activity_date) }}</td><td>{{ row.call_no }}</td><td>{{ row.place_of_work || '-' }}</td><td>{{ row.customer_name || '-' }}</td><td>{{ row.product_1 || '-' }}</td><td>{{ row.objective }}</td><td><span class="outcome-chip" :class="row.outcome.toLowerCase().replace(' ', '-')">{{ row.outcome }}</span></td><td>{{ displayDate(row.next_follow_up_date) }}</td><td><span class="status-chip" :class="row.status === 'ทำงาน' ? 'work' : 'leave'">{{ row.status }}</span></td></tr>
+              <tr v-if="!history?.data.length"><td colspan="10" class="empty-cell">ยังไม่มี Call Plan ในช่วงวันที่เลือก</td></tr>
             </tbody>
           </table>
         </div>
@@ -571,6 +805,18 @@ onMounted(async () => {
     </template>
 
     <template v-else>
+      <section class="content-card section-gap submission-card">
+        <div class="section-heading">
+          <div><p class="eyebrow">MONTHLY SUBMISSION CHECKLIST</p><h2>Checklist การส่ง Call Sale รายเดือน</h2><p class="muted">ตรวจว่า Sale คนใดส่งข้อมูลแล้ว ดาวน์โหลดไฟล์ Excel ต้นฉบับ หรือจัดการข้อมูลทั้งเดือน</p></div>
+          <div class="submission-actions"><label>เดือน<input v-model="submissionMonth" type="month" @change="loadSubmissions"></label><label>แผนก<select v-model="submissionDepartment" @change="selectedSubmissionSellerIds = []"><option value="">ทุกแผนก</option><option v-for="department in submissionDepartments" :key="department" :value="department">{{ department }}</option></select></label><button class="btn" type="button" :disabled="submissionsLoading" @click="loadSubmissions">รีเฟรช</button><button class="btn danger-action" type="button" :disabled="submissionsLoading || !selectedSubmissionSellerIds.length" @click="deleteSelectedSubmissionMonths">ลบข้อมูลทั้งเดือนที่เลือก</button></div>
+        </div>
+        <div v-if="submissionsLoading" class="loading-box">กำลังตรวจสอบรายการส่ง Call Sale...</div>
+        <div v-else class="summary-scroll"><table class="summary-table submission-table"><thead><tr><th>เลือก</th><th>สถานะ</th><th>Sale</th><th>แผนก</th><th>Total Call</th><th>ไฟล์ Excel ต้นฉบับ / กิจกรรมอื่น</th><th>จัดการ</th></tr></thead><tbody>
+          <tr v-for="row in filteredSubmissions" :key="row.seller_user_id"><td class="history-check"><input v-model="selectedSubmissionSellerIds" type="checkbox" :value="row.seller_user_id" :disabled="!row.activity_count"></td><td><span class="submission-status" :class="row.submitted ? 'submitted' : (row.archived_only ? 'archived' : 'missing')">{{ row.submitted ? 'ส่งแล้ว' : (row.archived_only ? 'ลบข้อมูลแล้ว' : 'ยังไม่ส่ง') }}</span></td><td><strong>{{ row.name }}</strong><small class="seller-username">{{ row.username }}</small></td><td>{{ row.department || '-' }}</td><td class="number-total">{{ row.call_count }}</td><td><div v-if="row.files.length" class="source-files"><button v-for="file in row.files" :key="file.id" class="file-download" type="button" @click="downloadFile(`/api/v1/sales-calls/imports/${file.id}/download`, file.original_filename)"><strong>⬇ {{ file.original_filename }}</strong><small>นำเข้า {{ file.imported_rows }} แถว · กิจกรรมที่ไม่มี Specialty {{ file.source_activity_rows }} แถว<span v-if="file.data_deleted_at"> · ข้อมูลในระบบถูกลบแล้ว (เก็บไฟล์หลักฐานไว้)</span></small></button></div><span v-else class="muted">กรอกผ่านหน้าเว็บ — ไม่มีไฟล์ต้นฉบับ</span></td><td><button class="btn" type="button" :disabled="!row.activity_count" @click="showSubmission(row)">ดู/แก้ไขข้อมูล</button></td></tr>
+          <tr v-if="!filteredSubmissions.length"><td colspan="7" class="empty-cell">ไม่พบรายชื่อ Sale ในแผนกที่เลือก</td></tr>
+        </tbody></table></div>
+      </section>
+
       <section class="content-card">
         <div class="section-heading">
           <div><p class="eyebrow">REPORT FILTERS</p><h2>ตัวกรองรายงานทีมขาย</h2></div>
@@ -646,7 +892,7 @@ onMounted(async () => {
           <article><span>Total Call</span><strong>{{ dashboard.summary.total_activities.toLocaleString() }}</strong><small>Call ตามตัวกรอง</small></article>
           <article class="success"><span>Success Call</span><strong>{{ dashboard.summary.success_calls.toLocaleString() }}</strong><small>Outcome Success</small></article>
           <article class="danger"><span>Failure Call</span><strong>{{ dashboard.summary.failure_calls.toLocaleString() }}</strong><small>Outcome Failure</small></article>
-          <article class="warn"><span>No Call</span><strong>{{ dashboard.summary.no_calls.toLocaleString() }}</strong><small>ไม่ได้เข้าพบ</small></article>
+          <article class="warn"><span>No Call</span><strong>{{ dashboard.summary.no_calls.toLocaleString() }}</strong><small>เก็บเป็นหลักฐาน แต่ไม่รวม Total Call</small></article>
           <article><span>Success Rate</span><strong>{{ dashboard.summary.conversion_rate }}%</strong><small>Success ÷ Total Call</small></article>
           <article><span>Working Day</span><strong>{{ dashboard.summary.working_days.toLocaleString() }}</strong><small>วันที่ทำงานไม่ซ้ำ</small></article>
           <article><span>Call / Working Day</span><strong>{{ dashboard.summary.calls_per_working_day }}</strong><small>Total Call ÷ Working Day</small></article>
@@ -654,30 +900,30 @@ onMounted(async () => {
         </div>
 
         <div class="report-grid section-gap">
-          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">SALES PERFORMANCE</p><h2>Total Call × Success Rate</h2></div><small class="muted">ขวา = Call มาก · สูง = Success Rate สูง</small></div><div v-if="dashboard.by_seller.length" class="bubble-chart"><svg viewBox="0 0 1000 225" role="img" aria-label="เปรียบเทียบ Total Call และ Success Rate ของ Sale"><line v-for="y in [35,85,135,185]" :key="y" x1="35" :y1="y" x2="965" :y2="y"/><g v-for="(row,index) in dashboard.by_seller" :key="row.seller_username"><circle :cx="45 + Number(row.total) / maxSeller * 900" :cy="185 - Number(row.success_rate) * 1.5" :r="12 + Math.min(Number(row.active_customers), 15)" :fill="chartColors[index % chartColors.length]"/><text :x="45 + Number(row.total) / maxSeller * 900" :y="180 - Number(row.success_rate) * 1.5" text-anchor="middle">{{ row.seller_username }}</text><text :x="45 + Number(row.total) / maxSeller * 900" :y="195 - Number(row.success_rate) * 1.5" text-anchor="middle">{{ row.total }} / {{ row.success_rate }}%</text></g></svg></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
-          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">CALL OUTCOME</p><h2>สัดส่วนผลลัพธ์การ Call</h2></div></div><div v-if="dashboard.by_outcome.length" class="donut-layout"><div class="donut" :style="outcomeDonut"><div><strong>{{ dashboard.summary.total_activities }}</strong><span>Total Call</span></div></div><div class="chart-legend"><div v-for="(row,index) in outcomeRows" :key="row.label"><i :style="{ background: ['#22c55e','#ef4444','#94a3b8'][index] }"></i><span>{{ row.label }}</span><strong>{{ row.total }}</strong><small>{{ dashboard.summary.total_activities ? Math.round(row.total / dashboard.summary.total_activities * 100) : 0 }}%</small></div></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
+          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">SALES PERFORMANCE</p><h2>Total Call × Success Rate</h2></div><div class="chart-heading-meta"><strong>รวม {{ reportTotal.toLocaleString() }} Call</strong><small class="muted">ขวา = Call มาก · สูง = Success Rate สูง</small></div></div><div v-if="dashboard.by_seller.length" class="bubble-chart"><svg viewBox="0 0 1000 225" role="img" aria-label="เปรียบเทียบ Total Call และ Success Rate ของ Sale"><line v-for="y in [35,85,135,185]" :key="y" x1="35" :y1="y" x2="965" :y2="y"/><g v-for="(row,index) in dashboard.by_seller" :key="row.seller_username"><circle :cx="45 + Number(row.total) / maxSeller * 900" :cy="185 - Number(row.success_rate) * 1.5" :r="12 + Math.min(Number(row.active_customers), 15)" :fill="chartColors[index % chartColors.length]"/><text :x="45 + Number(row.total) / maxSeller * 900" :y="180 - Number(row.success_rate) * 1.5" text-anchor="middle">{{ row.seller_username }}</text><text :x="45 + Number(row.total) / maxSeller * 900" :y="195 - Number(row.success_rate) * 1.5" text-anchor="middle">{{ row.total }} Call · {{ percent(row.total) }} · สำเร็จ {{ row.success_rate }}%</text></g></svg></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
+          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">CALL OUTCOME</p><h2>สัดส่วนผลลัพธ์การติดต่อ</h2></div></div><div v-if="dashboard.by_outcome.length" class="donut-layout"><div class="donut" :style="outcomeDonut"><div><strong>{{ outcomeAttemptTotal }}</strong><span>Contact Records</span></div></div><div class="chart-legend"><div v-for="(row,index) in outcomeRows" :key="row.label"><i :style="{ background: ['#22c55e','#ef4444'][index] }"></i><span>{{ row.label }}</span><strong>{{ row.total }}</strong><small>{{ percent(row.total, outcomeAttemptTotal) }}</small></div></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
         </div>
 
         <section class="content-card section-gap">
-          <div class="section-heading"><div><p class="eyebrow">SALE DEPARTMENT</p><h2>Total Call แยกตามแผนกของ Sale</h2><p class="muted">อ้างอิงแผนกปัจจุบันจากบัญชีผู้ใช้ของ Sale</p></div></div>
+          <div class="section-heading"><div><p class="eyebrow">SALE DEPARTMENT</p><h2>Total Call แยกตามแผนกของ Sale</h2><p class="muted">อ้างอิงแผนกปัจจุบันจากบัญชีผู้ใช้ของ Sale</p></div><strong class="chart-total">รวม {{ reportTotal.toLocaleString() }} Call</strong></div>
           <div class="bar-list">
             <div v-for="row in dashboard.by_seller_department" :key="row.department" class="report-bar department-bar">
               <strong>{{ row.department }}</strong>
               <div><i class="blue" :style="{ width: `${Math.max(Number(row.total) / maxSellerDepartment * 100, 2)}%` }"></i></div>
-              <b>{{ row.total }}</b>
-              <small>Success {{ row.success_rate }}%</small>
+              <b>{{ row.total }} · {{ percent(row.total) }}</b>
+              <small>Success {{ row.success_calls }} ({{ row.success_rate }}%) · Failure + No Call {{ Number(row.failure_calls) + Number(row.no_calls) }}</small>
             </div>
             <p v-if="!dashboard.by_seller_department.length" class="muted">ยังไม่มีข้อมูลแผนกของ Sale ตามตัวกรอง</p>
           </div>
         </section>
 
-        <section class="content-card section-gap"><div class="section-heading"><div><p class="eyebrow">PERFORMANCE TREND</p><h2>แนวโน้ม Total Call รายวัน</h2></div><small class="muted">Line + Area Chart</small></div><div v-if="trendPoints.length" class="line-chart"><svg viewBox="0 0 1000 225" preserveAspectRatio="none" role="img" aria-label="แนวโน้ม Total Call รายวัน"><line v-for="y in [35,85,135,185]" :key="y" x1="35" :y1="y" x2="965" :y2="y"/><polygon :points="trendArea"/><polyline :points="trendLine"/><g v-for="point in trendPoints" :key="point.activity_date"><circle :cx="point.x" :cy="point.y" r="6"/><text :x="point.x" :y="point.y - 12" text-anchor="middle">{{ point.total }}</text></g></svg><div class="line-labels"><span v-for="point in trendPoints" :key="point.activity_date">{{ shortDate(point.activity_date) }}</span></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
+        <section class="content-card section-gap"><div class="section-heading"><div><p class="eyebrow">PERFORMANCE TREND</p><h2>แนวโน้ม Total Call รายวัน</h2></div><div class="chart-heading-meta"><strong>รวม {{ reportTotal.toLocaleString() }} Call</strong><small class="muted">Line + Area Chart</small></div></div><div v-if="trendPoints.length" class="line-chart"><svg viewBox="0 0 1000 225" preserveAspectRatio="none" role="img" aria-label="แนวโน้ม Total Call รายวัน"><line v-for="y in [35,85,135,185]" :key="y" x1="35" :y1="y" x2="965" :y2="y"/><polygon :points="trendArea"/><polyline :points="trendLine"/><g v-for="point in trendPoints" :key="point.activity_date"><circle :cx="point.x" :cy="point.y" r="6"/><text :x="point.x" :y="point.y - 12" text-anchor="middle">{{ point.total }}</text></g></svg><div class="line-labels"><span v-for="point in trendPoints" :key="point.activity_date">{{ shortDate(point.activity_date) }}</span></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
 
-        <section class="content-card section-gap"><div class="section-heading"><div><p class="eyebrow">CALL OBJECTIVE × OUTCOME</p><h2>ผลลัพธ์แยกตามวัตถุประสงค์การ Call</h2></div><div class="legend"><span class="dot success-dot"></span>Success <span class="dot failure-dot"></span>Failure <span class="dot nocall-dot"></span>No Call</div></div><div class="objective-chart"><div v-for="row in dashboard.by_objective" :key="row.label"><strong>{{ row.label }}</strong><div class="stacked-track"><i class="stack-success" :style="{ width: `${row.total ? row.success_calls / row.total * 100 : 0}%` }"></i><i class="stack-failure" :style="{ width: `${row.total ? row.failure_calls / row.total * 100 : 0}%` }"></i><i class="stack-nocall" :style="{ width: `${row.total ? row.no_calls / row.total * 100 : 0}%` }"></i></div><b>{{ row.total }}</b></div><p v-if="!dashboard.by_objective.length" class="muted">ยังไม่มีข้อมูล</p></div></section>
+        <section class="content-card section-gap"><div class="section-heading"><div><p class="eyebrow">CALL OBJECTIVE × OUTCOME</p><h2>ผลลัพธ์แยกตามวัตถุประสงค์การ Call</h2><p class="muted">ความยาวแท่งคำนวณจากจำนวนรายการของ Objective เทียบกับรายการติดต่อทั้งหมด</p></div><div><strong class="chart-total">รวม {{ objectiveOutcomeTotal.toLocaleString() }} รายการติดต่อ</strong><div class="legend"><span class="dot success-dot"></span>Success <span class="dot failure-dot"></span>Failure + No Call</div></div></div><div class="objective-chart"><div v-for="row in dashboard.by_objective" :key="row.label"><strong>{{ row.label }}</strong><div><div class="stacked-track"><i class="stack-success" :style="{ width: `${objectiveOutcomeTotal ? Number(row.success_calls) / objectiveOutcomeTotal * 100 : 0}%` }"></i><i class="stack-failure" :style="{ width: `${objectiveOutcomeTotal ? (Number(row.failure_calls) + Number(row.no_calls)) / objectiveOutcomeTotal * 100 : 0}%` }"></i></div><small class="chart-breakdown">Success {{ row.success_calls }} ({{ percent(row.success_calls, Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls)) }}) · Failure + No Call {{ Number(row.failure_calls) + Number(row.no_calls) }} ({{ percent(Number(row.failure_calls) + Number(row.no_calls), Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls)) }}) · สัดส่วนทั้งหมด {{ percent(Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls), objectiveOutcomeTotal) }}</small></div><b>{{ Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls) }}<small>รายการ</small></b></div><p v-if="!dashboard.by_objective.length" class="muted">ยังไม่มีข้อมูล</p></div></section>
 
         <div class="report-grid section-gap">
-          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">PRODUCT DASHBOARD</p><h2>Product Treemap</h2></div><small class="muted">พื้นที่ใหญ่ = จำนวน Call มาก</small></div><div v-if="dashboard.by_product.length" class="treemap"><article v-for="(row,index) in dashboard.by_product" :key="row.label" :style="{ flexGrow: Number(row.total), background: chartColors[index % chartColors.length] }"><strong>{{ row.label }}</strong><span>{{ row.total }} Calls</span><small>Success {{ row.success_rate }}%</small></article></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
-          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">SPECIALTY DASHBOARD</p><h2>สัดส่วน Call ตาม Specialty</h2></div><small class="muted">10 อันดับแรก</small></div><div v-if="dashboard.by_specialty.length" class="donut-layout specialty-layout"><div class="donut specialty-donut" :style="specialtyDonut"><div><strong>{{ dashboard.by_specialty.length }}</strong><span>Specialties</span></div></div><div class="chart-legend compact"><div v-for="(row,index) in dashboard.by_specialty.slice(0,10)" :key="row.label"><i :style="{ background: chartColors[index % chartColors.length] }"></i><span>{{ row.label }}</span><strong>{{ row.total }}</strong><small>{{ row.success_rate }}%</small></div></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
+          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">PRODUCT DASHBOARD</p><h2>Product Treemap</h2></div><div class="chart-heading-meta"><strong>รวม {{ reportTotal.toLocaleString() }} Call</strong><small class="muted">พื้นที่ใหญ่ = จำนวน Call มาก</small></div></div><div v-if="dashboard.by_product.length" class="treemap"><article v-for="(row,index) in dashboard.by_product" :key="row.label" :style="{ flexGrow: Number(row.total), background: chartColors[index % chartColors.length] }"><strong>{{ row.label }}</strong><span>{{ row.total }} Calls · {{ percent(row.total) }}</span><small>Success {{ row.success_calls }} ({{ row.success_rate }}%)</small></article></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
+          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">SPECIALTY DASHBOARD</p><h2>สัดส่วน Call ตาม Specialty</h2></div><small class="muted">10 อันดับแรก</small></div><div v-if="dashboard.by_specialty.length" class="donut-layout specialty-layout"><div class="donut specialty-donut" :style="specialtyDonut"><div><strong>{{ reportTotal }}</strong><span>Total Call</span></div></div><div class="chart-legend compact"><div v-for="(row,index) in dashboard.by_specialty.slice(0,10)" :key="row.label"><i :style="{ background: chartColors[index % chartColors.length] }"></i><span>{{ row.label }} · Success {{ row.success_rate }}%</span><strong>{{ row.total }}</strong><small>{{ percent(row.total) }}</small></div></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
         </div>
 
         <section class="content-card section-gap">
@@ -706,12 +952,32 @@ onMounted(async () => {
         </div>
       </template>
 
-      <section class="content-card section-gap">
+      <section id="sales-call-raw-data" class="content-card section-gap">
         <div class="section-heading"><div><p class="eyebrow">RAW DATA</p><h2>ข้อมูล Call Sale ทั้งทีม</h2><p class="muted">{{ activities?.total ?? 0 }} รายการตามตัวกรอง</p></div></div>
         <div v-if="loading" class="loading-box">กำลังประมวลผลรายงาน...</div>
-        <div v-else class="raw-scroll"><table class="raw-table"><thead><tr><th>Sale</th><th>Call No.</th><th>Date</th><th>PLACE OF WORK</th><th>CUSTOMER NAME</th><th>SPECIALTY</th><th>DEPARTMENT</th><th>GROUP</th><th>PRODUCT-1</th><th>CALL OBJECTIVE</th><th>CALL DETAIL (Obj)</th><th>CALL OUTCOME</th><th>CALL DETAIL (Out)</th><th>F/U DATE</th><th>NOTE</th><th>SM Comment</th><th>Status</th></tr></thead><tbody><tr v-for="row in activities?.data" :key="row.call_id"><td>{{ row.seller_username }}</td><td>{{ row.call_no }}</td><td>{{ shortDate(row.activity_date) }}</td><td>{{ row.place_of_work || '-' }}</td><td>{{ row.customer_name || '-' }}</td><td>{{ row.specialty || '-' }}</td><td>{{ row.department || '-' }}</td><td>{{ row.customer_group || '-' }}</td><td>{{ row.product_1 || '-' }}</td><td>{{ row.objective }}</td><td>{{ row.call_detail_objective || '-' }}</td><td>{{ row.outcome }}</td><td>{{ row.call_detail_outcome || '-' }}</td><td>{{ shortDate(row.next_follow_up_date) }}</td><td>{{ row.notes || '-' }}</td><td>{{ row.sm_comment || '-' }}</td><td><span class="status-chip" :class="row.status === 'ทำงาน' ? 'work' : 'leave'">{{ row.status }}</span></td></tr><tr v-if="!activities?.data.length"><td colspan="17" class="empty-cell">ไม่พบข้อมูลตามตัวกรอง</td></tr></tbody></table></div>
+        <div v-else class="raw-scroll"><table class="raw-table"><thead><tr><th>จัดการ</th><th>Sale</th><th>Call No.</th><th>Date</th><th>PLACE OF WORK</th><th>CUSTOMER NAME</th><th>SPECIALTY</th><th>DEPARTMENT</th><th>GROUP</th><th>PRODUCT-1</th><th>CALL OBJECTIVE</th><th>CALL DETAIL (Obj)</th><th>CALL OUTCOME</th><th>CALL DETAIL (Out)</th><th>F/U DATE</th><th>NOTE</th><th>SM Comment</th><th>Status</th></tr></thead><tbody><tr v-for="row in activities?.data" :key="row.call_id"><td><button class="btn compact-button" type="button" @click="editManagedCall(row)">แก้ไข</button></td><td>{{ row.seller_username }}</td><td>{{ row.call_no }}</td><td>{{ shortDate(row.activity_date) }}</td><td>{{ row.place_of_work || '-' }}</td><td>{{ row.customer_name || '-' }}</td><td>{{ row.specialty || '-' }}</td><td>{{ row.department || '-' }}</td><td>{{ row.customer_group || '-' }}</td><td>{{ row.product_1 || '-' }}</td><td>{{ row.objective }}</td><td>{{ row.call_detail_objective || '-' }}</td><td>{{ row.outcome }}</td><td>{{ row.call_detail_outcome || '-' }}</td><td>{{ shortDate(row.next_follow_up_date) }}</td><td>{{ row.notes || '-' }}</td><td>{{ row.sm_comment || '-' }}</td><td><span class="status-chip" :class="row.status === 'ทำงาน' ? 'work' : 'leave'">{{ row.status }}</span></td></tr><tr v-if="!activities?.data.length"><td colspan="18" class="empty-cell">ไม่พบข้อมูลตามตัวกรอง</td></tr></tbody></table></div>
         <div v-if="activities && activities.last_page > 1" class="pagination"><button class="btn" :disabled="!activities.prev_page_url" @click="loadReport(activities.current_page - 1)">ก่อนหน้า</button><span>หน้า {{ activities.current_page }} / {{ activities.last_page }}</span><button class="btn" :disabled="!activities.next_page_url" @click="loadReport(activities.current_page + 1)">ถัดไป</button></div>
       </section>
+
+      <Teleport to="body">
+        <div v-if="editingManagedCall" class="lookup-modal-backdrop" role="presentation" @click.self="!managerSaving && (editingManagedCall = null)" @keydown.esc="!managerSaving && (editingManagedCall = null)">
+          <form class="lookup-modal manager-edit-modal" role="dialog" aria-modal="true" @submit.prevent="saveManagedCall">
+            <div class="section-heading lookup-modal-header"><div><p class="eyebrow">MANAGE CALL SALE</p><h2>แก้ไข Call วันที่ {{ displayDate(editingManagedCall.activity_date) }}</h2><p class="muted">Sale: {{ editingManagedCall.seller_username }} · Call No. {{ editingManagedCall.call_no }}</p></div><button class="lookup-modal-close" type="button" :disabled="managerSaving" @click="editingManagedCall = null">×</button></div>
+            <div class="manager-edit-grid">
+              <label>PLACE OF WORK *<input v-model.trim="editingManagedCall.place_of_work" required></label>
+              <label>CUSTOMER NAME *<input v-model.trim="editingManagedCall.customer_name" required></label>
+              <label>SPECIALTY *<select v-model="editingManagedCall.specialty" required><option v-for="item in optionValues('specialties', editingManagedCall.specialty || '')" :key="item">{{ item }}</option></select></label>
+              <label>DEPARTMENT *<select v-model="editingManagedCall.department" required><option v-for="item in optionValues('departments', editingManagedCall.department || '')" :key="item">{{ item }}</option></select></label>
+              <label>GROUP *<select v-model="editingManagedCall.customer_group" required><option v-for="item in optionValues('groups', editingManagedCall.customer_group || '')" :key="item">{{ item }}</option></select></label>
+              <label>PRODUCT-1 *<select v-model="editingManagedCall.product_1" required><option v-for="item in optionValues('products', editingManagedCall.product_1 || '')" :key="item">{{ item }}</option></select></label>
+              <label>CALL OBJECTIVE *<select v-model="editingManagedCall.objective" required><option v-for="item in optionValues('objectives', editingManagedCall.objective)" :key="item">{{ item }}</option></select></label>
+              <label>CALL OUTCOME *<select v-model="editingManagedCall.outcome" required><option v-for="item in optionValues('outcomes', editingManagedCall.outcome)" :key="item">{{ item }}</option></select></label>
+              <label>Status *<select v-model="editingManagedCall.status" required><option v-for="item in optionValues('statuses', editingManagedCall.status)" :key="item">{{ item }}</option></select></label>
+            </div>
+            <div class="import-confirmation"><p>การแก้ไขจะเปลี่ยนข้อมูลรายงานของ Sale รายนี้และถูกบันทึกใน Audit Log</p><div><button class="btn" type="button" :disabled="managerSaving" @click="editingManagedCall = null">ยกเลิก</button><button class="btn btn-primary" type="submit" :disabled="managerSaving">{{ managerSaving ? 'กำลังบันทึก...' : 'บันทึกการแก้ไข' }}</button></div></div>
+          </form>
+        </div>
+      </Teleport>
     </template>
   </AppShell>
 </template>
@@ -720,9 +986,12 @@ onMounted(async () => {
 .alert{padding:12px 15px;border-radius:10px;margin-bottom:12px}.alert-error{background:#fff0f1;color:#a61b2b}.alert-success{background:#ecfdf3;color:#067647}.eyebrow{margin:0 0 5px;color:#c92d3e;font-size:.72rem;font-weight:800;letter-spacing:.13em}.daily-card{padding:0;overflow:hidden;border-top:4px solid #c92d3e}.planner-heading{padding:22px 24px 18px;margin:0;border-bottom:1px solid #e3e6eb}.row-count{border-radius:99px;background:#fff0f2;color:#b82032;font-weight:800;padding:8px 14px}.planner-scroll,.raw-scroll{overflow:auto;max-width:100%;border-bottom:1px solid #e2e5ea}.planner-table,.raw-table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:.78rem}.planner-table th,.raw-table th{position:sticky;top:0;z-index:3;background:#b82032;color:#fff;padding:10px 8px;border-right:1px solid #d95060;white-space:nowrap;text-align:center}.planner-table td{padding:0;border-right:1px solid #dfe2e7;border-bottom:1px solid #dfe2e7;background:#fff;vertical-align:top}.planner-table tr:nth-child(even) td{background:#fffafb}.planner-table input,.planner-table select,.planner-table textarea{display:block;width:150px;min-height:54px;border:0;border-radius:0;padding:8px;background:transparent;color:#172033;font:inherit;resize:vertical}.planner-table select{width:145px}.planner-table input[type=date]{width:132px}.planner-table textarea:focus,.planner-table select:focus,.planner-table input:focus{outline:2px solid #e05060;outline-offset:-2px;background:#fff}.planner-table .locked{padding:13px 8px;text-align:center;background:#f4f5f7!important;color:#4b5565;white-space:nowrap}.planner-table .col-no{position:sticky;left:0;z-index:2;width:68px;min-width:68px}.planner-table th.col-no{z-index:5;background:#951a29}.planner-table .col-date{position:sticky;left:68px;z-index:2;width:105px;min-width:105px}.planner-table th.col-date{z-index:5;background:#a91e2e}.planner-table .col-remove{width:40px;min-width:40px}.remove-row{border:0;background:transparent;color:#b42318;font-size:1.45rem;cursor:pointer;padding:10px}.planner-footer{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:18px 24px;background:#fafbfc;flex-wrap:wrap}.planner-actions,.day-switcher,.export-actions,.filter-actions,.pagination{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.add-row{border-style:dashed}.save-table{min-width:150px}.day-switcher{margin-left:auto;border:1px solid #d7dbe2;border-radius:12px;background:#fff;padding:5px}.day-switcher button{width:36px;height:36px;border:0;border-radius:8px;background:#f4f5f7;font-size:1.35rem;cursor:pointer}.day-switcher input{width:36px;border:0;color:transparent;background:transparent}.day-switcher strong{white-space:nowrap;min-width:100px;text-align:center}.loading-box,.empty-cell{padding:35px;text-align:center;color:#697386}.filter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:15px}.filter-grid label{display:flex;flex-direction:column;gap:7px;font-weight:700;font-size:.83rem}.filter-grid input,.filter-grid select{width:100%;border:1px solid #d5d9e0;border-radius:9px;padding:9px 11px;background:#fff}.filter-grid select[multiple]{min-height:86px}.filter-actions{margin-top:14px}.report-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:13px}.report-metrics article{background:#fff;border:1px solid #e2e5ea;border-radius:14px;padding:16px;box-shadow:0 4px 14px #1822300b}.report-metrics span,.report-metrics small{display:block;color:#667085}.report-metrics strong{display:block;font-size:1.55rem;margin:8px 0}.report-metrics .warn{background:#fffaf0;border-color:#f5d59e}.report-metrics .success{background:#f0fdf4;border-color:#bbf7d0}.report-metrics .danger{background:#fff1f2;border-color:#fecdd3}.report-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.bar-list{display:grid;gap:11px}.report-bar{display:grid;grid-template-columns:120px 1fr 38px;gap:9px;align-items:center}.report-bar div{height:9px;background:#edf0f4;border-radius:99px;overflow:hidden}.report-bar i{display:block;height:100%;background:linear-gradient(90deg,#c92d3e,#f06b79)}.report-bar i.blue{background:linear-gradient(90deg,#2563eb,#60a5fa)}.report-bar i.purple{background:linear-gradient(90deg,#7c3aed,#c084fc)}.report-bar i.outcome-success{background:#22c55e}.report-bar i.outcome-failure{background:#ef4444}.report-bar i.outcome-no-call{background:#94a3b8}.metric-bar{grid-template-columns:120px 1fr 34px 48px}.metric-bar small{text-align:right;color:#667085}.trend{display:flex;min-height:195px;align-items:flex-end;gap:12px;overflow:auto}.trend>div{display:grid;justify-items:center;gap:5px;min-width:58px}.trend i{display:block;width:27px;background:linear-gradient(#f06b79,#b82032);border-radius:7px 7px 2px 2px}.trend span{font-size:.68rem;white-space:nowrap}.raw-table{min-width:2200px}.raw-table td{padding:9px;border-right:1px solid #e4e6ea;border-bottom:1px solid #e4e6ea;vertical-align:top;max-width:230px}.status-chip,.outcome-chip{display:inline-block;padding:5px 9px;border-radius:99px;white-space:nowrap;font-weight:700}.status-chip.work{background:#dcfce7;color:#166534}.status-chip.leave{background:#f3f4f6;color:#4b5563}.outcome-chip.success{background:#dcfce7;color:#166534}.outcome-chip.failure{background:#fee2e2;color:#991b1b}.outcome-chip.no-call{background:#f1f5f9;color:#475569}.pagination{justify-content:flex-end;margin-top:14px}.history-card{padding:0;overflow:hidden}.history-heading{padding:18px 22px;margin:0}.history-filters{display:flex;align-items:flex-end;gap:9px;flex-wrap:wrap}.history-filters label{display:grid;gap:4px;font-size:.74rem;font-weight:700}.history-filters input,.history-filters select{border:1px solid #d5d9e0;border-radius:8px;padding:7px 9px;background:#fff}.history-scroll,.summary-scroll{overflow:auto;max-height:560px}.history-table,.summary-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.77rem}.history-table th,.summary-table th{position:sticky;top:0;z-index:2;background:#263142;color:#fff;text-align:left;padding:9px 10px;white-space:nowrap}.history-table td,.summary-table td{padding:8px 10px;border-bottom:1px solid #e7e9ed;white-space:nowrap}.history-table tbody tr:nth-child(even),.summary-table tbody tr:nth-child(even){background:#f8fafc}.compact-pagination{padding:12px 18px;margin:0}.number-success{color:#15803d;font-weight:800}.number-danger{color:#b91c1c;font-weight:800}.breakdown-list{display:grid;gap:8px}.breakdown-list>div{display:grid;grid-template-columns:90px 1fr 35px;gap:8px;align-items:center;padding:9px 10px;background:#f8fafc;border-radius:8px;font-size:.76rem}.breakdown-list span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#64748b}
 .bubble-chart svg,.line-chart svg{display:block;width:100%;height:225px;overflow:visible}.bubble-chart line,.line-chart line{stroke:#e5e7eb;stroke-width:1}.bubble-chart circle{opacity:.82;stroke:#fff;stroke-width:3}.bubble-chart text{fill:#172033;font-size:12px;font-weight:800;pointer-events:none}.donut-layout{display:grid;grid-template-columns:190px 1fr;gap:24px;align-items:center}.donut{width:180px;aspect-ratio:1;border-radius:50%;display:grid;place-items:center;box-shadow:inset 0 0 0 1px #ffffff55}.donut>div{width:104px;aspect-ratio:1;border-radius:50%;background:#fff;display:grid;place-content:center;text-align:center;box-shadow:0 2px 14px #0f172a1a}.donut strong{font-size:1.65rem}.donut span{color:#64748b;font-size:.72rem}.chart-legend{display:grid;gap:10px}.chart-legend>div{display:grid;grid-template-columns:10px 1fr 38px 42px;gap:8px;align-items:center;padding-bottom:8px;border-bottom:1px solid #edf0f3}.chart-legend i{width:10px;height:10px;border-radius:50%}.chart-legend small{color:#64748b;text-align:right}.line-chart{overflow-x:auto}.line-chart svg{min-width:720px}.line-chart polygon{fill:#c92d3e18}.line-chart polyline{fill:none;stroke:#c92d3e;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}.line-chart circle{fill:#fff;stroke:#c92d3e;stroke-width:4}.line-chart text{fill:#172033;font-size:12px;font-weight:800}.line-labels{display:flex;justify-content:space-between;gap:25px;min-width:720px;font-size:.67rem;color:#64748b;padding:4px 28px 0}.treemap{display:flex;align-content:stretch;flex-wrap:wrap;min-height:260px;gap:5px}.treemap article{min-width:105px;min-height:92px;padding:13px;color:#fff;border-radius:10px;display:flex;flex:1 1 125px;flex-direction:column;justify-content:flex-end;text-shadow:0 1px 2px #0006;transition:transform .18s}.treemap article:hover{transform:translateY(-2px)}.treemap strong{font-size:.9rem}.treemap span{font-size:1.15rem;font-weight:900}.treemap small{font-size:.69rem}.specialty-donut{width:170px}.specialty-donut>div{width:92px}.specialty-layout{grid-template-columns:180px 1fr}.chart-legend.compact{gap:5px}.chart-legend.compact>div{padding-bottom:4px;font-size:.72rem}.legend{display:flex;align-items:center;gap:6px;color:#64748b;font-size:.76rem}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-left:8px}.success-dot,.stack-success{background:#22c55e}.failure-dot,.stack-failure{background:#ef4444}.nocall-dot,.stack-nocall{background:#94a3b8}.objective-chart{display:grid;gap:12px}.objective-chart>div{display:grid;grid-template-columns:130px 1fr 38px;align-items:center;gap:10px}.stacked-track{display:flex;height:13px;background:#eef1f5;border-radius:99px;overflow:hidden}.stacked-track i{display:block;height:100%}
 .sale-total-table td:not(:first-child),.sale-total-table th:not(:first-child){text-align:center}.seller-username{display:block;margin-top:3px;color:#64748b;font-size:.68rem}.number-total{color:#1d4ed8;font-weight:900}
-.department-bar{grid-template-columns:minmax(120px,180px) 1fr 50px 130px}.department-bar small{text-align:right;color:#64748b}
+.department-bar{grid-template-columns:minmax(120px,180px) 1fr minmax(110px,auto) minmax(290px,auto)}.department-bar small{text-align:right;color:#64748b}.chart-heading-meta{display:grid;justify-items:end;gap:3px}.chart-total{display:block;text-align:right;color:#9d1d2d}.chart-breakdown{display:block;margin-top:5px;color:#64748b;font-size:.69rem}.objective-chart>div>b{display:grid;text-align:right}.objective-chart>div>b small{color:#64748b;font-size:.63rem}
 .hospital-ranking-table td:first-child,.hospital-ranking-table th:first-child{text-align:center;width:62px}.rank-badge{display:inline-grid;place-items:center;min-width:30px;height:30px;border-radius:50%;background:#fff0f2;color:#b82032}.hospital-ranking-table tr:nth-child(1) .rank-badge{background:#fbbf24;color:#713f12}.hospital-ranking-table tr:nth-child(2) .rank-badge{background:#cbd5e1;color:#334155}.hospital-ranking-table tr:nth-child(3) .rank-badge{background:#d97706;color:#fff}
-.planner-heading-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}.visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}.import-button{border-color:#b82032;color:#a61b2b;background:#fff}.import-modal{width:min(1180px,100%)}.import-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:13px}.import-summary article{padding:12px;border:1px solid #e2e5ea;border-radius:10px;background:#f8fafc}.import-summary article.warning{border-color:#f5c26b;background:#fff8e8}.import-summary span{display:block;color:#667085;font-size:.72rem}.import-summary strong{display:block;margin-top:5px;font-size:1rem}.import-warnings{max-height:150px;overflow:auto;margin-bottom:13px;padding:12px 14px;border:1px solid #f3c66f;border-radius:10px;background:#fff9e9;color:#7a4b00;font-size:.76rem}.import-warnings ul{margin:7px 0;padding-left:20px}.import-preview-scroll{min-height:180px;overflow:auto;border:1px solid #e2e5ea;border-radius:10px}.import-preview-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;font-size:.75rem}.import-preview-table th{position:sticky;top:0;z-index:2;padding:9px 10px;background:#263142;color:#fff;text-align:left;white-space:nowrap}.import-preview-table td{max-width:220px;padding:8px 10px;border-bottom:1px solid #e7e9ed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.import-preview-note{margin:8px 0 0}.import-confirmation{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:13px;padding-top:13px;border-top:1px solid #e2e5ea}.import-confirmation p{max-width:760px;margin:0;font-size:.78rem;color:#475569}.import-confirmation>div{display:flex;gap:8px;flex-shrink:0}
+.period-days{display:grid;gap:14px;padding:16px;background:#f5f7fa}.planner-day{overflow:hidden;border:1px solid #dfe3e9;border-radius:12px;background:#fff;box-shadow:0 2px 8px #1822300a}.planner-day.is-selected-day{border-color:#d24959;box-shadow:0 0 0 2px #d2495920}.planner-day-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;background:#fff8f9;border-bottom:1px solid #eadde0}.planner-day-heading>div{display:flex;align-items:center;gap:10px}.planner-day-heading small{color:#9d1d2d;font-weight:800}.planner-heading-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}.history-bulk-actions{display:flex;align-items:center;justify-content:flex-end;gap:9px;padding:10px 18px;border-top:1px solid #e7e9ed;background:#f8fafc}.history-check{width:42px;text-align:center!important}.history-check input{width:17px;height:17px;accent-color:#b82032}.history-table tr.is-selected-history{background:#fff0f2!important}.danger-action{border-color:#efb4bb;color:#a61b2b}.danger-action:not(:disabled):hover{background:#fff0f2}.visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}.import-button{border-color:#b82032;color:#a61b2b;background:#fff}.import-modal{width:min(1180px,100%)}.import-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:13px}.import-summary article{padding:12px;border:1px solid #e2e5ea;border-radius:10px;background:#f8fafc}.import-summary article.warning{border-color:#f5c26b;background:#fff8e8}.import-summary span{display:block;color:#667085;font-size:.72rem}.import-summary strong{display:block;margin-top:5px;font-size:1rem}.import-quality-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-bottom:13px}.quality-card{padding:10px 12px;border:1px solid #dce4ee;border-radius:10px;background:#f8fafc;font-size:.75rem}.quality-card strong{display:block;margin-bottom:5px}.quality-card p{margin:0;color:#475569;line-height:1.45}.quality-card p span{display:inline-block;margin:0 10px 2px 0}.quality-good{border-color:#a7e2bd;background:#f0fdf4}.quality-warning{border-color:#f3c66f;background:#fff9e9}.import-warnings{max-height:150px;overflow:auto;margin-bottom:13px;padding:12px 14px;border:1px solid #f3c66f;border-radius:10px;background:#fff9e9;color:#7a4b00;font-size:.76rem}.import-warnings ul{margin:7px 0;padding-left:20px}.import-preview-scroll{min-height:180px;overflow:auto;border:1px solid #e2e5ea;border-radius:10px}.import-preview-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;font-size:.75rem}.import-preview-table th{position:sticky;top:0;z-index:2;padding:9px 10px;background:#263142;color:#fff;text-align:left;white-space:nowrap}.import-preview-table td{max-width:220px;padding:8px 10px;border-bottom:1px solid #e7e9ed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.import-preview-note{margin:8px 0 0}.import-confirmation{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:13px;padding-top:13px;border-top:1px solid #e2e5ea}.import-confirmation p{max-width:760px;margin:0;font-size:.78rem;color:#475569}.import-confirmation>div{display:flex;gap:8px;flex-shrink:0}
 .lookup-modal-backdrop{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;padding:24px;background:#11182799;backdrop-filter:blur(3px)}.lookup-modal{display:flex;flex-direction:column;width:min(960px,100%);max-height:calc(100vh - 48px);padding:22px;border-radius:16px;background:#fff;box-shadow:0 24px 70px #11182755;overflow:hidden}.lookup-modal-header{flex-shrink:0;margin:0 0 15px}.lookup-modal-close{width:38px;height:38px;flex-shrink:0;border:0;border-radius:10px;background:#f3f4f6;color:#475569;font-size:1.6rem;line-height:1;cursor:pointer}.lookup-modal-close:hover{background:#fee2e2;color:#991b1b}.lookup-tabs{display:flex;flex-shrink:0;gap:7px;overflow-x:auto;padding:2px 0 13px;border-bottom:1px solid #e7e9ed}.lookup-tabs button{border:1px solid #d7dbe2;border-radius:99px;background:#fff;color:#475569;padding:7px 12px;white-space:nowrap;cursor:pointer}.lookup-tabs button.active{border-color:#b82032;background:#b82032;color:#fff}.lookup-add{display:grid;grid-template-columns:minmax(240px,1fr) auto;flex-shrink:0;gap:10px;align-items:end;padding:15px 0}.lookup-add label{display:grid;gap:6px;font-size:.8rem;font-weight:700}.lookup-add input,.lookup-table input{width:100%;border:1px solid #d5d9e0;border-radius:8px;padding:8px 10px;background:#fff;color:#172033}.lookup-table-wrap{min-height:0;overflow:auto;border:1px solid #e2e5ea;border-radius:10px}.lookup-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.8rem}.lookup-table th{position:sticky;top:0;z-index:2;background:#263142;color:#fff;text-align:left;padding:9px 10px;white-space:nowrap}.lookup-table td{padding:8px 10px;border-bottom:1px solid #e7e9ed;vertical-align:middle}.lookup-table tbody tr:nth-child(even){background:#f8fafc}.lookup-table tr.inactive{background:#f5f5f5;color:#8a93a2}.lookup-table .sort-input{width:85px}.active-toggle{display:flex;align-items:center;gap:7px;white-space:nowrap}.active-toggle input{width:17px;height:17px;accent-color:#b82032}
-@media(max-width:1000px){.filter-grid,.report-metrics,.import-summary{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){.planner-heading,.planner-footer{padding:16px}.planner-footer,.report-grid{display:grid;grid-template-columns:1fr}.planner-heading-actions{width:100%;justify-content:space-between}.day-switcher{margin:0;justify-content:center}.planner-actions .btn{flex:1}.filter-grid,.report-metrics,.import-summary{grid-template-columns:1fr}.export-actions .btn{flex:1}.objective-chart>div{grid-template-columns:90px 1fr 30px}.history-heading{display:grid}.history-filters{margin-top:12px}.donut-layout,.specialty-layout{grid-template-columns:1fr;justify-items:center}.chart-legend{width:100%}.bubble-chart svg{min-width:580px}.bubble-chart{overflow-x:auto}.section-heading{align-items:flex-start}.lookup-modal-backdrop{padding:10px}.lookup-modal{max-height:calc(100vh - 20px);padding:16px}.lookup-add{grid-template-columns:1fr}.lookup-add .btn{width:100%}.import-confirmation{display:grid}.import-confirmation>div{justify-content:flex-end}}
+.required-errors{margin-bottom:13px;padding:13px 14px;border:1px solid #f09aa4;border-radius:10px;background:#fff1f2;color:#8f1624;font-size:.78rem}.required-errors>p{margin:6px 0 10px}.required-errors-scroll{max-height:190px;overflow:auto;border:1px solid #fecdd3;border-radius:8px;background:#fff}.required-errors-table{width:100%;border-collapse:collapse;color:#172033}.required-errors-table th,.required-errors-table td{padding:8px 10px;border-bottom:1px solid #fee2e2;text-align:left;vertical-align:top}.required-errors-table th{position:sticky;top:0;background:#9f1d2d;color:#fff}.required-errors-table td:last-child{color:#991b1b;font-weight:700}.submission-actions{display:flex;align-items:flex-end;justify-content:flex-end;gap:8px;flex-wrap:wrap}.submission-actions label{display:grid;gap:4px;color:#475569;font-size:.74rem;font-weight:700}.submission-actions input{border:1px solid #d5d9e0;border-radius:8px;padding:8px 10px;background:#fff}.submission-table{min-width:930px}.submission-status{display:inline-block;padding:5px 9px;border-radius:99px;font-weight:800}.submission-status.submitted{background:#dcfce7;color:#166534}.submission-status.missing{background:#fff1f2;color:#9f1239}.source-files{display:grid;gap:6px;min-width:280px}.file-download{display:grid;gap:3px;width:100%;border:1px solid #dbe2ea;border-radius:8px;background:#fff;padding:8px 10px;text-align:left;color:#172033;cursor:pointer}.file-download:hover{border-color:#c92d3e;background:#fff8f9}.file-download strong{max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-download small{color:#64748b}.compact-button{padding:5px 9px;font-size:.72rem}.manager-edit-modal{width:min(900px,100%)}.manager-edit-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;overflow:auto;padding:2px}.manager-edit-grid label{display:grid;gap:6px;color:#344054;font-size:.78rem;font-weight:800}.manager-edit-grid input,.manager-edit-grid select{width:100%;border:1px solid #d5d9e0;border-radius:9px;padding:9px 11px;background:#fff;color:#172033}
+@media(max-width:1000px){.filter-grid,.report-metrics,.import-summary{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){.planner-heading,.planner-footer{padding:16px}.planner-footer,.report-grid{display:grid;grid-template-columns:1fr}.planner-heading-actions{width:100%;justify-content:space-between}.day-switcher{margin:0;justify-content:center}.planner-actions .btn{flex:1}.filter-grid,.report-metrics,.import-summary,.manager-edit-grid{grid-template-columns:1fr}.export-actions .btn{flex:1}.objective-chart>div{grid-template-columns:90px 1fr 30px}.history-heading{display:grid}.history-filters{margin-top:12px}.donut-layout,.specialty-layout{grid-template-columns:1fr;justify-items:center}.chart-legend{width:100%}.bubble-chart svg{min-width:580px}.bubble-chart{overflow-x:auto}.section-heading{align-items:flex-start}.lookup-modal-backdrop{padding:10px}.lookup-modal{max-height:calc(100vh - 20px);padding:16px}.lookup-add{grid-template-columns:1fr}.lookup-add .btn{width:100%}.import-confirmation{display:grid}.import-confirmation>div{justify-content:flex-end}.submission-actions{justify-content:flex-start}.submission-actions .btn{flex:1}}
+.submission-status.archived{background:#f1f5f9;color:#475569}
+.submission-actions select{min-width:146px;border:1px solid #d5d9e0;border-radius:8px;padding:8px 10px;background:#fff;color:#172033}
 </style>

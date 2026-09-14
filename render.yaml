@@ -53,6 +53,8 @@ services:
         sync: false
       - key: SUPABASE_STORAGE_BUCKET
         value: erp-budget-analysis
+      - key: SALES_CALL_STORAGE_DISK
+        value: supabase
       - key: ERP_EMAIL_NOTIFICATIONS_ENABLED
         value: "true"
       - key: WORKFLOW_EMAIL_TRANSPORT

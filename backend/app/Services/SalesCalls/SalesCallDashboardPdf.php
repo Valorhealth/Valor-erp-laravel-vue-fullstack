@@ -107,13 +107,14 @@ final class SalesCallDashboardPdf
     /** @param array<string, mixed> $dashboard */
     private function outcomeDonut(array $dashboard): string
     {
-        $values = collect(['Success', 'Failure', 'No Call'])->map(function (string $label) use ($dashboard): array {
-            $row = collect($dashboard['by_outcome'])->firstWhere('label', $label);
+        $outcomes = collect($dashboard['by_outcome']);
+        $valueFor = fn (string $label): int => (int) ($outcomes->firstWhere('label', $label)?->total ?? 0);
+        $values = [
+            ['label' => 'Success', 'total' => $valueFor('Success')],
+            ['label' => 'Failure + No Call', 'total' => $valueFor('Failure') + $valueFor('No Call')],
+        ];
 
-            return ['label' => $label, 'total' => (int) ($row->total ?? 0)];
-        })->all();
-
-        return $this->donut($values, array_slice(self::COLORS, 0, 3), 'Total Call');
+        return $this->donut($values, ['#22c55e', '#ef4444'], 'Contact Records');
     }
 
     /** @param array<string, mixed> $dashboard */
@@ -121,11 +122,11 @@ final class SalesCallDashboardPdf
     {
         $values = collect($dashboard['by_specialty'])->take(10)->map(fn ($row): array => ['label' => $row->label, 'total' => (int) $row->total])->all();
 
-        return $this->donut($values, self::COLORS, 'Top Specialty');
+        return $this->donut($values, self::COLORS, 'Total Call', (int) $dashboard['summary']['total_activities']);
     }
 
     /** @param array<int, array{label: string, total: int}> $values @param array<int, string> $colors */
-    private function donut(array $values, array $colors, string $label): string
+    private function donut(array $values, array $colors, string $label, ?int $displayTotal = null): string
     {
         $sum = array_sum(array_column($values, 'total'));
         if ($sum === 0) {
@@ -142,7 +143,7 @@ final class SalesCallDashboardPdf
             $startAngle += $sweep;
         }
 
-        return $this->svg('<svg xmlns="http://www.w3.org/2000/svg" width="520" height="165" viewBox="0 0 520 165"><rect width="520" height="165" fill="#fff"/>'.$segments.'<circle cx="90" cy="78" r="35" fill="#fff"/><text x="90" y="75" text-anchor="middle" font-family="Arial" font-size="20" font-weight="700" fill="#172033">'.number_format($sum).'</text><text x="90" y="94" text-anchor="middle" font-family="Arial" font-size="10" fill="#667085">'.e($label).'</text></svg>');
+        return $this->svg('<svg xmlns="http://www.w3.org/2000/svg" width="520" height="165" viewBox="0 0 520 165"><rect width="520" height="165" fill="#fff"/>'.$segments.'<circle cx="90" cy="78" r="35" fill="#fff"/><text x="90" y="75" text-anchor="middle" font-family="Arial" font-size="20" font-weight="700" fill="#172033">'.number_format($displayTotal ?? $sum).'</text><text x="90" y="94" text-anchor="middle" font-family="Arial" font-size="10" fill="#667085">'.e($label).'</text></svg>');
     }
 
     private function donutSegment(float $startAngle, float $sweep, string $color): string
@@ -169,12 +170,13 @@ final class SalesCallDashboardPdf
             return $this->emptyChart('No seller data');
         }
         $max = max((int) $rows->max('total'), 1);
+        $grandTotal = max((int) $dashboard['summary']['total_activities'], 1);
         $marks = '';
         foreach ($rows as $index => $row) {
             $x = 45 + ((int) $row->total / $max * 430);
             $y = 150 - ((float) $row->success_rate * 1.12);
             $radius = 10 + min(sqrt(max((int) $row->active_customers, 1)) * 3, 15);
-            $marks .= sprintf('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" fill-opacity=".82" stroke="#fff" stroke-width="2"/><text x="%.1f" y="%.1f" text-anchor="middle" font-family="Arial" font-size="10" font-weight="700">%s</text><text x="%.1f" y="%.1f" text-anchor="middle" font-family="Arial" font-size="8">%s / %s%%</text>', $x, $y, $radius, self::COLORS[$index % count(self::COLORS)], $x, $y - 2, e($row->seller_username), $x, $y + 10, number_format($row->total), number_format($row->success_rate, 1));
+            $marks .= sprintf('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" fill-opacity=".82" stroke="#fff" stroke-width="2"/><text x="%.1f" y="%.1f" text-anchor="middle" font-family="Arial" font-size="10" font-weight="700">%s</text><text x="%.1f" y="%.1f" text-anchor="middle" font-family="Arial" font-size="8">%s calls / %s%% share / %s%% success</text>', $x, $y, $radius, self::COLORS[$index % count(self::COLORS)], $x, $y - 2, e($row->seller_username), $x, $y + 10, number_format($row->total), number_format((int) $row->total / $grandTotal * 100, 1), number_format($row->success_rate, 1));
         }
 
         return $this->svg('<svg xmlns="http://www.w3.org/2000/svg" width="520" height="165"><rect width="520" height="165" fill="#fff"/><g stroke="#e5e7eb"><line x1="35" y1="38" x2="490" y2="38"/><line x1="35" y1="88" x2="490" y2="88"/><line x1="35" y1="150" x2="490" y2="150"/></g>'.$marks.'</svg>');
@@ -194,7 +196,7 @@ final class SalesCallDashboardPdf
             $x = $rows->count() === 1 ? 520 : 35 + ($index * 980 / ($rows->count() - 1));
             $y = 155 - ((int) $row->total / $max * 120);
             $points[] = sprintf('%.1f,%.1f', $x, $y);
-            $marks .= sprintf('<circle cx="%.1f" cy="%.1f" r="5" fill="#fff" stroke="#b82032" stroke-width="3"/><text x="%.1f" y="%.1f" text-anchor="middle" font-family="Arial" font-size="10" font-weight="700">%s</text><text x="%.1f" y="185" text-anchor="middle" font-family="Arial" font-size="8" fill="#667085">%s</text>', $x, $y, $x, $y - 10, number_format($row->total), $x, e(substr((string) $row->activity_date, 5, 5)));
+            $marks .= sprintf('<circle cx="%.1f" cy="%.1f" r="5" fill="#fff" stroke="#b82032" stroke-width="3"/><text x="%.1f" y="%.1f" text-anchor="middle" font-family="Arial" font-size="9" font-weight="700">%s</text><text x="%.1f" y="185" text-anchor="middle" font-family="Arial" font-size="8" fill="#667085">%s</text>', $x, $y, $x, $y - 10, number_format($row->total), $x, e(substr((string) $row->activity_date, 5, 5)));
         }
         $line = implode(' ', $points);
         $lastX = $rows->count() === 1 ? 520 : 1015;
@@ -210,6 +212,7 @@ final class SalesCallDashboardPdf
             return $this->emptyChart('No product data');
         }
         $split = (int) ceil($rows->count() / 2);
+        $grandTotal = max((int) $dashboard['summary']['total_activities'], 1);
         $groups = [$rows->slice(0, $split)->values(), $rows->slice($split)->values()];
         $rectangles = '';
         foreach ($groups as $groupIndex => $group) {
@@ -218,7 +221,8 @@ final class SalesCallDashboardPdf
             foreach ($group as $index => $row) {
                 $width = 520 * (int) $row->total / $sum;
                 $color = self::COLORS[($groupIndex * $split + $index) % count(self::COLORS)];
-                $rectangles .= sprintf('<rect x="%.1f" y="%d" width="%.1f" height="81" rx="4" fill="%s" stroke="#fff" stroke-width="3"/><text x="%.1f" y="%d" font-family="Arial" font-size="10" font-weight="700" fill="#fff">%s</text><text x="%.1f" y="%d" font-family="Arial" font-size="8" fill="#fff">%s calls / %s%%</text>', $x, $groupIndex * 83, $width, $color, $x + 6, $groupIndex * 83 + 31, e($row->label), $x + 6, $groupIndex * 83 + 47, number_format($row->total), number_format($row->success_rate, 1));
+                $successCalls = (int) ($row->success_calls ?? round((int) $row->total * (float) $row->success_rate / 100));
+                $rectangles .= sprintf('<rect x="%.1f" y="%d" width="%.1f" height="81" rx="4" fill="%s" stroke="#fff" stroke-width="3"/><text x="%.1f" y="%d" font-family="Arial" font-size="10" font-weight="700" fill="#fff">%s</text><text x="%.1f" y="%d" font-family="Arial" font-size="8" fill="#fff">%s calls / %s%% share</text><text x="%.1f" y="%d" font-family="Arial" font-size="8" fill="#fff">Success %s (%s%%)</text>', $x, $groupIndex * 83, $width, $color, $x + 6, $groupIndex * 83 + 25, e($row->label), $x + 6, $groupIndex * 83 + 42, number_format($row->total), number_format((int) $row->total / $grandTotal * 100, 1), $x + 6, $groupIndex * 83 + 57, number_format($successCalls), number_format($row->success_rate, 1));
                 $x += $width;
             }
         }
@@ -233,35 +237,44 @@ final class SalesCallDashboardPdf
         if ($rows->isEmpty()) {
             return $this->emptyChart('No objective data', 1050, 200);
         }
+        $allObjectiveRows = collect($dashboard['by_objective']);
+        $objectiveOutcomeTotal = max((int) $allObjectiveRows->sum(
+            fn ($row): int => (int) $row->success_calls + (int) $row->failure_calls + (int) $row->no_calls
+        ), 1);
         $marks = '';
         foreach ($rows as $index => $row) {
             $y = 12 + ($index * 23);
-            $total = max((int) $row->total, 1);
-            $success = 820 * (int) $row->success_calls / $total;
-            $failure = 820 * (int) $row->failure_calls / $total;
-            $noCall = 820 * (int) $row->no_calls / $total;
-            $marks .= sprintf('<text x="5" y="%d" font-family="Arial" font-size="10" font-weight="700">%s</text><rect x="165" y="%d" width="%.1f" height="13" fill="#22c55e"/><rect x="%.1f" y="%d" width="%.1f" height="13" fill="#ef4444"/><rect x="%.1f" y="%d" width="%.1f" height="13" fill="#94a3b8"/><text x="1015" y="%d" text-anchor="end" font-family="Arial" font-size="10">%s</text>', $y + 10, e($row->label), $y, $success, 165 + $success, $y, $failure, 165 + $success + $failure, $y, $noCall, $y + 10, number_format($row->total));
+            $outcomeTotal = max((int) $row->success_calls + (int) $row->failure_calls + (int) $row->no_calls, 1);
+            $success = 650 * (int) $row->success_calls / $objectiveOutcomeTotal;
+            $failedOrNoCall = (int) $row->failure_calls + (int) $row->no_calls;
+            $failedOrNoCallWidth = 650 * $failedOrNoCall / $objectiveOutcomeTotal;
+            $marks .= sprintf('<text x="5" y="%d" font-family="Arial" font-size="10" font-weight="700">%s</text><rect x="165" y="%d" width="650" height="13" rx="6" fill="#eef1f5"/><rect x="165" y="%d" width="%.1f" height="13" fill="#22c55e"/><rect x="%.1f" y="%d" width="%.1f" height="13" fill="#ef4444"/><text x="1035" y="%d" text-anchor="end" font-family="Arial" font-size="9">รวม %s | Success %s (%s%%) | Failure + No Call %s (%s%%)</text>', $y + 10, e($row->label), $y, $y, $success, 165 + $success, $y, $failedOrNoCallWidth, $y + 10, number_format($outcomeTotal), number_format($row->success_calls), number_format((int) $row->success_calls / $outcomeTotal * 100, 1), number_format($failedOrNoCall), number_format($failedOrNoCall / $outcomeTotal * 100, 1));
         }
 
-        return $this->svg('<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="200"><rect width="1050" height="200" fill="#fff"/>'.$marks.'<circle cx="390" cy="193" r="5" fill="#22c55e"/><text x="400" y="197" font-family="Arial" font-size="9">Success</text><circle cx="485" cy="193" r="5" fill="#ef4444"/><text x="495" y="197" font-family="Arial" font-size="9">Failure</text><circle cx="575" cy="193" r="5" fill="#94a3b8"/><text x="585" y="197" font-family="Arial" font-size="9">No Call</text></svg>');
+        return $this->svg('<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="200"><rect width="1050" height="200" fill="#fff"/>'.$marks.'<circle cx="420" cy="193" r="5" fill="#22c55e"/><text x="430" y="197" font-family="Arial" font-size="9">Success</text><circle cx="515" cy="193" r="5" fill="#ef4444"/><text x="525" y="197" font-family="Arial" font-size="9">Failure + No Call</text></svg>');
     }
 
     /** @param array<string, mixed> $dashboard */
     private function outcomeLegend(array $dashboard): string
     {
-        $colors = ['Success' => '#22c55e', 'Failure' => '#ef4444', 'No Call' => '#94a3b8'];
+        $outcomes = collect($dashboard['by_outcome']);
+        $values = [
+            ['label' => 'Success', 'color' => '#22c55e', 'total' => (int) ($outcomes->firstWhere('label', 'Success')?->total ?? 0)],
+            ['label' => 'Failure + No Call', 'color' => '#ef4444', 'total' => (int) ($outcomes->firstWhere('label', 'Failure')?->total ?? 0) + (int) ($outcomes->firstWhere('label', 'No Call')?->total ?? 0)],
+        ];
+        $total = max(array_sum(array_column($values, 'total')), 1);
 
-        return '<table class="legend">'.collect($colors)->map(function (string $color, string $label) use ($dashboard): string {
-            $row = collect($dashboard['by_outcome'])->firstWhere('label', $label);
-
-            return '<tr><td><i class="swatch" style="background:'.$color.'"></i>'.$label.'</td><td>'.number_format($row->total ?? 0).'</td></tr>';
+        return '<table class="legend">'.collect($values)->map(function (array $row) use ($total): string {
+            return '<tr><td><i class="swatch" style="background:'.$row['color'].'"></i>'.$row['label'].'</td><td>'.number_format($row['total']).' Calls</td><td>'.number_format($row['total'] / $total * 100, 1).'%</td></tr>';
         })->implode('').'</table>';
     }
 
     /** @param array<string, mixed> $dashboard */
     private function specialtyLegend(array $dashboard): string
     {
-        return '<table class="legend">'.collect($dashboard['by_specialty'])->take(10)->values()->map(fn ($row, int $index): string => '<tr><td><i class="swatch" style="background:'.self::COLORS[$index % count(self::COLORS)].'"></i>'.e($row->label).'</td><td>'.number_format($row->total).'</td></tr>')->implode('').'</table>';
+        $total = max((int) $dashboard['summary']['total_activities'], 1);
+
+        return '<table class="legend">'.collect($dashboard['by_specialty'])->take(10)->values()->map(fn ($row, int $index): string => '<tr><td><i class="swatch" style="background:'.self::COLORS[$index % count(self::COLORS)].'"></i>'.e($row->label).'</td><td>'.number_format($row->total).' Calls</td><td>'.number_format((int) $row->total / $total * 100, 1).'% share</td><td>'.number_format((float) ($row->success_rate ?? 0), 1).'% success</td></tr>')->implode('').'</table>';
     }
 
     /** @param array<string, mixed> $dashboard */

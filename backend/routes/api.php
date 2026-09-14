@@ -61,10 +61,17 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/sales-calls/export.xlsx', [SalesCallController::class, 'exportExcel'])->middleware('ability:sales_call_report');
         Route::get('/sales-calls/dashboard.pdf', [SalesCallController::class, 'exportDashboard'])->middleware('ability:sales_call_report');
         Route::get('/sales-calls/history', [SalesCallController::class, 'history'])->middleware('ability:sales_call_entry');
+        Route::delete('/sales-calls/history', [SalesCallController::class, 'deleteHistory'])->middleware('ability:sales_call_entry');
+        Route::get('/sales-calls/period', [SalesCallController::class, 'period'])->middleware('ability:sales_call_entry');
+        Route::put('/sales-calls/period', [SalesCallController::class, 'savePeriod'])->middleware('ability:sales_call_entry');
         Route::get('/sales-calls/day', [SalesCallController::class, 'day'])->middleware('ability:sales_call_entry');
         Route::put('/sales-calls/day', [SalesCallController::class, 'saveDay'])->middleware('ability:sales_call_entry');
         Route::post('/sales-calls/import/preview', [SalesCallController::class, 'importPreview'])->middleware('ability:sales_call_entry');
         Route::post('/sales-calls/import', [SalesCallController::class, 'import'])->middleware('ability:sales_call_entry');
+        Route::get('/sales-calls/submissions', [SalesCallController::class, 'submissions'])->middleware('ability:sales_call_report');
+        Route::delete('/sales-calls/months', [SalesCallController::class, 'deleteMonths'])->middleware('ability:sales_call_report');
+        Route::get('/sales-calls/imports/{batch}/download', [SalesCallController::class, 'downloadImport'])->middleware('ability:sales_call_report');
+        Route::put('/sales-calls/{salesCall}', [SalesCallController::class, 'updateManagedActivity'])->middleware('ability:sales_call_report');
         Route::get('/sales-call-options', [SalesCallLookupOptionController::class, 'index'])->middleware('ability:approve_bills,system_admin');
         Route::post('/sales-call-options', [SalesCallLookupOptionController::class, 'store'])->middleware('ability:approve_bills,system_admin');
         Route::put('/sales-call-options/{option}', [SalesCallLookupOptionController::class, 'update'])->middleware('ability:approve_bills,system_admin');

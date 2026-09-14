@@ -42,4 +42,8 @@ return [
         'embedding_backend' => env('REDBOOK_EMBEDDING_BACKEND', 'transformer'),
     ],
 
+    'sales_calls' => [
+        'storage_disk' => env('SALES_CALL_STORAGE_DISK', 'local'),
+    ],
+
 ];
