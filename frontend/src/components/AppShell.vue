@@ -64,7 +64,10 @@ async function signOut() {
           <small>{{ roleGroupLabel }} · {{ auth.user.value?.department || '-' }}</small>
           <small class="profile__raw-role">{{ auth.user.value?.role || 'ไม่ระบุ Role' }}</small>
         </div>
-        <button class="icon-button" type="button" aria-label="ออกจากระบบ" @click="signOut">↪</button>
+        <button class="icon-button logout-button" type="button" aria-label="ออกจากระบบ" @click="signOut">
+          <span aria-hidden="true">↪</span>
+          <span class="logout-button__label">ออกจากระบบ</span>
+        </button>
       </div>
     </aside>
 
@@ -76,7 +79,12 @@ async function signOut() {
           :aria-label="menuOpen ? 'ปิดเมนู' : 'เปิดเมนู'"
           :aria-expanded="menuOpen"
           @click="menuOpen = !menuOpen"
-        >☰</button>
+        >
+          <span class="menu-toggle-icon" aria-hidden="true">
+            <span class="menu-toggle-icon__panel"></span>
+            <span class="menu-toggle-icon__chevron"></span>
+          </span>
+        </button>
         <div>
           <h1>{{ title }}</h1>
           <p v-if="subtitle">{{ subtitle }}</p>
