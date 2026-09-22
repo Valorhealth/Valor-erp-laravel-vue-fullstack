@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\Authorization\RoleAccess;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Schema;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
@@ -84,17 +85,32 @@ final class SalesCallReportService
     /** @param array<string, mixed> $filters */
     public function filteredQuery(User $actor, array $filters, bool $forceOwn = false): Builder
     {
-        return $this->filteredActivityQuery($actor, $filters, $forceOwn)
+        $query = $this->filteredActivityQuery($actor, $filters, $forceOwn)
             // Specialty identifies a customer-contact record. No Call remains
             // visible in raw data but is excluded from Total Call in dashboard().
             ->whereNotNull('specialty')
-            ->whereRaw("BTRIM(specialty) <> ''")
+            ->whereRaw("BTRIM(specialty) <> ''");
+
+        return $this->applyReportDimensionFilters($query, $filters);
+    }
+
+    /** @param array<string, mixed> $filters */
+    private function applyReportDimensionFilters(Builder $query, array $filters): Builder
+    {
+        return $query
             ->when($filters['products'] ?? [], fn (Builder $q, array $products) => $q->whereIn('product_1', $products))
             ->when($filters['outcomes'] ?? [], fn (Builder $q, array $outcomes) => $q->whereIn('outcome', $outcomes))
             ->when($filters['stages'] ?? [], fn (Builder $q, array $stages) => $q->whereIn('opportunity_stage', $stages))
             ->when($filters['customer'] ?? null, function (Builder $q, string $customer): void {
-                $escaped = addcslashes($customer, '%_\\');
-                $q->where('customer_name', 'ilike', "%{$escaped}%");
+                $normalized = preg_replace('/\s+/u', '', mb_strtolower(trim($customer))) ?? '';
+                $escaped = addcslashes($normalized, '%_\\');
+                $pattern = "%{$escaped}%";
+
+                $q->where(function (Builder $customerQuery) use ($pattern): void {
+                    $customerQuery
+                        ->whereRaw("REGEXP_REPLACE(LOWER(COALESCE(place_of_work, '')), '\\s+', '', 'g') LIKE ?", [$pattern])
+                        ->orWhereRaw("REGEXP_REPLACE(LOWER(COALESCE(customer_name, '')), '\\s+', '', 'g') LIKE ?", [$pattern]);
+                });
             });
     }
 
@@ -103,15 +119,22 @@ final class SalesCallReportService
     {
         $base = $this->filteredQuery($actor, $filters)->without('seller');
         $callBase = (clone $base)->where('outcome', '<>', 'No Call');
-        $activityBase = $this->filteredActivityQuery($actor, $filters)->without('seller');
-        $workingDays = (int) ((clone $activityBase)->where('status', 'ทำงาน')->distinct('activity_date')->count('activity_date'));
+        $activityBase = $this->applyReportDimensionFilters(
+            $this->filteredActivityQuery($actor, $filters),
+            $filters,
+        )->without('seller');
+        $workingDayPairs = (clone $activityBase)
+            ->where('status', 'ทำงาน')
+            ->select(['seller_user_id', 'activity_date'])
+            ->distinct();
+        $workingDays = (int) DB::query()->fromSub($workingDayPairs, 'working_day_pairs')->count();
         $workingDaysBySeller = (clone $activityBase)->where('status', 'ทำงาน')
             ->selectRaw('seller_user_id, COUNT(DISTINCT activity_date) AS total')
             ->groupBy('seller_user_id')->pluck('total', 'seller_user_id');
         $workingDaysByDepartment = (clone $activityBase)
             ->leftJoin('users as activity_sellers', 'activity_sellers.id', '=', 'sales_call_activities.seller_user_id')
             ->where('sales_call_activities.status', 'ทำงาน')
-            ->selectRaw("COALESCE(NULLIF(BTRIM(activity_sellers.department), ''), 'ไม่ระบุแผนก') AS department, COUNT(DISTINCT sales_call_activities.activity_date) AS total")
+            ->selectRaw("COALESCE(NULLIF(BTRIM(activity_sellers.department), ''), 'ไม่ระบุแผนก') AS department, COUNT(DISTINCT (sales_call_activities.seller_user_id, sales_call_activities.activity_date)) AS total")
             ->groupByRaw("COALESCE(NULLIF(BTRIM(activity_sellers.department), ''), 'ไม่ระบุแผนก')")
             ->pluck('total', 'department');
         $bySellerDepartment = (clone $base)
@@ -126,8 +149,15 @@ final class SalesCallReportService
             $row->calls_per_working_day = $days > 0 ? round((int) $row->total / $days, 2) : 0;
         });
         $bySeller = (clone $base)->selectRaw("seller_user_id, seller_username, SUM(CASE WHEN outcome <> 'No Call' THEN 1 ELSE 0 END) AS total, SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END) AS success_calls, SUM(CASE WHEN outcome = 'Failure' THEN 1 ELSE 0 END) AS failure_calls, SUM(CASE WHEN outcome = 'No Call' THEN 1 ELSE 0 END) AS no_calls, ROUND(CASE WHEN SUM(CASE WHEN outcome <> 'No Call' THEN 1 ELSE 0 END) > 0 THEN SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END)::numeric * 100 / SUM(CASE WHEN outcome <> 'No Call' THEN 1 ELSE 0 END) ELSE 0 END, 2) AS success_rate, COUNT(DISTINCT CASE WHEN outcome <> 'No Call' THEN NULLIF(LOWER(BTRIM(customer_name)), '') END) AS active_customers, SUM(CASE WHEN outcome <> 'No Call' AND next_follow_up_date IS NOT NULL THEN 1 ELSE 0 END) AS follow_ups, COALESCE(SUM(CASE WHEN outcome <> 'No Call' THEN duration_minutes ELSE 0 END), 0) AS duration_minutes, COALESCE(SUM(CASE WHEN outcome <> 'No Call' THEN estimated_value ELSE 0 END), 0) AS pipeline_value, COALESCE(SUM(CASE WHEN outcome <> 'No Call' THEN actual_value ELSE 0 END), 0) AS actual_value")->groupBy('seller_user_id', 'seller_username')->orderByDesc('total')->get();
-        $bySeller->each(function ($row) use ($workingDaysBySeller): void {
+        $sellerNames = User::query()
+            ->whereIn('id', $bySeller->pluck('seller_user_id'))
+            ->get(['id', 'username', 'first_name', 'last_name'])
+            ->mapWithKeys(fn (User $seller): array => [
+                $seller->id => trim($seller->first_name.' '.$seller->last_name) ?: $seller->username,
+            ]);
+        $bySeller->each(function ($row) use ($workingDaysBySeller, $sellerNames): void {
             $days = (int) ($workingDaysBySeller[$row->seller_user_id] ?? 0);
+            $row->seller_name = $sellerNames[$row->seller_user_id] ?? $row->seller_username;
             $row->working_days = $days;
             $row->calls_per_working_day = $days > 0 ? round((int) $row->total / $days, 2) : 0;
         });
@@ -173,7 +203,7 @@ final class SalesCallReportService
                 ->whereRaw("{$hospitalExpression} IS NOT NULL")
                 ->selectRaw("{$hospitalExpression} AS hospital_name, COUNT(*) AS purchase_calls, COUNT(DISTINCT NULLIF(BTRIM(product_1), '')) AS products_count, COUNT(DISTINCT NULLIF(LOWER(BTRIM(customer_name)), '')) AS contacts_count, COALESCE(SUM(actual_value), 0) AS actual_value, MAX(activity_date) AS last_purchase_date")
                 ->groupByRaw($hospitalExpression)
-                ->orderByDesc('actual_value')
+                // ->orderByDesc('actual_value')
                 ->orderByDesc('purchase_calls')
                 ->orderBy('hospital_name')
                 ->limit(20)
@@ -318,12 +348,28 @@ final class SalesCallReportService
         $row += 2;
         $summary->setCellValue("A{$row}", 'อันดับโรงพยาบาลที่ซื้อสินค้า (อิง Success Call)');
         $row++;
-        $summary->fromArray(['Rank', 'Hospital / Place of Work', 'Success Purchase', 'Products', 'Contacts', 'Actual Value', 'Last Purchase'], null, "A{$row}");
-        $summary->getStyle("A{$row}:G{$row}")->applyFromArray($this->headerStyle());
+        $summary->fromArray([
+            'Rank',
+            'Hospital / Place of Work',
+            'Success Purchase',
+            'Products',
+            'Contacts',
+            // 'Actual Value', // เก็บไว้ใช้ในอนาคต
+            'Last Purchase',
+        ], null, "A{$row}");
+        $summary->getStyle("A{$row}:F{$row}")->applyFromArray($this->headerStyle());
         $row++;
         foreach ($dashboard['hospital_purchase_ranking'] ?? [] as $index => $record) {
-            $summary->fromArray([$index + 1, $record->hospital_name, $record->purchase_calls, $record->products_count, $record->contacts_count, $record->actual_value, $record->last_purchase_date], null, "A{$row}");
-            $summary->getStyle("F{$row}")->getNumberFormat()->setFormatCode('#,##0.00');
+            $summary->fromArray([
+                $index + 1,
+                $record->hospital_name,
+                $record->purchase_calls,
+                $record->products_count,
+                $record->contacts_count,
+                // $record->actual_value, // เก็บไว้ใช้ในอนาคต
+                $record->last_purchase_date,
+            ], null, "A{$row}");
+            // $summary->getStyle("F{$row}")->getNumberFormat()->setFormatCode('#,##0.00'); // รูปแบบตัวเลขของ Actual Value
             $row++;
         }
         foreach (range('A', 'H') as $column) {

@@ -383,7 +383,7 @@ export interface SalesCallDashboard {
       conversion_rate: number
     follow_ups_due: number
   }
-    by_seller: Array<{ seller_user_id: number; seller_username: string; total: number; success_calls: number; failure_calls: number; no_calls: number; working_days: number; success_rate: number; calls_per_working_day: number; active_customers: number; follow_ups: number; duration_minutes: number; pipeline_value: string; actual_value: string }>
+    by_seller: Array<{ seller_user_id: number; seller_username: string; seller_name: string; total: number; success_calls: number; failure_calls: number; no_calls: number; working_days: number; success_rate: number; calls_per_working_day: number; active_customers: number; follow_ups: number; duration_minutes: number; pipeline_value: string; actual_value: string }>
     by_seller_department: Array<{ department: string; total: number; success_calls: number; failure_calls: number; no_calls: number; working_days: number; success_rate: number; calls_per_working_day: number }>
     performance_matrix: Array<{ seller_username: string; place_of_work: string; total: number; success_calls: number; failure_calls: number; no_calls: number; working_days: number; success_rate: number; calls_per_working_day: number }>
   by_stage: Array<{ label: string; total: number; value: string }>

@@ -22,12 +22,12 @@ final class SalesCallDashboardPdf
             .'<div class="footer">VALOR ERP - Call Sale Dashboard - ข้อมูลตามตัวกรองที่เลือก</div>'
             .$this->header('CALL SALE DASHBOARD', $actor, $filterText)
             .$this->metrics($metrics)
-            .'<table class="chart-grid"><tr><td><h2>Call Outcome</h2><img class="chart" src="'.$this->outcomeDonut($dashboard).'">'.$this->outcomeLegend($dashboard).'</td><td><h2>Total Call x Success Rate</h2><img class="chart" src="'.$this->sellerBubbles($dashboard).'"><div class="hint">ขวา = Total Call มาก, สูง = Success Rate สูง</div></td></tr></table>'
+            .'<table class="chart-grid"><tr><td><h2>Call Outcome</h2><img class="chart" src="'.$this->outcomeDonut($dashboard).'">'.$this->outcomeLegend($dashboard).'</td><td><h2>Total Call x Success Rate</h2><img class="chart" src="'.$this->sellerBubbles($dashboard).'">'.$this->sellerLegend($dashboard).'<div class="hint">แกนนอน = Total Call, แกนตั้ง = Success Rate</div></td></tr></table>'
             .'<h2 class="section-title">ผลรวมแยกตามแผนกของ Sale</h2>'.$this->sellerDepartmentTable($dashboard)
             .'<div class="page-break"></div>'.$this->header('DAILY CALL TREND', $actor, $filterText)
             .'<h2 class="section-title">แนวโน้ม Total Call รายวัน</h2><img class="chart-trend" src="'.$this->trend($dashboard).'">'
             .'<div class="page-break"></div>'.$this->header('PRODUCT & SPECIALTY DASHBOARD', $actor, $filterText)
-            .'<table class="chart-grid"><tr><td><h2>Product Treemap</h2><img class="chart" src="'.$this->productTreemap($dashboard).'"></td><td><h2>Specialty Distribution</h2><img class="chart" src="'.$this->specialtyDonut($dashboard).'">'.$this->specialtyLegend($dashboard).'</td></tr></table>'
+            .'<table class="chart-grid"><tr><td><h2>Product Treemap</h2><img class="chart" src="'.$this->productTreemap($dashboard).'">'.$this->productLegend($dashboard).'</td><td><h2>Specialty Distribution</h2><img class="chart" src="'.$this->specialtyDonut($dashboard).'">'.$this->specialtyLegend($dashboard).'</td></tr></table>'
             .'<h2 class="section-title">Call Objective x Outcome</h2><img class="chart-wide" src="'.$this->objectives($dashboard).'">'
             .'<div class="page-break"></div>'.$this->header('SALE TOTAL SUMMARY', $actor, $filterText)
             .'<h2 class="section-title">ผลรวมของ Sale แต่ละคน</h2>'.$this->sellerTable($dashboard)
@@ -65,7 +65,7 @@ final class SalesCallDashboardPdf
     {
         $font = $fontUrl === '' ? '' : "@font-face{font-family:THSarabun;src:url('{$fontUrl}') format('truetype');font-weight:normal}@font-face{font-family:THSarabun;src:url('{$fontUrl}') format('truetype');font-weight:bold}";
 
-        return $font.'@page{margin:20px 24px 27px}*{box-sizing:border-box}body{font-family:THSarabun,DejaVu Sans,sans-serif;color:#172033;font-size:15px;margin:0}h1{color:#b82032;margin:0;font-size:27px}h2{font-size:19px;margin:0 0 6px}.meta{color:#667085;font-size:13px}.filter{margin-top:6px;padding:5px 9px;background:#f3f5f8;border-left:4px solid #b82032;color:#475467}.metrics{width:100%;margin:8px 0 10px;border-spacing:5px}.metrics td{background:#fff1f3;border:1px solid #f1c8ce;padding:7px 9px;width:25%;font-size:13px}.metrics b{font-size:21px;color:#9d1d2d}.chart-grid{width:100%;border-spacing:7px;margin:0 -7px}.chart-grid>tbody>tr>td{vertical-align:top;width:50%;border:1px solid #e2e6ec;padding:8px}.chart{width:100%;height:165px;display:block}.chart-wide{width:100%;height:170px;display:block;border:1px solid #e2e6ec;padding:6px}.chart-trend{width:100%;height:310px;display:block;border:1px solid #e2e6ec;padding:9px;margin-top:12px}.section-title{border-left:5px solid #b82032;padding-left:8px;margin:7px 0}.spaced{margin-top:14px}.legend{width:100%;border-collapse:collapse;font-size:11px}.legend td{padding:2px 4px;border-bottom:1px solid #eceff3}.swatch{display:inline-block;width:9px;height:9px;border-radius:5px;margin-right:5px}.hint{font-size:12px;color:#667085}.page-break{page-break-before:always}.footer{position:fixed;bottom:-19px;left:0;right:0;text-align:center;color:#98a2b3;font-size:10px}.data{width:100%;border-collapse:collapse;font-size:12px;page-break-inside:auto}.data tr{page-break-inside:avoid}.data th{background:#b82032;color:#fff;white-space:nowrap}.data th,.data td{padding:4px 6px;border:1px solid #d9dde3;text-align:left}.data tbody tr:nth-child(even){background:#f8fafc}.good{color:#15803d;font-weight:bold}.bad{color:#b91c1c;font-weight:bold}';
+        return $font.'@page{margin:20px 24px 27px}*{box-sizing:border-box}body{font-family:THSarabun,DejaVu Sans,sans-serif;color:#172033;font-size:15px;margin:0}h1{color:#b82032;margin:0;font-size:27px}h2{font-size:19px;margin:0 0 6px}.meta{color:#667085;font-size:13px}.filter{margin-top:6px;padding:5px 9px;background:#f3f5f8;border-left:4px solid #b82032;color:#475467}.metrics{width:100%;margin:8px 0 10px;border-spacing:5px}.metrics td{background:#fff1f3;border:1px solid #f1c8ce;padding:7px 9px;width:25%;font-size:13px}.metrics b{font-size:21px;color:#9d1d2d}.chart-grid{width:100%;border-spacing:7px;margin:0 -7px}.chart-grid>tbody>tr>td{vertical-align:top;width:50%;border:1px solid #e2e6ec;padding:8px}.chart{width:100%;height:165px;display:block}.chart-wide{width:100%;height:170px;display:block;border:1px solid #e2e6ec;padding:6px}.chart-trend{width:100%;height:310px;display:block;border:1px solid #e2e6ec;padding:9px;margin-top:12px}.section-title{border-left:5px solid #b82032;padding-left:8px;margin:7px 0}.spaced{margin-top:14px}.legend{width:100%;border-collapse:collapse;font-size:11px}.legend td{padding:2px 4px;border-bottom:1px solid #eceff3}.seller-legend,.product-legend{width:100%;border-collapse:collapse;font-size:9px;margin-top:2px}.seller-legend td,.product-legend td{width:50%;padding:2px 4px;border-bottom:1px solid #eef1f5;vertical-align:top}.seller-legend b,.product-legend b{color:#172033}.seller-legend small,.product-legend small{color:#667085}.swatch{display:inline-block;width:9px;height:9px;border-radius:5px;margin-right:5px}.hint{font-size:12px;color:#667085}.page-break{page-break-before:always}.footer{position:fixed;bottom:-19px;left:0;right:0;text-align:center;color:#98a2b3;font-size:10px}.data{width:100%;border-collapse:collapse;font-size:12px;page-break-inside:auto}.data tr{page-break-inside:avoid}.data th{background:#b82032;color:#fff;white-space:nowrap}.data th,.data td{padding:4px 6px;border:1px solid #d9dde3;text-align:left}.data tbody tr:nth-child(even){background:#f8fafc}.good{color:#15803d;font-weight:bold}.bad{color:#b91c1c;font-weight:bold}';
     }
 
     private function header(string $title, User $actor, string $filterText): string
@@ -171,15 +171,42 @@ final class SalesCallDashboardPdf
         }
         $max = max((int) $rows->max('total'), 1);
         $grandTotal = max((int) $dashboard['summary']['total_activities'], 1);
+        $grid = '';
+        foreach ([0, 25, 50, 75, 100] as $tick) {
+            $y = 125 - ($tick / 100 * 105);
+            $x = 42 + ($tick / 100 * 463);
+            $callTick = (int) round($max * $tick / 100);
+            $grid .= sprintf('<line x1="42" y1="%.1f" x2="505" y2="%.1f" stroke="#e5e7eb"/><text x="36" y="%.1f" text-anchor="end" font-family="Arial" font-size="7" fill="#667085">%d%%</text>', $y, $y, $y + 2.5, $tick);
+            $grid .= sprintf('<line x1="%.1f" y1="20" x2="%.1f" y2="125" stroke="#eef1f5"/><text x="%.1f" y="139" text-anchor="middle" font-family="Arial" font-size="7" fill="#667085">%d</text>', $x, $x, $x, $callTick);
+        }
         $marks = '';
         foreach ($rows as $index => $row) {
-            $x = 45 + ((int) $row->total / $max * 430);
-            $y = 150 - ((float) $row->success_rate * 1.12);
-            $radius = 10 + min(sqrt(max((int) $row->active_customers, 1)) * 3, 15);
-            $marks .= sprintf('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" fill-opacity=".82" stroke="#fff" stroke-width="2"/><text x="%.1f" y="%.1f" text-anchor="middle" font-family="Arial" font-size="10" font-weight="700">%s</text><text x="%.1f" y="%.1f" text-anchor="middle" font-family="Arial" font-size="8">%s calls / %s%% share / %s%% success</text>', $x, $y, $radius, self::COLORS[$index % count(self::COLORS)], $x, $y - 2, e($row->seller_username), $x, $y + 10, number_format($row->total), number_format((int) $row->total / $grandTotal * 100, 1), number_format($row->success_rate, 1));
+            $x = 42 + ((int) $row->total / $max * 463);
+            $y = 125 - ((float) $row->success_rate / 100 * 105);
+            $radius = 7 + min(sqrt(max((int) $row->active_customers, 1)) * 2, 10);
+            $marks .= sprintf('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" fill-opacity=".82" stroke="#fff" stroke-width="2"/><text x="%.1f" y="%.1f" text-anchor="middle" font-family="Arial" font-size="7" font-weight="700">%s</text><text x="%.1f" y="%.1f" text-anchor="middle" font-family="Arial" font-size="6">%s / %s%%</text>', $x, $y, $radius, self::COLORS[$index % count(self::COLORS)], $x, $y - 1, e($row->seller_username), $x, $y + 7, number_format($row->total), number_format($row->success_rate, 1));
         }
 
-        return $this->svg('<svg xmlns="http://www.w3.org/2000/svg" width="520" height="165"><rect width="520" height="165" fill="#fff"/><g stroke="#e5e7eb"><line x1="35" y1="38" x2="490" y2="38"/><line x1="35" y1="88" x2="490" y2="88"/><line x1="35" y1="150" x2="490" y2="150"/></g>'.$marks.'</svg>');
+        return $this->svg('<svg xmlns="http://www.w3.org/2000/svg" width="520" height="165" viewBox="0 0 520 165"><rect width="520" height="165" fill="#fff"/>'.$grid.'<line x1="42" y1="125" x2="505" y2="125" stroke="#94a3b8"/><line x1="42" y1="20" x2="42" y2="125" stroke="#94a3b8"/><text x="273" y="154" text-anchor="middle" font-family="Arial" font-size="8" font-weight="700" fill="#475569">Total Call</text><text x="9" y="75" text-anchor="middle" transform="rotate(-90 9 75)" font-family="Arial" font-size="8" font-weight="700" fill="#475569">Success Rate</text>'.$marks.'</svg>');
+    }
+
+    /** @param array<string, mixed> $dashboard */
+    private function sellerLegend(array $dashboard): string
+    {
+        $cells = collect($dashboard['by_seller'])->values()->map(function ($row, int $index): string {
+            $name = (string) ($row->seller_name ?? $row->seller_username);
+
+            return '<td><i class="swatch" style="background:'.self::COLORS[$index % count(self::COLORS)].'"></i><b>'.e($name).'</b> <small>('.e($row->seller_username).') · '.number_format($row->total).' Call · '.number_format($row->success_rate, 1).'%</small></td>';
+        })->all();
+        $rows = collect(array_chunk($cells, 2))->map(function (array $row): string {
+            if (count($row) === 1) {
+                $row[] = '<td></td>';
+            }
+
+            return '<tr>'.implode('', $row).'</tr>';
+        })->implode('');
+
+        return '<table class="seller-legend">'.$rows.'</table>';
     }
 
     /** @param array<string, mixed> $dashboard */
@@ -207,27 +234,103 @@ final class SalesCallDashboardPdf
     /** @param array<string, mixed> $dashboard */
     private function productTreemap(array $dashboard): string
     {
-        $rows = collect($dashboard['by_product'])->take(10)->values();
+        $rows = collect($dashboard['by_product'])
+            ->filter(fn ($row): bool => (int) $row->total > 0)
+            ->values();
         if ($rows->isEmpty()) {
             return $this->emptyChart('No product data');
         }
-        $split = (int) ceil($rows->count() / 2);
+
         $grandTotal = max((int) $dashboard['summary']['total_activities'], 1);
-        $groups = [$rows->slice(0, $split)->values(), $rows->slice($split)->values()];
+        $items = $rows->map(fn ($row, int $index): array => [
+            'row' => $row,
+            'weight' => (int) $row->total,
+            'color' => self::COLORS[$index % count(self::COLORS)],
+        ])->all();
+        $layout = $this->treemapLayout($items, 0, 0, 520, 165);
+        $clips = '';
         $rectangles = '';
-        foreach ($groups as $groupIndex => $group) {
-            $sum = max((int) $group->sum('total'), 1);
-            $x = 0.0;
-            foreach ($group as $index => $row) {
-                $width = 520 * (int) $row->total / $sum;
-                $color = self::COLORS[($groupIndex * $split + $index) % count(self::COLORS)];
-                $successCalls = (int) ($row->success_calls ?? round((int) $row->total * (float) $row->success_rate / 100));
-                $rectangles .= sprintf('<rect x="%.1f" y="%d" width="%.1f" height="81" rx="4" fill="%s" stroke="#fff" stroke-width="3"/><text x="%.1f" y="%d" font-family="Arial" font-size="10" font-weight="700" fill="#fff">%s</text><text x="%.1f" y="%d" font-family="Arial" font-size="8" fill="#fff">%s calls / %s%% share</text><text x="%.1f" y="%d" font-family="Arial" font-size="8" fill="#fff">Success %s (%s%%)</text>', $x, $groupIndex * 83, $width, $color, $x + 6, $groupIndex * 83 + 25, e($row->label), $x + 6, $groupIndex * 83 + 42, number_format($row->total), number_format((int) $row->total / $grandTotal * 100, 1), $x + 6, $groupIndex * 83 + 57, number_format($successCalls), number_format($row->success_rate, 1));
-                $x += $width;
+        foreach ($layout as $index => $rect) {
+            $x = $rect['x'] + 1.5;
+            $y = $rect['y'] + 1.5;
+            $width = max($rect['width'] - 3, 0);
+            $height = max($rect['height'] - 3, 0);
+            $row = $rect['item']['row'];
+            $color = $rect['item']['color'];
+            $clipId = 'product-'.$index;
+            $clips .= sprintf('<clipPath id="%s"><rect x="%.2f" y="%.2f" width="%.2f" height="%.2f" rx="4"/></clipPath>', $clipId, $x, $y, $width, $height);
+            $rectangles .= sprintf('<rect x="%.2f" y="%.2f" width="%.2f" height="%.2f" rx="4" fill="%s"/>', $x, $y, $width, $height, $color);
+
+            if ($width >= 34 && $height >= 18) {
+                $fontSize = $width < 70 || $height < 35 ? 7 : 9;
+                $rectangles .= sprintf('<g clip-path="url(#%s)"><text x="%.2f" y="%.2f" font-family="Arial" font-size="%d" font-weight="700" fill="#fff">%s</text>', $clipId, $x + 5, $y + 14, $fontSize, e($row->label));
+                if ($width >= 82 && $height >= 42) {
+                    $rectangles .= sprintf('<text x="%.2f" y="%.2f" font-family="Arial" font-size="7" fill="#fff">%s calls / %s%% share</text>', $x + 5, $y + 28, number_format($row->total), number_format((int) $row->total / $grandTotal * 100, 1));
+                }
+                if ($width >= 105 && $height >= 58) {
+                    $successCalls = (int) ($row->success_calls ?? round((int) $row->total * (float) $row->success_rate / 100));
+                    $rectangles .= sprintf('<text x="%.2f" y="%.2f" font-family="Arial" font-size="7" fill="#fff">Success %s (%s%%)</text>', $x + 5, $y + 41, number_format($successCalls), number_format($row->success_rate, 1));
+                }
+                $rectangles .= '</g>';
             }
         }
 
-        return $this->svg('<svg xmlns="http://www.w3.org/2000/svg" width="520" height="165">'.$rectangles.'</svg>');
+        return $this->svg('<svg xmlns="http://www.w3.org/2000/svg" width="520" height="165" viewBox="0 0 520 165"><rect width="520" height="165" fill="#fff"/><defs>'.$clips.'</defs>'.$rectangles.'</svg>');
+    }
+
+    /**
+     * Binary treemap: every rectangle receives an area exactly proportional
+     * to its Call total while recursively splitting along the longest side.
+     *
+     * @param  array<int, array{row: mixed, weight: int, color: string}>  $items
+     * @return array<int, array{x: float, y: float, width: float, height: float, item: array{row: mixed, weight: int, color: string}}>
+     */
+    private function treemapLayout(array $items, float $x, float $y, float $width, float $height): array
+    {
+        if (count($items) === 1) {
+            return [[
+                'x' => $x,
+                'y' => $y,
+                'width' => $width,
+                'height' => $height,
+                'item' => $items[0],
+            ]];
+        }
+
+        $total = max(array_sum(array_column($items, 'weight')), 1);
+        $target = $total / 2;
+        $running = 0;
+        $splitAt = 1;
+        $smallestDifference = INF;
+        for ($index = 1, $count = count($items); $index < $count; $index++) {
+            $running += $items[$index - 1]['weight'];
+            $difference = abs($target - $running);
+            if ($difference < $smallestDifference) {
+                $smallestDifference = $difference;
+                $splitAt = $index;
+            }
+        }
+
+        $first = array_slice($items, 0, $splitAt);
+        $second = array_slice($items, $splitAt);
+        $firstWeight = array_sum(array_column($first, 'weight'));
+        $ratio = $firstWeight / $total;
+
+        if ($width >= $height) {
+            $firstWidth = $width * $ratio;
+
+            return [
+                ...$this->treemapLayout($first, $x, $y, $firstWidth, $height),
+                ...$this->treemapLayout($second, $x + $firstWidth, $y, $width - $firstWidth, $height),
+            ];
+        }
+
+        $firstHeight = $height * $ratio;
+
+        return [
+            ...$this->treemapLayout($first, $x, $y, $width, $firstHeight),
+            ...$this->treemapLayout($second, $x, $y + $firstHeight, $width, $height - $firstHeight),
+        ];
     }
 
     /** @param array<string, mixed> $dashboard */
@@ -278,6 +381,24 @@ final class SalesCallDashboardPdf
     }
 
     /** @param array<string, mixed> $dashboard */
+    private function productLegend(array $dashboard): string
+    {
+        $total = max((int) $dashboard['summary']['total_activities'], 1);
+        $cells = collect($dashboard['by_product'])->values()->map(function ($row, int $index) use ($total): string {
+            return '<td><i class="swatch" style="background:'.self::COLORS[$index % count(self::COLORS)].'"></i><b>'.e($row->label).'</b> <small>· '.number_format($row->total).' Calls · '.number_format((int) $row->total / $total * 100, 1).'% · Success '.number_format((int) ($row->success_calls ?? 0)).' ('.number_format((float) ($row->success_rate ?? 0), 1).'%)</small></td>';
+        })->all();
+        $rows = collect(array_chunk($cells, 2))->map(function (array $row): string {
+            if (count($row) === 1) {
+                $row[] = '<td></td>';
+            }
+
+            return '<tr>'.implode('', $row).'</tr>';
+        })->implode('');
+
+        return '<table class="product-legend">'.$rows.'</table>';
+    }
+
+    /** @param array<string, mixed> $dashboard */
     private function sellerTable(array $dashboard): string
     {
         $rows = collect($dashboard['by_seller'])->map(fn ($row): string => '<tr><td><b>'.e($row->seller_username).'</b></td><td>'.number_format($row->total).'</td><td class="good">'.number_format($row->success_calls).'</td><td class="bad">'.number_format($row->failure_calls).'</td><td>'.number_format($row->no_calls).'</td><td><b>'.number_format($row->success_rate, 2).'%</b></td><td>'.number_format($row->working_days).'</td><td>'.number_format($row->calls_per_working_day, 2).'</td></tr>')->implode('');
@@ -312,9 +433,27 @@ final class SalesCallDashboardPdf
     /** @param array<string, mixed> $dashboard */
     private function hospitalPurchaseTable(array $dashboard): string
     {
-        $rows = collect($dashboard['hospital_purchase_ranking'] ?? [])->take(20)->values()->map(fn ($row, int $index): string => '<tr><td><b>'.number_format($index + 1).'</b></td><td><b>'.e($row->hospital_name).'</b></td><td class="good">'.number_format($row->purchase_calls).'</td><td>'.number_format($row->products_count).'</td><td>'.number_format($row->contacts_count).'</td><td>'.number_format((float) $row->actual_value, 2).'</td><td>'.e((string) $row->last_purchase_date).'</td></tr>')->implode('');
+        $rows = collect($dashboard['hospital_purchase_ranking'] ?? [])->take(20)->values()->map(function ($row, int $index): string {
+            return '<tr>'
+                .'<td><b>'.number_format($index + 1).'</b></td>'
+                .'<td><b>'.e($row->hospital_name).'</b></td>'
+                .'<td class="good">'.number_format($row->purchase_calls).'</td>'
+                .'<td>'.number_format($row->products_count).'</td>'
+                .'<td>'.number_format($row->contacts_count).'</td>'
+                // .'<td>'.number_format((float) $row->actual_value, 2).'</td>' // Actual Value (เก็บไว้ใช้ในอนาคต)
+                .'<td>'.e((string) $row->last_purchase_date).'</td>'
+                .'</tr>';
+        })->implode('');
 
-        return $this->table(['Rank', 'Hospital / Place of Work', 'Success Purchase', 'Products', 'Contacts', 'Actual Value', 'Last Purchase'], $rows);
+        return $this->table([
+            'Rank',
+            'Hospital / Place of Work',
+            'Success Purchase',
+            'Products',
+            'Contacts',
+            // 'Actual Value', // เก็บไว้ใช้ในอนาคต
+            'Last Purchase',
+        ], $rows);
     }
 
     /** @param array<int, string> $headers */

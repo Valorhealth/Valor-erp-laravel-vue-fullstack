@@ -5,7 +5,7 @@ import AppShell from '../components/AppShell.vue'
 import { api, downloadFile } from '../api/client'
 import { auth } from '../stores/auth'
 import type { Paginated, SalesCallActivity, SalesCallDashboard, SalesCallOptions } from '../types/api'
-import { money } from '../utils/format'
+// import { money } from '../utils/format' // ใช้เมื่อเปิดคอลัมน์ Actual Value กลับมา
 
 const props = withDefaults(defineProps<{ mode?: 'entry' | 'report' }>(), { mode: 'entry' })
 
@@ -131,6 +131,7 @@ const filters = reactive({
 })
 
 const maxSeller = computed(() => Math.max(...(dashboard.value?.by_seller.map(row => Number(row.total)) ?? [1]), 1))
+const sellerAxisTicks = [0, 25, 50, 75, 100]
 const submissionDepartments = computed(() => [...new Set(
   submissions.value.map(row => row.department?.trim() || 'ไม่ระบุแผนก'),
 )].sort((a, b) => a.localeCompare(b, 'th')))
@@ -139,6 +140,58 @@ const filteredSubmissions = computed(() => submissionDepartment.value
   : submissions.value)
 const maxSellerDepartment = computed(() => Math.max(...(dashboard.value?.by_seller_department.map(row => Number(row.total)) ?? [1]), 1))
 const chartColors = ['#22c55e', '#ef4444', '#94a3b8', '#2563eb', '#7c3aed', '#f59e0b', '#06b6d4', '#db2777', '#65a30d', '#ea580c', '#475569', '#c92d3e']
+type ProductRow = SalesCallDashboard['by_product'][number]
+type ProductTreemapItem = { row: ProductRow; weight: number; color: string }
+type ProductTreemapRect = ProductTreemapItem & { x: number; y: number; width: number; height: number }
+
+function layoutProductTreemap(items: ProductTreemapItem[], x = 0, y = 0, width = 100, height = 100): ProductTreemapRect[] {
+  if (!items.length) return []
+  if (items.length === 1) return [{ ...items[0], x, y, width, height }]
+
+  const total = items.reduce((sum, item) => sum + item.weight, 0)
+  const target = total / 2
+  let running = 0
+  let splitAt = 1
+  let smallestDifference = Number.POSITIVE_INFINITY
+
+  for (let index = 1; index < items.length; index += 1) {
+    running += items[index - 1].weight
+    const difference = Math.abs(target - running)
+    if (difference < smallestDifference) {
+      smallestDifference = difference
+      splitAt = index
+    }
+  }
+
+  const first = items.slice(0, splitAt)
+  const second = items.slice(splitAt)
+  const firstWeight = first.reduce((sum, item) => sum + item.weight, 0)
+  const ratio = firstWeight / total
+
+  if (width >= height) {
+    const firstWidth = width * ratio
+    return [
+      ...layoutProductTreemap(first, x, y, firstWidth, height),
+      ...layoutProductTreemap(second, x + firstWidth, y, width - firstWidth, height),
+    ]
+  }
+
+  const firstHeight = height * ratio
+  return [
+    ...layoutProductTreemap(first, x, y, width, firstHeight),
+    ...layoutProductTreemap(second, x, y + firstHeight, width, height - firstHeight),
+  ]
+}
+
+const productTreemap = computed(() => layoutProductTreemap(
+  (dashboard.value?.by_product ?? [])
+    .filter(row => Number(row.total) > 0)
+    .map((row, index) => ({
+      row,
+      weight: Number(row.total),
+      color: chartColors[index % chartColors.length],
+    })),
+))
 const outcomeRows = computed(() => {
   const rows = dashboard.value?.by_outcome ?? []
   const totalFor = (label: string) => Number(rows.find(row => row.label === label)?.total ?? 0)
@@ -222,6 +275,18 @@ function dateRange(from: string, to: string): string[] {
 
 function percent(value: number | string, total = reportTotal.value): string {
   return total ? `${(Number(value) / total * 100).toFixed(1)}%` : '0.0%'
+}
+
+function sellerPlotX(total: number | string): number {
+  return 80 + Number(total) / maxSeller.value * 870
+}
+
+function sellerPlotY(successRate: number | string): number {
+  return 200 - Number(successRate) / 100 * 160
+}
+
+function sellerCallTick(percentValue: number): number {
+  return Math.round(maxSeller.value * percentValue / 100)
 }
 
 function optionValues(field: OptionKey, currentValue = ''): string[] {
@@ -813,7 +878,7 @@ onMounted(async () => {
         </div>
         <div v-if="submissionsLoading" class="loading-box">กำลังตรวจสอบรายการส่ง Call Sale...</div>
         <div v-else class="summary-scroll"><table class="summary-table submission-table"><thead><tr><th>เลือก</th><th>สถานะ</th><th>Sale</th><th>แผนก</th><th>Total Call</th><th>ไฟล์ Excel ต้นฉบับ / กิจกรรมอื่น</th><th>จัดการ</th></tr></thead><tbody>
-          <tr v-for="row in filteredSubmissions" :key="row.seller_user_id"><td class="history-check"><input v-model="selectedSubmissionSellerIds" type="checkbox" :value="row.seller_user_id" :disabled="!row.activity_count"></td><td><span class="submission-status" :class="row.submitted ? 'submitted' : (row.archived_only ? 'archived' : 'missing')">{{ row.submitted ? 'ส่งแล้ว' : (row.archived_only ? 'ลบข้อมูลแล้ว' : 'ยังไม่ส่ง') }}</span></td><td><strong>{{ row.name }}</strong><small class="seller-username">{{ row.username }}</small></td><td>{{ row.department || '-' }}</td><td class="number-total">{{ row.call_count }}</td><td><div v-if="row.files.length" class="source-files"><button v-for="file in row.files" :key="file.id" class="file-download" type="button" @click="downloadFile(`/api/v1/sales-calls/imports/${file.id}/download`, file.original_filename)"><strong>⬇ {{ file.original_filename }}</strong><small>นำเข้า {{ file.imported_rows }} แถว · กิจกรรมที่ไม่มี Specialty {{ file.source_activity_rows }} แถว<span v-if="file.data_deleted_at"> · ข้อมูลในระบบถูกลบแล้ว (เก็บไฟล์หลักฐานไว้)</span></small></button></div><span v-else class="muted">กรอกผ่านหน้าเว็บ — ไม่มีไฟล์ต้นฉบับ</span></td><td><button class="btn" type="button" :disabled="!row.activity_count" @click="showSubmission(row)">ดู/แก้ไขข้อมูล</button></td></tr>
+          <tr v-for="row in filteredSubmissions" :key="row.seller_user_id"><td class="history-check"><input v-model="selectedSubmissionSellerIds" type="checkbox" :value="row.seller_user_id" :disabled="!row.activity_count"></td><td><span class="submission-status" :class="row.submitted ? 'submitted' : (row.archived_only ? 'archived' : 'missing')">{{ row.submitted ? 'ส่งแล้ว' : (row.archived_only ? 'ลบข้อมูลแล้ว' : 'ยังไม่ส่ง') }}</span></td><td><strong>{{ row.name }}</strong><small class="seller-username">{{ row.username }}</small></td><td>{{ row.department || '-' }}</td><td class="number-total">{{ row.call_count }}</td><td><div v-if="row.files.length" class="source-files"><button v-for="file in row.files" :key="file.id" class="file-download" type="button" @click="downloadFile(`/api/v1/sales-calls/imports/${file.id}/download`, file.original_filename)"><strong>⬇ {{ file.original_filename }}</strong><small>นำเข้า {{ file.imported_rows }} แถว · กิจกรรมที่ไม่มี Specialty {{ file.source_activity_rows }} แถว<span v-if="file.data_deleted_at"> · ข้อมูลในระบบถูกลบแล้ว (เก็บไฟล์หลักฐานไว้)</span></small></button></div><span v-else class="muted">ยังไม่มีไฟล์ Excel ที่ Import ผ่านระบบสำเร็จ</span></td><td><button class="btn" type="button" :disabled="!row.activity_count" @click="showSubmission(row)">ดู/แก้ไขข้อมูล</button></td></tr>
           <tr v-if="!filteredSubmissions.length"><td colspan="7" class="empty-cell">ไม่พบรายชื่อ Sale ในแผนกที่เลือก</td></tr>
         </tbody></table></div>
       </section>
@@ -828,7 +893,7 @@ onMounted(async () => {
           <label>แผนกของ Sale (เลือกได้หลายแผนก)<select v-model="filters.seller_departments" multiple><option v-for="department in options.seller_departments" :key="department">{{ department }}</option></select></label>
           <label>ตั้งแต่วันที่<input v-model="filters.date_from" type="date"></label>
           <label>ถึงวันที่<input v-model="filters.date_to" type="date"></label>
-          <label>ค้นหาลูกค้า<input v-model.trim="filters.customer" placeholder="ชื่อลูกค้า/โรงพยาบาล"></label>
+          <label>ค้นหาโรงพยาบาล/ลูกค้า<input v-model.trim="filters.customer" placeholder="PLACE OF WORK หรือ CUSTOMER NAME"></label>
           <label>Product<select v-model="filters.products" multiple><option v-for="item in options.products" :key="item">{{ item }}</option></select></label>
           <label>Call Outcome<select v-model="filters.outcomes" multiple><option v-for="item in options.outcomes" :key="item">{{ item }}</option></select></label>
           <label>Status<select v-model="filters.statuses" multiple><option v-for="item in options.statuses" :key="item">{{ item }}</option></select></label>
@@ -901,14 +966,14 @@ onMounted(async () => {
         </div>
 
         <div class="report-grid section-gap">
-          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">SALES PERFORMANCE</p><h2>Total Call × Success Rate</h2></div><div class="chart-heading-meta"><strong>รวม {{ reportTotal.toLocaleString() }} Call</strong><small class="muted">ขวา = Call มาก · สูง = Success Rate สูง</small></div></div><div v-if="dashboard.by_seller.length" class="bubble-chart"><svg viewBox="0 0 1000 245" role="img" aria-label="เปรียบเทียบ Total Call และ Success Rate ของ Sale"><line v-for="y in [35,85,135,185]" :key="y" x1="35" :y1="y" x2="965" :y2="y"/><g v-for="(row,index) in dashboard.by_seller" :key="row.seller_username"><circle :cx="45 + Number(row.total) / maxSeller * 900" :cy="185 - Number(row.success_rate) * 1.5" :r="15 + Math.min(Number(row.active_customers), 17)" :fill="chartColors[index % chartColors.length]"/><text class="bubble-name" :x="45 + Number(row.total) / maxSeller * 900" :y="179 - Number(row.success_rate) * 1.5" text-anchor="middle">{{ row.seller_username }}</text><text class="bubble-value" :x="45 + Number(row.total) / maxSeller * 900" :y="198 - Number(row.success_rate) * 1.5" text-anchor="middle">{{ row.total }} Call · {{ row.success_rate }}%</text></g></svg><div class="seller-bubble-details" aria-label="คำอธิบายจุด Sale"><div v-for="(row,index) in dashboard.by_seller" :key="`bubble-detail-${row.seller_user_id}`"><i :style="{ background: chartColors[index % chartColors.length] }"></i><strong>{{ sellerName(row.seller_user_id, row.seller_username) }}</strong><small>{{ row.seller_username }}</small><span>{{ row.total }} Call</span><span>{{ percent(row.total) }} ของทั้งหมด</span><b>Success {{ row.success_rate }}%</b></div></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
-          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">CALL OUTCOME</p><h2>สัดส่วนผลลัพธ์การติดต่อ</h2></div></div><div v-if="dashboard.by_outcome.length" class="donut-layout"><div class="donut" :style="outcomeDonut"><div><strong>{{ outcomeAttemptTotal }}</strong><span>Contact Records</span></div></div><div class="chart-legend"><div v-for="(row,index) in outcomeRows" :key="row.label"><i :style="{ background: ['#22c55e','#ef4444'][index] }"></i><span>{{ row.label }}</span><strong>{{ row.total }}</strong><small>{{ percent(row.total, outcomeAttemptTotal) }}</small></div></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
+          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">SALES PERFORMANCE</p><h2>Total Call × Success Rate</h2></div><div class="chart-heading-meta"><strong>รวม {{ reportTotal.toLocaleString() }} Call</strong><small class="muted">ขวา = Call มาก · สูง = Success Rate สูง</small></div></div><div v-if="dashboard.by_seller.length" class="bubble-chart"><svg viewBox="0 0 1000 255" role="img" aria-label="เปรียบเทียบ Total Call และ Success Rate ของ Sale พร้อมแกนตัวเลข"><g v-for="tick in sellerAxisTicks" :key="`y-${tick}`"><line x1="80" :y1="sellerPlotY(tick)" x2="950" :y2="sellerPlotY(tick)"/><text class="bubble-axis-label" x="68" :y="sellerPlotY(tick) + 4" text-anchor="end">{{ tick }}%</text></g><g v-for="tick in sellerAxisTicks" :key="`x-${tick}`"><line class="bubble-grid-vertical" :x1="80 + tick * 8.7" y1="40" :x2="80 + tick * 8.7" y2="200"/><text class="bubble-axis-label" :x="80 + tick * 8.7" y="219" text-anchor="middle">{{ sellerCallTick(tick) }}</text></g><line class="bubble-axis-line" x1="80" y1="200" x2="950" y2="200"/><line class="bubble-axis-line" x1="80" y1="40" x2="80" y2="200"/><text class="bubble-axis-title" x="515" y="244" text-anchor="middle">Total Call</text><text class="bubble-axis-title" x="17" y="120" text-anchor="middle" transform="rotate(-90 17 120)">Success Rate</text><g v-for="(row,index) in dashboard.by_seller" :key="row.seller_username"><title>{{ sellerName(row.seller_user_id, row.seller_username) }} · {{ row.total }} Call · {{ percent(row.total) }} ของทั้งหมด · Success {{ row.success_calls }} ({{ row.success_rate }}%) · ลูกค้า {{ row.active_customers }} ราย</title><circle :cx="sellerPlotX(row.total)" :cy="sellerPlotY(row.success_rate)" :r="15 + Math.min(Number(row.active_customers), 17)" :fill="chartColors[index % chartColors.length]"/><text class="bubble-name" :x="sellerPlotX(row.total)" :y="sellerPlotY(row.success_rate) - 5" text-anchor="middle">{{ row.seller_username }}</text><text class="bubble-value" :x="sellerPlotX(row.total)" :y="sellerPlotY(row.success_rate) + 10" text-anchor="middle">{{ row.total }} Call · {{ row.success_rate }}%</text></g></svg><div class="seller-bubble-details" aria-label="คำอธิบายจุด Sale"><div v-for="(row,index) in dashboard.by_seller" :key="`bubble-detail-${row.seller_user_id}`" :title="`${sellerName(row.seller_user_id, row.seller_username)} · ${row.total} Call · Success ${row.success_calls} (${row.success_rate}%)`"><i :style="{ background: chartColors[index % chartColors.length] }"></i><strong>{{ row.seller_name || sellerName(row.seller_user_id, row.seller_username) }}</strong><small>{{ row.seller_username }}</small><span>{{ row.total }} Call</span><span>{{ percent(row.total) }} ของทั้งหมด</span><b>Success {{ row.success_rate }}%</b></div></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
+          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">CALL OUTCOME</p><h2>สัดส่วนผลลัพธ์การติดต่อ</h2></div></div><div v-if="dashboard.by_outcome.length" class="donut-layout"><div class="donut" :style="outcomeDonut" :title="outcomeRows.map(row => `${row.label}: ${row.total} (${percent(row.total, outcomeAttemptTotal)})`).join(' · ')"><div><strong>{{ outcomeAttemptTotal }}</strong><span>Contact Records</span></div></div><div class="chart-legend"><div v-for="(row,index) in outcomeRows" :key="row.label" :title="`${row.label}: ${row.total} รายการ (${percent(row.total, outcomeAttemptTotal)})`"><i :style="{ background: ['#22c55e','#ef4444'][index] }"></i><span>{{ row.label }}</span><strong>{{ row.total }}</strong><small>{{ percent(row.total, outcomeAttemptTotal) }}</small></div></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
         </div>
 
         <section class="content-card section-gap">
           <div class="section-heading"><div><p class="eyebrow">SALE DEPARTMENT</p><h2>Total Call แยกตามแผนกของ Sale</h2><p class="muted">อ้างอิงแผนกปัจจุบันจากบัญชีผู้ใช้ของ Sale</p></div><strong class="chart-total">รวม {{ reportTotal.toLocaleString() }} Call</strong></div>
           <div class="bar-list">
-            <div v-for="row in dashboard.by_seller_department" :key="row.department" class="report-bar department-bar">
+            <div v-for="row in dashboard.by_seller_department" :key="row.department" class="report-bar department-bar" :title="`${row.department}: ${row.total} Call (${percent(row.total)}) · Success ${row.success_calls} (${row.success_rate}%) · Failure + No Call ${Number(row.failure_calls) + Number(row.no_calls)} · Working Day ${row.working_days}`">
               <strong>{{ row.department }}</strong>
               <div><i class="blue" :style="{ width: `${Math.max(Number(row.total) / maxSellerDepartment * 100, 2)}%` }"></i></div>
               <b>{{ row.total }} · {{ percent(row.total) }}</b>
@@ -918,13 +983,48 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="content-card section-gap"><div class="section-heading"><div><p class="eyebrow">PERFORMANCE TREND</p><h2>แนวโน้ม Total Call รายวัน</h2></div><div class="chart-heading-meta"><strong>รวม {{ reportTotal.toLocaleString() }} Call</strong><small class="muted">Line + Area Chart · เลื่อนแนวนอนเพื่อดูข้อมูลทั้งหมด</small></div></div><div v-if="trendPoints.length" class="line-chart"><svg viewBox="0 0 1000 225" preserveAspectRatio="none" :style="{ width: `${trendChartWidth}px` }" role="img" aria-label="แนวโน้ม Total Call รายวัน"><line v-for="y in [35,85,135,185]" :key="y" x1="35" :y1="y" x2="965" :y2="y"/><polygon :points="trendArea"/><polyline :points="trendLine"/><g v-for="point in trendPoints" :key="point.activity_date"><circle :cx="point.x" :cy="point.y" r="6"/><text :x="point.x" :y="point.y - 12" text-anchor="middle">{{ point.total }}</text></g></svg><div class="line-labels" :style="{ width: `${trendChartWidth}px` }"><span v-for="point in trendPoints" :key="point.activity_date" :style="{ left: `${point.x / 10}%` }">{{ shortDate(point.activity_date) }}</span></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
+        <section class="content-card section-gap"><div class="section-heading"><div><p class="eyebrow">PERFORMANCE TREND</p><h2>แนวโน้ม Total Call รายวัน</h2></div><div class="chart-heading-meta"><strong>รวม {{ reportTotal.toLocaleString() }} Call</strong><small class="muted">Line + Area Chart · เลื่อนแนวนอนเพื่อดูข้อมูลทั้งหมด</small></div></div><div v-if="trendPoints.length" class="line-chart"><svg viewBox="0 0 1000 225" preserveAspectRatio="none" :style="{ width: `${trendChartWidth}px` }" role="img" aria-label="แนวโน้ม Total Call รายวัน"><line v-for="y in [35,85,135,185]" :key="y" x1="35" :y1="y" x2="965" :y2="y"/><polygon :points="trendArea"/><polyline :points="trendLine"/><g v-for="point in trendPoints" :key="point.activity_date"><title>วันที่ {{ shortDate(point.activity_date) }} · {{ point.total }} Call</title><circle :cx="point.x" :cy="point.y" r="6"/><text :x="point.x" :y="point.y - 12" text-anchor="middle">{{ point.total }}</text></g></svg><div class="line-labels" :style="{ width: `${trendChartWidth}px` }"><span v-for="point in trendPoints" :key="point.activity_date" :style="{ left: `${point.x / 10}%` }" :title="`วันที่ ${shortDate(point.activity_date)} · ${point.total} Call`">{{ shortDate(point.activity_date) }}</span></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
 
-        <section class="content-card section-gap"><div class="section-heading"><div><p class="eyebrow">CALL OBJECTIVE × OUTCOME</p><h2>ผลลัพธ์แยกตามวัตถุประสงค์การ Call</h2><p class="muted">ความยาวแท่งคำนวณจากจำนวนรายการของ Objective เทียบกับรายการติดต่อทั้งหมด</p></div><div><strong class="chart-total">รวม {{ objectiveOutcomeTotal.toLocaleString() }} รายการติดต่อ</strong><div class="legend"><span class="dot success-dot"></span>Success <span class="dot failure-dot"></span>Failure + No Call</div></div></div><div class="objective-chart"><div v-for="row in dashboard.by_objective" :key="row.label"><strong>{{ row.label }}</strong><div><div class="stacked-track"><i class="stack-success" :style="{ width: `${objectiveOutcomeTotal ? Number(row.success_calls) / objectiveOutcomeTotal * 100 : 0}%` }"></i><i class="stack-failure" :style="{ width: `${objectiveOutcomeTotal ? (Number(row.failure_calls) + Number(row.no_calls)) / objectiveOutcomeTotal * 100 : 0}%` }"></i></div><small class="chart-breakdown">Success {{ row.success_calls }} ({{ percent(row.success_calls, Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls)) }}) · Failure + No Call {{ Number(row.failure_calls) + Number(row.no_calls) }} ({{ percent(Number(row.failure_calls) + Number(row.no_calls), Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls)) }}) · สัดส่วนทั้งหมด {{ percent(Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls), objectiveOutcomeTotal) }}</small></div><b>{{ Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls) }}<small>รายการ</small></b></div><p v-if="!dashboard.by_objective.length" class="muted">ยังไม่มีข้อมูล</p></div></section>
+        <section class="content-card section-gap"><div class="section-heading"><div><p class="eyebrow">CALL OBJECTIVE × OUTCOME</p><h2>ผลลัพธ์แยกตามวัตถุประสงค์การ Call</h2><p class="muted">ความยาวแท่งคำนวณจากจำนวนรายการของ Objective เทียบกับรายการติดต่อทั้งหมด</p></div><div><strong class="chart-total">รวม {{ objectiveOutcomeTotal.toLocaleString() }} รายการติดต่อ</strong><div class="legend"><span class="dot success-dot"></span>Success <span class="dot failure-dot"></span>Failure + No Call</div></div></div><div class="objective-chart"><div v-for="row in dashboard.by_objective" :key="row.label" :title="`${row.label}: รวม ${Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls)} รายการ · Success ${row.success_calls} (${percent(row.success_calls, Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls))}) · Failure + No Call ${Number(row.failure_calls) + Number(row.no_calls)} (${percent(Number(row.failure_calls) + Number(row.no_calls), Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls))})`"><strong>{{ row.label }}</strong><div><div class="stacked-track"><i class="stack-success" :style="{ width: `${objectiveOutcomeTotal ? Number(row.success_calls) / objectiveOutcomeTotal * 100 : 0}%` }"></i><i class="stack-failure" :style="{ width: `${objectiveOutcomeTotal ? (Number(row.failure_calls) + Number(row.no_calls)) / objectiveOutcomeTotal * 100 : 0}%` }"></i></div><small class="chart-breakdown">Success {{ row.success_calls }} ({{ percent(row.success_calls, Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls)) }}) · Failure + No Call {{ Number(row.failure_calls) + Number(row.no_calls) }} ({{ percent(Number(row.failure_calls) + Number(row.no_calls), Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls)) }}) · สัดส่วนทั้งหมด {{ percent(Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls), objectiveOutcomeTotal) }}</small></div><b>{{ Number(row.success_calls) + Number(row.failure_calls) + Number(row.no_calls) }}<small>รายการ</small></b></div><p v-if="!dashboard.by_objective.length" class="muted">ยังไม่มีข้อมูล</p></div></section>
 
         <div class="report-grid section-gap">
-          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">PRODUCT DASHBOARD</p><h2>Product Treemap</h2></div><div class="chart-heading-meta"><strong>รวม {{ reportTotal.toLocaleString() }} Call</strong><small class="muted">พื้นที่ใหญ่ = จำนวน Call มาก</small></div></div><div v-if="dashboard.by_product.length" class="treemap"><article v-for="(row,index) in dashboard.by_product" :key="row.label" :style="{ flexGrow: Number(row.total), background: chartColors[index % chartColors.length] }"><strong>{{ row.label }}</strong><span>{{ row.total }} Calls · {{ percent(row.total) }}</span><small>Success {{ row.success_calls }} ({{ row.success_rate }}%)</small></article></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
-          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">SPECIALTY DASHBOARD</p><h2>สัดส่วน Call ตาม Specialty</h2></div><small class="muted">10 อันดับแรก</small></div><div v-if="dashboard.by_specialty.length" class="donut-layout specialty-layout"><div class="donut specialty-donut" :style="specialtyDonut"><div><strong>{{ reportTotal }}</strong><span>Total Call</span></div></div><div class="chart-legend compact"><div v-for="(row,index) in dashboard.by_specialty.slice(0,10)" :key="row.label"><i :style="{ background: chartColors[index % chartColors.length] }"></i><span>{{ row.label }} · Success {{ row.success_rate }}%</span><strong>{{ row.total }}</strong><small>{{ percent(row.total) }}</small></div></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
+          <section class="content-card">
+            <div class="section-heading">
+              <div><p class="eyebrow">PRODUCT DASHBOARD</p><h2>Product Treemap</h2></div>
+              <div class="chart-heading-meta"><strong>รวม {{ reportTotal.toLocaleString() }} Call</strong><small class="muted">พื้นที่ของแต่ละกล่องคำนวณตามสัดส่วน Call จริง</small></div>
+            </div>
+            <template v-if="productTreemap.length">
+              <div class="treemap">
+                <article
+                  v-for="item in productTreemap"
+                  :key="item.row.label"
+                  :class="{ compact: item.width < 18 || item.height < 22, tiny: item.width < 7 || item.height < 8 }"
+                  :style="{
+                    left: `${item.x}%`,
+                    top: `${item.y}%`,
+                    width: `${item.width}%`,
+                    height: `${item.height}%`,
+                    background: item.color,
+                  }"
+                  :title="`${item.row.label}: ${item.row.total} Calls (${percent(item.row.total)})`"
+                >
+                  <strong>{{ item.row.label }}</strong>
+                  <span>{{ item.row.total }} Calls · {{ percent(item.row.total) }}</span>
+                  <small>Success {{ item.row.success_calls }} ({{ item.row.success_rate }}%)</small>
+                </article>
+              </div>
+              <div class="treemap-details" aria-label="รายละเอียดจำนวน Call แยกตาม Product">
+                <div v-for="item in productTreemap" :key="`product-detail-${item.row.label}`">
+                  <i :style="{ background: item.color }"></i>
+                  <strong>{{ item.row.label }}</strong>
+                  <span>{{ item.row.total }} Calls</span>
+                  <small>{{ percent(item.row.total) }}</small>
+                </div>
+              </div>
+            </template>
+            <p v-else class="muted">ยังไม่มีข้อมูล</p>
+          </section>
+          <section class="content-card"><div class="section-heading"><div><p class="eyebrow">SPECIALTY DASHBOARD</p><h2>สัดส่วน Call ตาม Specialty</h2></div><small class="muted">10 อันดับแรก</small></div><div v-if="dashboard.by_specialty.length" class="donut-layout specialty-layout"><div class="donut specialty-donut" :style="specialtyDonut" :title="dashboard.by_specialty.slice(0,10).map(row => `${row.label}: ${row.total} Call (${percent(row.total)}) · Success ${row.success_rate}%`).join(' · ')"><div><strong>{{ reportTotal }}</strong><span>Total Call</span></div></div><div class="chart-legend compact"><div v-for="(row,index) in dashboard.by_specialty.slice(0,10)" :key="row.label" :title="`${row.label}: ${row.total} Call (${percent(row.total)}) · Success ${row.success_calls} (${row.success_rate}%)`"><i :style="{ background: chartColors[index % chartColors.length] }"></i><span>{{ row.label }} · Success {{ row.success_rate }}%</span><strong>{{ row.total }}</strong><small>{{ percent(row.total) }}</small></div></div></div><p v-else class="muted">ยังไม่มีข้อมูล</p></section>
         </div>
 
         <section class="content-card section-gap">
@@ -939,7 +1039,35 @@ onMounted(async () => {
 
         <section class="content-card section-gap">
           <div class="section-heading"><div><p class="eyebrow">HOSPITAL PURCHASE RANKING</p><h2>อันดับโรงพยาบาลที่ซื้อสินค้ากับบริษัท</h2><p class="muted">จัดอันดับจาก Call Outcome = Success ตามตัวกรองด้านบน และใช้ PLACE OF WORK เป็นชื่อโรงพยาบาล</p></div><small class="muted">สูงสุด 20 อันดับ</small></div>
-          <div class="summary-scroll"><table class="summary-table hospital-ranking-table"><thead><tr><th>Rank</th><th>Hospital / Place of Work</th><th>Success Purchase</th><th>Products</th><th>Contacts</th><th>Actual Value</th><th>Last Purchase</th></tr></thead><tbody><tr v-for="(row, index) in dashboard.hospital_purchase_ranking" :key="row.hospital_name"><td><strong class="rank-badge">{{ index + 1 }}</strong></td><td><strong>{{ row.hospital_name }}</strong></td><td class="number-success">{{ row.purchase_calls }}</td><td>{{ row.products_count }}</td><td>{{ row.contacts_count }}</td><td class="number-total">{{ money(row.actual_value) }}</td><td>{{ shortDate(row.last_purchase_date) }}</td></tr><tr v-if="!dashboard.hospital_purchase_ranking.length"><td colspan="7" class="empty-cell">ยังไม่มีโรงพยาบาลที่มีผลลัพธ์ Success ตามตัวกรอง</td></tr></tbody></table></div>
+          <div class="summary-scroll">
+            <table class="summary-table hospital-ranking-table">
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Hospital / Place of Work</th>
+                  <th>Success Purchase</th>
+                  <th>Products</th>
+                  <th>Contacts</th>
+                  <!-- <th>Actual Value</th> -->
+                  <th>Last Purchase</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, index) in dashboard.hospital_purchase_ranking" :key="row.hospital_name">
+                  <td><strong class="rank-badge">{{ index + 1 }}</strong></td>
+                  <td><strong>{{ row.hospital_name }}</strong></td>
+                  <td class="number-success">{{ row.purchase_calls }}</td>
+                  <td>{{ row.products_count }}</td>
+                  <td>{{ row.contacts_count }}</td>
+                  <!-- <td class="number-total">{{ money(row.actual_value) }}</td> -->
+                  <td>{{ shortDate(row.last_purchase_date) }}</td>
+                </tr>
+                <tr v-if="!dashboard.hospital_purchase_ranking.length">
+                  <td colspan="6" class="empty-cell">ยังไม่มีโรงพยาบาลที่มีผลลัพธ์ Success ตามตัวกรอง</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <section class="content-card section-gap">
@@ -985,7 +1113,7 @@ onMounted(async () => {
 
 <style scoped>
 .alert{padding:12px 15px;border-radius:10px;margin-bottom:12px}.alert-error{background:#fff0f1;color:#a61b2b}.alert-success{background:#ecfdf3;color:#067647}.eyebrow{margin:0 0 5px;color:#c92d3e;font-size:.72rem;font-weight:800;letter-spacing:.13em}.daily-card{padding:0;overflow:hidden;border-top:4px solid #c92d3e}.planner-heading{padding:22px 24px 18px;margin:0;border-bottom:1px solid #e3e6eb}.row-count{border-radius:99px;background:#fff0f2;color:#b82032;font-weight:800;padding:8px 14px}.planner-scroll,.raw-scroll{overflow:auto;max-width:100%;border-bottom:1px solid #e2e5ea}.planner-table,.raw-table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:.78rem}.planner-table th,.raw-table th{position:sticky;top:0;z-index:3;background:#b82032;color:#fff;padding:10px 8px;border-right:1px solid #d95060;white-space:nowrap;text-align:center}.planner-table td{padding:0;border-right:1px solid #dfe2e7;border-bottom:1px solid #dfe2e7;background:#fff;vertical-align:top}.planner-table tr:nth-child(even) td{background:#fffafb}.planner-table input,.planner-table select,.planner-table textarea{display:block;width:150px;min-height:54px;border:0;border-radius:0;padding:8px;background:transparent;color:#172033;font:inherit;resize:vertical}.planner-table select{width:145px}.planner-table input[type=date]{width:132px}.planner-table textarea:focus,.planner-table select:focus,.planner-table input:focus{outline:2px solid #e05060;outline-offset:-2px;background:#fff}.planner-table .locked{padding:13px 8px;text-align:center;background:#f4f5f7!important;color:#4b5565;white-space:nowrap}.planner-table .col-no{position:sticky;left:0;z-index:2;width:68px;min-width:68px}.planner-table th.col-no{z-index:5;background:#951a29}.planner-table .col-date{position:sticky;left:68px;z-index:2;width:105px;min-width:105px}.planner-table th.col-date{z-index:5;background:#a91e2e}.planner-table .col-remove{width:40px;min-width:40px}.remove-row{border:0;background:transparent;color:#b42318;font-size:1.45rem;cursor:pointer;padding:10px}.planner-footer{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:18px 24px;background:#fafbfc;flex-wrap:wrap}.planner-actions,.day-switcher,.export-actions,.filter-actions,.pagination{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.add-row{border-style:dashed}.save-table{min-width:150px}.day-switcher{margin-left:auto;border:1px solid #d7dbe2;border-radius:12px;background:#fff;padding:5px}.day-switcher button{width:36px;height:36px;border:0;border-radius:8px;background:#f4f5f7;font-size:1.35rem;cursor:pointer}.day-switcher input{width:36px;border:0;color:transparent;background:transparent}.day-switcher strong{white-space:nowrap;min-width:100px;text-align:center}.loading-box,.empty-cell{padding:35px;text-align:center;color:#697386}.filter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:15px}.filter-grid label{display:flex;flex-direction:column;gap:7px;font-weight:700;font-size:.83rem}.filter-grid input,.filter-grid select{width:100%;border:1px solid #d5d9e0;border-radius:9px;padding:9px 11px;background:#fff}.filter-grid select[multiple]{min-height:86px}.filter-actions{margin-top:14px}.report-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:13px}.report-metrics article{background:#fff;border:1px solid #e2e5ea;border-radius:14px;padding:16px;box-shadow:0 4px 14px #1822300b}.report-metrics span,.report-metrics small{display:block;color:#667085}.report-metrics strong{display:block;font-size:1.55rem;margin:8px 0}.report-metrics .warn{background:#fffaf0;border-color:#f5d59e}.report-metrics .success{background:#f0fdf4;border-color:#bbf7d0}.report-metrics .danger{background:#fff1f2;border-color:#fecdd3}.report-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.bar-list{display:grid;gap:11px}.report-bar{display:grid;grid-template-columns:120px 1fr 38px;gap:9px;align-items:center}.report-bar div{height:9px;background:#edf0f4;border-radius:99px;overflow:hidden}.report-bar i{display:block;height:100%;background:linear-gradient(90deg,#c92d3e,#f06b79)}.report-bar i.blue{background:linear-gradient(90deg,#2563eb,#60a5fa)}.report-bar i.purple{background:linear-gradient(90deg,#7c3aed,#c084fc)}.report-bar i.outcome-success{background:#22c55e}.report-bar i.outcome-failure{background:#ef4444}.report-bar i.outcome-no-call{background:#94a3b8}.metric-bar{grid-template-columns:120px 1fr 34px 48px}.metric-bar small{text-align:right;color:#667085}.trend{display:flex;min-height:195px;align-items:flex-end;gap:12px;overflow:auto}.trend>div{display:grid;justify-items:center;gap:5px;min-width:58px}.trend i{display:block;width:27px;background:linear-gradient(#f06b79,#b82032);border-radius:7px 7px 2px 2px}.trend span{font-size:.68rem;white-space:nowrap}.raw-table{min-width:2200px}.raw-table td{padding:9px;border-right:1px solid #e4e6ea;border-bottom:1px solid #e4e6ea;vertical-align:top;max-width:230px}.status-chip,.outcome-chip{display:inline-block;padding:5px 9px;border-radius:99px;white-space:nowrap;font-weight:700}.status-chip.work{background:#dcfce7;color:#166534}.status-chip.leave{background:#f3f4f6;color:#4b5563}.outcome-chip.success{background:#dcfce7;color:#166534}.outcome-chip.failure{background:#fee2e2;color:#991b1b}.outcome-chip.no-call{background:#f1f5f9;color:#475569}.pagination{justify-content:flex-end;margin-top:14px}.history-card{padding:0;overflow:hidden}.history-heading{padding:18px 22px;margin:0}.history-filters{display:flex;align-items:flex-end;gap:9px;flex-wrap:wrap}.history-filters label{display:grid;gap:4px;font-size:.74rem;font-weight:700}.history-filters input,.history-filters select{border:1px solid #d5d9e0;border-radius:8px;padding:7px 9px;background:#fff}.history-scroll,.summary-scroll{overflow:auto;max-height:560px}.history-table,.summary-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.77rem}.history-table th,.summary-table th{position:sticky;top:0;z-index:2;background:#263142;color:#fff;text-align:left;padding:9px 10px;white-space:nowrap}.history-table td,.summary-table td{padding:8px 10px;border-bottom:1px solid #e7e9ed;white-space:nowrap}.history-table tbody tr:nth-child(even),.summary-table tbody tr:nth-child(even){background:#f8fafc}.compact-pagination{padding:12px 18px;margin:0}.number-success{color:#15803d;font-weight:800}.number-danger{color:#b91c1c;font-weight:800}.breakdown-list{display:grid;gap:8px}.breakdown-list>div{display:grid;grid-template-columns:90px 1fr 35px;gap:8px;align-items:center;padding:9px 10px;background:#f8fafc;border-radius:8px;font-size:.76rem}.breakdown-list span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#64748b}
-.bubble-chart svg,.line-chart svg{display:block;width:100%;height:225px;overflow:visible}.bubble-chart line,.line-chart line{stroke:#e5e7eb;stroke-width:1}.bubble-chart circle{opacity:.82;stroke:#fff;stroke-width:3}.bubble-chart text{fill:#172033;font-size:12px;font-weight:800;pointer-events:none}.donut-layout{display:grid;grid-template-columns:190px 1fr;gap:24px;align-items:center}.donut{width:180px;aspect-ratio:1;border-radius:50%;display:grid;place-items:center;box-shadow:inset 0 0 0 1px #ffffff55}.donut>div{width:104px;aspect-ratio:1;border-radius:50%;background:#fff;display:grid;place-content:center;text-align:center;box-shadow:0 2px 14px #0f172a1a}.donut strong{font-size:1.65rem}.donut span{color:#64748b;font-size:.72rem}.chart-legend{display:grid;gap:10px}.chart-legend>div{display:grid;grid-template-columns:10px 1fr 38px 42px;gap:8px;align-items:center;padding-bottom:8px;border-bottom:1px solid #edf0f3}.chart-legend i{width:10px;height:10px;border-radius:50%}.chart-legend small{color:#64748b;text-align:right}.line-chart{overflow-x:auto}.line-chart svg{min-width:720px}.line-chart polygon{fill:#c92d3e18}.line-chart polyline{fill:none;stroke:#c92d3e;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}.line-chart circle{fill:#fff;stroke:#c92d3e;stroke-width:4}.line-chart text{fill:#172033;font-size:12px;font-weight:800}.line-labels{display:flex;justify-content:space-between;gap:25px;min-width:720px;font-size:.67rem;color:#64748b;padding:4px 28px 0}.treemap{display:flex;align-content:stretch;flex-wrap:wrap;min-height:260px;gap:5px}.treemap article{min-width:105px;min-height:92px;padding:13px;color:#fff;border-radius:10px;display:flex;flex:1 1 125px;flex-direction:column;justify-content:flex-end;text-shadow:0 1px 2px #0006;transition:transform .18s}.treemap article:hover{transform:translateY(-2px)}.treemap strong{font-size:.9rem}.treemap span{font-size:1.15rem;font-weight:900}.treemap small{font-size:.69rem}.specialty-donut{width:170px}.specialty-donut>div{width:92px}.specialty-layout{grid-template-columns:180px 1fr}.chart-legend.compact{gap:5px}.chart-legend.compact>div{padding-bottom:4px;font-size:.72rem}.legend{display:flex;align-items:center;gap:6px;color:#64748b;font-size:.76rem}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-left:8px}.success-dot,.stack-success{background:#22c55e}.failure-dot,.stack-failure{background:#ef4444}.nocall-dot,.stack-nocall{background:#94a3b8}.objective-chart{display:grid;gap:12px}.objective-chart>div{display:grid;grid-template-columns:130px 1fr 38px;align-items:center;gap:10px}.stacked-track{display:flex;height:13px;background:#eef1f5;border-radius:99px;overflow:hidden}.stacked-track i{display:block;height:100%}
+.bubble-chart svg,.line-chart svg{display:block;width:100%;height:225px;overflow:visible}.bubble-chart line,.line-chart line{stroke:#e5e7eb;stroke-width:1}.bubble-chart .bubble-grid-vertical{stroke:#eef1f5;stroke-dasharray:3 4}.bubble-chart .bubble-axis-line{stroke:#94a3b8;stroke-width:1.5}.bubble-chart circle{opacity:.82;stroke:#fff;stroke-width:3}.bubble-chart text{fill:#172033;font-size:12px;font-weight:800;pointer-events:none}.bubble-chart .bubble-axis-label{fill:#64748b;font-size:10px;font-weight:600}.bubble-chart .bubble-axis-title{fill:#475569;font-size:11px;font-weight:800}.donut-layout{display:grid;grid-template-columns:190px 1fr;gap:24px;align-items:center}.donut{width:180px;aspect-ratio:1;border-radius:50%;display:grid;place-items:center;box-shadow:inset 0 0 0 1px #ffffff55}.donut>div{width:104px;aspect-ratio:1;border-radius:50%;background:#fff;display:grid;place-content:center;text-align:center;box-shadow:0 2px 14px #0f172a1a}.donut strong{font-size:1.65rem}.donut span{color:#64748b;font-size:.72rem}.chart-legend{display:grid;gap:10px}.chart-legend>div{display:grid;grid-template-columns:10px 1fr 38px 42px;gap:8px;align-items:center;padding-bottom:8px;border-bottom:1px solid #edf0f3}.chart-legend i{width:10px;height:10px;border-radius:50%}.chart-legend small{color:#64748b;text-align:right}.line-chart{overflow-x:auto}.line-chart svg{min-width:720px}.line-chart polygon{fill:#c92d3e18}.line-chart polyline{fill:none;stroke:#c92d3e;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}.line-chart circle{fill:#fff;stroke:#c92d3e;stroke-width:4}.line-chart text{fill:#172033;font-size:12px;font-weight:800}.line-labels{display:flex;justify-content:space-between;gap:25px;min-width:720px;font-size:.67rem;color:#64748b;padding:4px 28px 0}.treemap{position:relative;width:100%;height:330px;overflow:hidden;border-radius:10px;background:#f1f5f9}.treemap article{position:absolute;display:flex;flex-direction:column;justify-content:center;overflow:hidden;padding:12px;color:#fff;border:3px solid #fff;text-shadow:0 1px 2px #0007;transition:filter .18s}.treemap article:hover{z-index:2;filter:brightness(1.08)}.treemap strong,.treemap span,.treemap small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.treemap strong{font-size:.9rem}.treemap span{font-size:1.08rem;font-weight:900}.treemap small{font-size:.69rem}.treemap article.compact{padding:6px}.treemap article.compact span,.treemap article.compact small{display:none}.treemap article.tiny>*{display:none}.treemap-details{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:6px;margin-top:10px}.treemap-details>div{display:grid;grid-template-columns:10px minmax(0,1fr) auto auto;gap:7px;align-items:center;padding:6px 8px;border-radius:7px;background:#f8fafc;font-size:.7rem}.treemap-details i{width:9px;height:9px;border-radius:2px}.treemap-details strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.treemap-details span{font-weight:800}.treemap-details small{color:#64748b}.specialty-donut{width:170px}.specialty-donut>div{width:92px}.specialty-layout{grid-template-columns:180px 1fr}.chart-legend.compact{gap:5px}.chart-legend.compact>div{padding-bottom:4px;font-size:.72rem}.legend{display:flex;align-items:center;gap:6px;color:#64748b;font-size:.76rem}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-left:8px}.success-dot,.stack-success{background:#22c55e}.failure-dot,.stack-failure{background:#ef4444}.nocall-dot,.stack-nocall{background:#94a3b8}.objective-chart{display:grid;gap:12px}.objective-chart>div{display:grid;grid-template-columns:130px 1fr 38px;align-items:center;gap:10px}.stacked-track{display:flex;height:13px;background:#eef1f5;border-radius:99px;overflow:hidden}.stacked-track i{display:block;height:100%}
 .sale-total-table td:not(:first-child),.sale-total-table th:not(:first-child){text-align:center}.seller-username{display:block;margin-top:3px;color:#64748b;font-size:.68rem}.number-total{color:#1d4ed8;font-weight:900}
 .department-bar{grid-template-columns:minmax(120px,180px) 1fr minmax(110px,auto) minmax(290px,auto)}.department-bar small{text-align:right;color:#64748b}.chart-heading-meta{display:grid;justify-items:end;gap:3px}.chart-total{display:block;text-align:right;color:#9d1d2d}.chart-breakdown{display:block;margin-top:5px;color:#64748b;font-size:.69rem}.objective-chart>div>b{display:grid;text-align:right}.objective-chart>div>b small{color:#64748b;font-size:.63rem}
 .hospital-ranking-table td:first-child,.hospital-ranking-table th:first-child{text-align:center;width:62px}.rank-badge{display:inline-grid;place-items:center;min-width:30px;height:30px;border-radius:50%;background:#fff0f2;color:#b82032}.hospital-ranking-table tr:nth-child(1) .rank-badge{background:#fbbf24;color:#713f12}.hospital-ranking-table tr:nth-child(2) .rank-badge{background:#cbd5e1;color:#334155}.hospital-ranking-table tr:nth-child(3) .rank-badge{background:#d97706;color:#fff}
@@ -997,4 +1125,5 @@ onMounted(async () => {
 .submission-actions select{min-width:146px;border:1px solid #d5d9e0;border-radius:8px;padding:8px 10px;background:#fff;color:#172033}
 .line-labels{position:relative;display:block;height:36px;padding:4px 0 0}.line-labels span{position:absolute;width:48px;text-align:center;transform:translateX(-50%)}
 .bubble-chart .bubble-name,.bubble-chart .bubble-value{font-weight:900;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round}.bubble-chart .bubble-name{font-size:15px}.bubble-chart .bubble-value{font-size:12px}.seller-bubble-details{display:grid;gap:7px;margin-top:8px;padding-top:10px;border-top:1px solid #e5e7eb}.seller-bubble-details>div{display:grid;grid-template-columns:12px minmax(110px,1fr) minmax(55px,auto) minmax(60px,auto) minmax(90px,auto) minmax(105px,auto);gap:8px;align-items:center;padding:7px 9px;border-radius:8px;background:#f8fafc;font-size:.72rem}.seller-bubble-details i{width:11px;height:11px;border-radius:50%}.seller-bubble-details small{display:block;color:#64748b}.seller-bubble-details span{text-align:right;color:#475569}.seller-bubble-details b{text-align:right;color:#15803d}
+.bubble-chart g:has(circle),.line-chart g:has(circle),.donut,.chart-legend>div,.report-bar,.objective-chart>div,.treemap article,.line-labels span,.seller-bubble-details>div{cursor:help}
 </style>

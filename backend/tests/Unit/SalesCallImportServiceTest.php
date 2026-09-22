@@ -73,6 +73,74 @@ class SalesCallImportServiceTest extends TestCase
     }
 
     #[Test]
+    public function it_detects_month_first_daily_sheet_names_from_the_whole_workbook(): void
+    {
+        $path = $this->workbook(function (Spreadsheet $book): void {
+            foreach (range(1, 13) as $index => $day) {
+                $sheet = $index === 0 ? $book->getActiveSheet() : $book->createSheet();
+                $sheet->setTitle('08'.str_pad((string) $day, 2, '0', STR_PAD_LEFT).'26');
+                $sheet->fromArray(['Call No.', 'CUSTOMER NAME', 'PLACE OF WORK', 'PRODUCT-1', 'SPECIALTY'], null, 'A1');
+                $sheet->fromArray([1, 'ลูกค้า '.$day, 'โรงพยาบาล '.$day, 'FIBROSCAN', 'Surgery'], null, 'A2');
+            }
+        });
+
+        try {
+            $parsed = $this->service()->parse(new UploadedFile($path, 'Report_Aug.xlsx', null, null, true), new SalesCallReportService);
+
+            $this->assertSame('2026-08-01', $parsed['summary']['date_from']);
+            $this->assertSame('2026-08-13', $parsed['summary']['date_to']);
+            $this->assertSame(13, $parsed['summary']['dates_count']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    #[Test]
+    public function it_corrects_excel_dates_with_swapped_day_and_month_using_the_sheet_month(): void
+    {
+        $path = $this->workbook(function (Spreadsheet $book): void {
+            $sheet = $book->getActiveSheet();
+            $sheet->setTitle('1-15 Aug 2026');
+            $sheet->fromArray(['Call No.', 'Date', 'PLACE OF WORK', 'CUSTOMER NAME', 'SPECIALTY', 'DEPARTMENT', 'GROUP', 'PRODUCT-1', 'CALL OBJECTIVE', 'CALL OUTCOME'], null, 'A1');
+            foreach (range(1, 3) as $index) {
+                $sheet->fromArray([$index, new \DateTimeImmutable('2026-10-08'), 'โรงพยาบาล '.$index, 'ลูกค้า '.$index, 'Other', 'OTHER', 'Doctor', 'FIBROSCAN', 'Trial', 'Success'], null, 'A'.($index + 1));
+            }
+        });
+
+        try {
+            $parsed = $this->service()->parse(new UploadedFile($path, 'Report_Aug_Kannapat.xlsx', null, null, true), new SalesCallReportService);
+
+            $this->assertSame(3, $parsed['summary']['counted_calls']);
+            $this->assertSame('2026-08-10', $parsed['summary']['date_from']);
+            $this->assertSame('2026-08-10', $parsed['summary']['date_to']);
+            $this->assertSame('2026-08-01', $parsed['summary']['report_month']);
+            $this->assertSame(['2026-08-10', '2026-08-10', '2026-08-10'], array_column($parsed['rows'], 'activity_date'));
+            $this->assertStringContainsString('สลับวันกับเดือน', implode(' ', $parsed['warnings']));
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    #[Test]
+    public function it_treats_an_unlabelled_sunday_activity_as_a_company_holiday(): void
+    {
+        $path = $this->workbook(function (Spreadsheet $book): void {
+            $sheet = $book->getActiveSheet();
+            $sheet->setTitle('090826');
+            $sheet->fromArray(['Call No.', 'PLACE OF WORK', 'CUSTOMER NAME', 'SPECIALTY'], null, 'A1');
+            $sheet->fromArray([1, 'วันอาทิตย์', null, null], null, 'A2');
+        });
+
+        try {
+            $parsed = $this->service()->parse(new UploadedFile($path, 'sunday.xlsx', null, null, true), new SalesCallReportService);
+
+            $this->assertSame('วันหยุดบริษัท', $parsed['rows'][0]['status']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    #[Test]
     public function it_counts_calls_by_specialty_and_carries_the_previous_date_forward(): void
     {
         $path = $this->workbook(function (Spreadsheet $book): void {

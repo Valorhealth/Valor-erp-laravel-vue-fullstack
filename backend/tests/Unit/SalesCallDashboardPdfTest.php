@@ -48,4 +48,56 @@ class SalesCallDashboardPdfTest extends TestCase
         $this->assertStringContainsString('fill="#94a3b8"', $svg);
         $this->assertStringNotContainsString('stroke-dasharray', $svg);
     }
+
+    public function test_product_treemap_area_is_proportional_to_call_total(): void
+    {
+        $record = fn (array $values): object => (object) $values;
+        $method = new \ReflectionMethod(SalesCallDashboardPdf::class, 'productTreemap');
+        $uri = $method->invoke(app(SalesCallDashboardPdf::class), [
+            'summary' => ['total_activities' => 100],
+            'by_product' => [
+                $record(['label' => 'Large', 'total' => 75, 'success_calls' => 60, 'success_rate' => 80]),
+                $record(['label' => 'Small', 'total' => 25, 'success_calls' => 20, 'success_rate' => 80]),
+            ],
+        ]);
+        $svg = base64_decode(substr($uri, strpos($uri, ',') + 1), true);
+
+        $this->assertIsString($svg);
+        preg_match('/width="([\d.]+)" height="([\d.]+)" rx="4" fill="#22c55e"/', $svg, $large);
+        preg_match('/width="([\d.]+)" height="([\d.]+)" rx="4" fill="#ef4444"/', $svg, $small);
+        $this->assertCount(3, $large);
+        $this->assertCount(3, $small);
+
+        $largeArea = (float) $large[1] * (float) $large[2];
+        $smallArea = (float) $small[1] * (float) $small[2];
+        $this->assertEqualsWithDelta(3.0, $largeArea / $smallArea, 0.1);
+    }
+
+    public function test_seller_scatter_plot_has_numeric_axes_and_named_color_legend(): void
+    {
+        $seller = (object) [
+            'seller_user_id' => 7,
+            'seller_username' => 'sale7',
+            'seller_name' => 'P\'Chirarat Sale',
+            'total' => 25,
+            'success_rate' => 80,
+            'active_customers' => 10,
+        ];
+        $dashboard = ['summary' => ['total_activities' => 25], 'by_seller' => [$seller]];
+        $service = app(SalesCallDashboardPdf::class);
+
+        $chartMethod = new \ReflectionMethod(SalesCallDashboardPdf::class, 'sellerBubbles');
+        $uri = $chartMethod->invoke($service, $dashboard);
+        $svg = base64_decode(substr($uri, strpos($uri, ',') + 1), true);
+        $legendMethod = new \ReflectionMethod(SalesCallDashboardPdf::class, 'sellerLegend');
+        $legend = $legendMethod->invoke($service, $dashboard);
+
+        $this->assertIsString($svg);
+        $this->assertStringContainsString('Success Rate', $svg);
+        $this->assertStringContainsString('Total Call', $svg);
+        $this->assertStringContainsString('100%', $svg);
+        $this->assertStringContainsString('P&#039;Chirarat Sale', $legend);
+        $this->assertStringContainsString('sale7', $legend);
+        $this->assertStringContainsString('25 Call', $legend);
+    }
 }

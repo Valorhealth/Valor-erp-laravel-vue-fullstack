@@ -149,12 +149,18 @@ class SalesCallController extends Controller
         $dateFrom = $parsed['summary']['date_from'];
         $dateTo = $parsed['summary']['date_to'];
         abort_if(! $dateFrom || ! $dateTo, 422, 'ไม่พบช่วงวันที่ของข้อมูล Call Sale');
-        $reportMonth = Carbon::parse($dateFrom)->startOfMonth()->toDateString();
+        $reportMonth = $parsed['summary']['report_month']
+            ?? Carbon::parse($dateFrom)->startOfMonth()->toDateString();
         $storedPath = $storage->store($file, $request->user()->id, $reportMonth);
 
         try {
-            [$result, $batch] = DB::transaction(function () use ($request, $file, $parsed, $imports, $storage, $storedPath, $reportMonth, $dateFrom, $dateTo): array {
+            [$result, $batch, $previousFiles] = DB::transaction(function () use ($request, $file, $parsed, $imports, $storage, $storedPath, $reportMonth, $dateFrom, $dateTo): array {
                 $result = $imports->replaceUserDates($request->user(), $parsed['rows']);
+                $previousBatches = SalesCallImportBatch::query()
+                    ->where('seller_user_id', $request->user()->id)
+                    ->whereDate('report_month', $reportMonth)
+                    ->lockForUpdate()
+                    ->get();
                 $batch = SalesCallImportBatch::query()->create([
                     'seller_user_id' => $request->user()->id,
                     'seller_username' => $request->user()->username,
@@ -169,12 +175,27 @@ class SalesCallController extends Controller
                     'imported_rows' => $result['imported_rows'],
                     'source_activity_rows' => (int) ($parsed['quality']['skipped_without_specialty'] ?? 0),
                 ]);
+                $previousFiles = $previousBatches->map(fn (SalesCallImportBatch $previous): array => [
+                    'disk' => $previous->storage_disk,
+                    'path' => $previous->storage_path,
+                ])->values();
+                if ($previousBatches->isNotEmpty()) {
+                    SalesCallImportBatch::query()->whereIn('id', $previousBatches->pluck('id'))->delete();
+                }
 
-                return [$result, $batch];
+                return [$result, $batch, $previousFiles];
             });
         } catch (Throwable $exception) {
             $storage->disk()->delete($storedPath);
             throw $exception;
+        }
+
+        foreach ($previousFiles as $previousFile) {
+            try {
+                $storage->disk($previousFile['disk'])->delete($previousFile['path']);
+            } catch (Throwable $exception) {
+                report($exception);
+            }
         }
 
         return response()->json([

@@ -95,7 +95,8 @@ final class SalesCallImportService
             $skippedWithoutSpecialty = 0;
             $skippedWithoutDate = 0;
             $invalidRequiredRows = [];
-            $dominantSheetMonth = $this->dominantSheetMonth($spreadsheet->getAllSheets());
+            $sheetDateContext = $this->sheetDateContext($spreadsheet->getAllSheets());
+            $dominantSheetMonth = $sheetDateContext['dominant_month'];
 
             foreach ($worksheets as $sheet) {
                 $scannedSheets++;
@@ -116,7 +117,8 @@ final class SalesCallImportService
                     $labels = collect($sheetMissing)->map(fn (string $field): string => self::COLUMN_LABELS[$field])->implode(', ');
                     $warnings['missing-columns-'.$sheet->getTitle()] = "ชีต {$sheet->getTitle()}: ไม่พบคอลัมน์ {$labels}";
                 }
-                $sheetDate = $this->dateFromSheetName($sheet->getTitle());
+                $sheetDate = $sheetDateContext['dates'][$sheet->getTitle()] ?? null;
+                $sheetMonth = $this->monthFromSheetName($sheet->getTitle()) ?? $dominantSheetMonth;
                 if ($sheetDate !== null && $dominantSheetMonth !== null && ! str_starts_with($sheetDate, $dominantSheetMonth.'-')) {
                     $day = (int) substr($sheetDate, 8, 2);
                     $correctedDate = $dominantSheetMonth.'-'.str_pad((string) $day, 2, '0', STR_PAD_LEFT);
@@ -125,7 +127,7 @@ final class SalesCallImportService
                         $sheetDate = $correctedDate;
                     }
                 }
-                foreach ($this->rowsFromSheet($sheet, $header, $sheetDate, $reports, $warnings, $blankImportant, $invalidRequiredRows, $skippedWithoutSpecialty, $skippedWithoutDate) as $row) {
+                foreach ($this->rowsFromSheet($sheet, $header, $sheetDate, $sheetMonth, $reports, $warnings, $blankImportant, $invalidRequiredRows, $skippedWithoutSpecialty, $skippedWithoutDate) as $row) {
                     $rows[] = $row;
                     if (count($rows) >= self::MAX_ROWS) {
                         $warnings['row-limit'] = 'อ่านสูงสุด '.number_format(self::MAX_ROWS).' รายการต่อไฟล์ ส่วนรายการที่เหลือถูกข้าม';
@@ -136,6 +138,12 @@ final class SalesCallImportService
 
             usort($rows, fn (array $left, array $right): int => [$left['activity_date'], $left['_source_sheet'], $left['_source_row']] <=> [$right['activity_date'], $right['_source_sheet'], $right['_source_row']]);
             $dates = array_values(array_unique(array_column($rows, 'activity_date')));
+            $reportMonth = collect($rows)
+                ->map(fn (array $row): string => substr($row['activity_date'], 0, 7))
+                ->countBy()
+                ->sortDesc()
+                ->keys()
+                ->first();
             $preview = array_map(function (array $row): array {
                 unset($row['_source_sheet'], $row['_source_row'], $row['_counts_as_call']);
 
@@ -158,6 +166,7 @@ final class SalesCallImportService
                     'dates_count' => count($dates),
                     'date_from' => $dates[0] ?? null,
                     'date_to' => $dates === [] ? null : $dates[array_key_last($dates)],
+                    'report_month' => $reportMonth === null ? null : $reportMonth.'-01',
                     'preview_rows' => count($preview),
                 ],
                 'quality' => [
@@ -295,7 +304,7 @@ final class SalesCallImportService
     }
 
     /** @param array{row: int, columns: array<string, int>} $header @param array<string, string> $warnings @param array<string, int> $blankImportant @param array<int, array<string, mixed>> $invalidRequiredRows @return array<int, array<string, mixed>> */
-    private function rowsFromSheet(Worksheet $sheet, array $header, ?string $sheetDate, SalesCallReportService $reports, array &$warnings, array &$blankImportant, array &$invalidRequiredRows, int &$skippedWithoutSpecialty, int &$skippedWithoutDate): array
+    private function rowsFromSheet(Worksheet $sheet, array $header, ?string $sheetDate, ?string $sheetMonth, SalesCallReportService $reports, array &$warnings, array &$blankImportant, array &$invalidRequiredRows, int &$skippedWithoutSpecialty, int &$skippedWithoutDate): array
     {
         $rows = [];
         $lastRow = min($sheet->getHighestDataRow(), $header['row'] + 5000);
@@ -313,6 +322,11 @@ final class SalesCallImportService
 
             $rowDate = $this->parseDate($raw['activity_date'] ?? null);
             if ($rowDate !== null) {
+                $correctedDate = $this->correctSwappedDateMonth($rowDate, $sheetMonth);
+                if ($correctedDate !== $rowDate) {
+                    $warnings['corrected-row-date-'.$sheet->getTitle()] = "ชีต {$sheet->getTitle()}: พบวันที่ Excel สลับวันกับเดือน ระบบปรับวันที่ให้ตรงกับเดือนของชื่อชีตแล้ว";
+                    $rowDate = $correctedDate;
+                }
                 $currentDate = $rowDate;
             }
             $specialtyText = $this->text($raw['specialty'] ?? null, 255);
@@ -460,37 +474,98 @@ final class SalesCallImportService
         return checkdate($month, $day, $year) ? (new DateTimeImmutable)->setDate($year, $month, $day)->format('Y-m-d') : null;
     }
 
-    private function dateFromSheetName(string $name): ?string
+    private function dateFromSheetName(string $name, bool $monthFirst = false): ?string
     {
         $digits = preg_replace('/\D/u', '', trim($name));
         if (! preg_match('/^(\d{2})(\d{2})(\d{2}|\d{4})$/', (string) $digits, $matches)) {
             return null;
         }
 
-        return $this->parseDate("{$matches[1]}/{$matches[2]}/{$matches[3]}");
+        $day = $monthFirst ? $matches[2] : $matches[1];
+        $month = $monthFirst ? $matches[1] : $matches[2];
+
+        return $this->parseDate("{$day}/{$month}/{$matches[3]}");
     }
 
-    /** @param array<int, Worksheet> $sheets */
-    private function dominantSheetMonth(array $sheets): ?string
+    private function monthFromSheetName(string $name): ?string
     {
-        $months = collect($sheets)
-            ->map(fn (Worksheet $sheet): ?string => $this->dateFromSheetName($sheet->getTitle()))
-            ->filter()
-            ->map(fn (string $date): string => substr($date, 0, 7));
-        if ($months->count() < 5) {
+        $months = [
+            'jan' => 1, 'january' => 1, 'feb' => 2, 'february' => 2,
+            'mar' => 3, 'march' => 3, 'apr' => 4, 'april' => 4,
+            'may' => 5, 'jun' => 6, 'june' => 6, 'jul' => 7, 'july' => 7,
+            'aug' => 8, 'august' => 8, 'sep' => 9, 'sept' => 9, 'september' => 9,
+            'oct' => 10, 'october' => 10, 'nov' => 11, 'november' => 11,
+            'dec' => 12, 'december' => 12,
+        ];
+        if (! preg_match('/\b('.implode('|', array_keys($months)).')\s*(\d{2}|\d{4})\b/iu', $name, $matches)) {
             return null;
         }
 
-        $counts = $months->countBy()->sortDesc();
-        $dominant = $counts->keys()->first();
+        $year = (int) $matches[2];
+        $year = $year < 100 ? 2000 + $year : $year;
 
-        return $dominant !== null && ((int) $counts->first() / $months->count()) >= 0.7 ? $dominant : null;
+        return sprintf('%04d-%02d', $year, $months[mb_strtolower($matches[1])]);
+    }
+
+    private function correctSwappedDateMonth(string $date, ?string $expectedMonth): string
+    {
+        if ($expectedMonth === null || str_starts_with($date, $expectedMonth.'-')) {
+            return $date;
+        }
+
+        [$year, $month, $day] = array_map('intval', explode('-', $date));
+        [$expectedYear, $expectedMonthNumber] = array_map('intval', explode('-', $expectedMonth));
+        if ($year !== $expectedYear || $day !== $expectedMonthNumber || ! checkdate($expectedMonthNumber, $month, $year)) {
+            return $date;
+        }
+
+        return sprintf('%04d-%02d-%02d', $year, $expectedMonthNumber, $month);
+    }
+
+    /**
+     * Detect whether six-digit daily sheet names use DDMMYY or MMDDYY.
+     *
+     * @param  array<int, Worksheet>  $sheets
+     * @return array{dates: array<string, string>, dominant_month: string|null}
+     */
+    private function sheetDateContext(array $sheets): array
+    {
+        $candidates = collect([false, true])->map(function (bool $monthFirst) use ($sheets): array {
+            $dates = collect($sheets)->mapWithKeys(function (Worksheet $sheet) use ($monthFirst): array {
+                $date = $this->dateFromSheetName($sheet->getTitle(), $monthFirst);
+
+                return $date === null ? [] : [$sheet->getTitle() => $date];
+            });
+            $monthCounts = $dates->map(fn (string $date): string => substr($date, 0, 7))->countBy()->sortDesc();
+
+            return [
+                'dates' => $dates->all(),
+                'valid_count' => $dates->count(),
+                'dominant_count' => (int) ($monthCounts->first() ?? 0),
+                'dominant_month' => $monthCounts->keys()->first(),
+            ];
+        })->sort(function (array $left, array $right): int {
+            return [$right['dominant_count'], $right['valid_count']]
+                <=> [$left['dominant_count'], $left['valid_count']];
+        })->values();
+
+        /** @var array{dates: array<string, string>, valid_count: int, dominant_count: int, dominant_month: string|null} $selected */
+        $selected = $candidates->first();
+        $dominantMonth = null;
+        if (
+            $selected['valid_count'] >= 5
+            && ($selected['dominant_count'] / $selected['valid_count']) >= 0.7
+        ) {
+            $dominantMonth = $selected['dominant_month'];
+        }
+
+        return ['dates' => $selected['dates'], 'dominant_month' => $dominantMonth];
     }
 
     private function statusFromText(?string $place): string
     {
-        $text = mb_strtolower((string) $place);
-        if (str_contains($text, 'วันหยุด')) {
+        $text = mb_strtolower(trim((string) $place));
+        if ($text === 'วันอาทิตย์' || str_contains($text, 'วันหยุด')) {
             return 'วันหยุดบริษัท';
         }
         if (str_contains($text, 'ลาป่วย') || str_contains($text, 'ลาพัก') || preg_match('/(^|\s)ลา($|\s)/u', $text)) {
