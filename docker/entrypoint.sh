@@ -16,6 +16,7 @@ chown -R www-data:www-data /app/backend/storage /app/backend/bootstrap/cache
 
 cd /app/backend
 php artisan config:cache
+php artisan migrate --force --no-interaction
 php artisan view:cache
 
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/valor.conf

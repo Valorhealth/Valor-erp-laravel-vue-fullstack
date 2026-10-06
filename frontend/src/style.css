@@ -23,7 +23,11 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; background: #f5f6f8; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: #f5f6f8; -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font-family: inherit; }
+input[type="date"], input[type="month"], input[type="time"], input[type="datetime-local"] { min-height: 40px; color-scheme: light; }
+input[type="date"]::-webkit-date-and-time-value, input[type="month"]::-webkit-date-and-time-value, input[type="time"]::-webkit-date-and-time-value, input[type="datetime-local"]::-webkit-date-and-time-value { min-height: 1.2em; text-align: left; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
@@ -216,6 +220,7 @@ input[readonly], input:disabled, select:disabled, textarea:disabled { border-col
 input::placeholder, textarea::placeholder { color: #9096a0; }
 input[type="file"] { padding: 7px; background: #f8f9fb; }
 input[type="file"]::file-selector-button { min-height: 28px; margin-right: 10px; padding: 5px 10px; border: 0; border-radius: 6px; background: #3f4650; color: #fff; font-weight: 700; cursor: pointer; }
+input[type="file"]::-webkit-file-upload-button { min-height: 28px; margin-right: 10px; padding: 5px 10px; border: 0; border-radius: 6px; background: #3f4650; color: #fff; font-weight: 700; cursor: pointer; }
 input[type="checkbox"] { accent-color: var(--brand); box-shadow: none; }
 .primary-button, .secondary-button { min-height: 42px; padding: 10px 16px; border-radius: 9px; border: 1px solid transparent; font-weight: 700; font-size: 12px; }
 .primary-button { background: var(--brand); color: #fff; box-shadow: 0 8px 20px rgba(199, 45, 58, .18); }
@@ -414,15 +419,19 @@ input[type="checkbox"] { accent-color: var(--brand); box-shadow: none; }
 .equipment-availability__grid article small { color: #277149; font-size: 9px; }
 .equipment-availability__grid article.is-unavailable { border-color: #ecd2d4; background: #fff7f7; }
 .equipment-availability__grid article.is-unavailable b, .equipment-availability__grid article.is-unavailable small { color: #a5232f; }
-.equipment-filters { display: grid; grid-template-columns: repeat(4, minmax(140px, 1fr)) auto; gap: 10px; align-items: end; margin-bottom: 18px; }
-.equipment-booking-table table { min-width: 1250px; }
+.equipment-filters { display: grid; grid-template-columns: repeat(5, minmax(130px, 1fr)) auto; gap: 10px; align-items: end; margin-bottom: 18px; }
+.equipment-booking-table table { min-width: 1600px; }
 .equipment-booking-table td { vertical-align: top; }
 .equipment-booking-table td > strong, .equipment-booking-table td > small { display: block; }
 .equipment-booking-table td > small { margin-top: 4px; color: var(--muted); font-size: 9px; }
 .equipment-note { min-width: 180px; max-width: 280px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .booking-row--canceled td { opacity: .58; }
+.booking-row--pending td { background: #fffdf3; }
+.booking-row--pending td:first-child { box-shadow: inset 4px 0 0 #d39b00; }
 .booking-actions { display: grid; min-width: 140px; gap: 7px; }
-.booking-actions .secondary-button, .booking-actions select { min-height: 34px; padding: 6px 9px; font-size: 10px; }
+.booking-actions .secondary-button, .booking-actions .primary-button, .booking-actions .danger-button, .booking-actions select { min-height: 34px; padding: 6px 9px; font-size: 10px; }
+.equipment-filter-actions { display: flex; align-items: center; gap: 7px; }
+.equipment-filter-actions .secondary-button { white-space: nowrap; }
 .equipment-machine-form { display: grid; grid-template-columns: .65fr 1.2fr 1fr 1.2fr auto; gap: 10px; align-items: end; }
 .equipment-machine-list { display: grid; gap: 8px; margin-top: 18px; }
 .equipment-machine-list article { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fafafb; }
@@ -441,7 +450,9 @@ input[type="checkbox"] { accent-color: var(--brand); box-shadow: none; }
 .equipment-calendar-weeks { border-top: 1px solid var(--line); }
 .equipment-calendar-week { position: relative; width: 100%; border-bottom: 1px solid var(--line); }
 .equipment-week-days { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
-.equipment-calendar-day { min-width: 0; height: 100%; padding: 7px; border-right: 1px solid var(--line); background: #fff; }
+.equipment-calendar-day { min-width: 0; height: 100%; padding: 7px; border-right: 1px solid var(--line); background: #fff; cursor: pointer; }
+.equipment-calendar-day:hover { background: #fff8f9; }
+.equipment-calendar-day.selected { background: #fff1f3; box-shadow: inset 0 0 0 2px #c92d3e; }
 .equipment-calendar-day:first-child { border-left: 1px solid var(--line); }
 .equipment-calendar-day.muted { background: #f8f9fa; opacity: .68; }
 .equipment-calendar-day.today { background: #eef6ff; box-shadow: inset 0 0 0 2px #7ba8d8; }
@@ -464,6 +475,20 @@ input[type="checkbox"] { accent-color: var(--brand); box-shadow: none; }
 .equipment-calendar-event--ยกเลิก::after { background: #c94a4a; }
 .equipment-calendar-event--ยกเลิก { text-decoration: line-through; filter: grayscale(.65); opacity: .55; }
 .equipment-booking-detail { position: sticky; top: 24px; }
+.equipment-day-machines { display: grid; gap: 8px; margin-bottom: 18px; }
+.equipment-day-machines button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); text-align: left; }
+.equipment-day-machines button:not(:disabled) { cursor: pointer; }
+.equipment-day-machines button:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(15, 23, 42, .08); }
+.equipment-day-machines button > span { min-width: 0; }
+.equipment-day-machines button b, .equipment-day-machines button span small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.equipment-day-machines button span small, .equipment-day-machines button > small { color: var(--muted); font-size: 8px; line-height: 1.5; }
+.equipment-day-machines button > small { grid-column: 1 / -1; }
+.equipment-day-machines button > strong { align-self: center; font-size: 9px; }
+.equipment-day-machines button.available { border-color: #b9dfc8; background: #f3fbf6; }
+.equipment-day-machines button.available > strong { color: #16723d; }
+.equipment-day-machines button.occupied { border-color: #f0c8ce; background: #fff8f9; }
+.equipment-day-machines button.occupied > strong { color: #a5232f; }
+.equipment-selected-heading { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
 .equipment-booking-detail__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 0; }
 .equipment-booking-detail__grid div { min-width: 0; padding: 10px; border-radius: 8px; background: #f8f9fb; }
 .equipment-booking-detail__grid dt { margin-bottom: 4px; color: var(--muted); font-size: 9px; font-weight: 800; }
@@ -471,6 +496,21 @@ input[type="checkbox"] { accent-color: var(--brand); box-shadow: none; }
 .equipment-booking-detail__grid dd small { color: var(--muted); }
 .equipment-booking-detail__wide { grid-column: 1 / -1; }
 .equipment-detail-actions { display: grid; gap: 9px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.equipment-review-actions { display: grid; gap: 10px; margin-top: 16px; padding: 14px; border: 1px solid #efd0d4; border-radius: 10px; background: #fff8f9; }
+.equipment-review-actions > div { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.equipment-edit-button { width: 100%; margin-top: 10px; }
+.approval-pill { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 5px 9px; border: 1px solid transparent; border-radius: 999px; font-size: 9px; font-weight: 800; white-space: nowrap; }
+.approval-pill--button { cursor: pointer; }
+.approval-รออนุมัติ { border-color: #f0d189; background: #fff8df; color: #895f00; }
+.approval-อนุมัติแล้ว { border-color: #aedcbe; background: #eaf8ef; color: #176439; }
+.approval-ไม่อนุมัติ { border-color: #edb9bf; background: #fff0f1; color: #982534; }
+.equipment-change-history { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.equipment-change-history h3 { margin: 0 0 10px; color: var(--ink); font-size: 12px; }
+.equipment-change-history article { margin-bottom: 8px; padding: 10px; border-left: 3px solid #c92d3e; border-radius: 7px; background: #f8f9fb; }
+.equipment-change-history article header { display: grid; gap: 3px; }
+.equipment-change-history article header strong { color: var(--ink); font-size: 10px; }
+.equipment-change-history article header small { color: var(--muted); font-size: 8px; }
+.equipment-change-history ul { display: grid; gap: 3px; margin: 8px 0 0; padding-left: 16px; color: #4b5563; font-size: 9px; line-height: 1.5; }
 .equipment-detail-empty { min-height: 310px; display: grid; place-content: center; justify-items: center; gap: 8px; color: var(--muted); text-align: center; }
 .equipment-detail-empty > span { font-size: 34px; }
 .equipment-detail-empty strong { color: var(--ink); }

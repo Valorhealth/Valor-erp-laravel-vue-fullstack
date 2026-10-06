@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
+import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
 import type { DashboardData } from '../types/api'
 import { apiError, money, shortDate, todayIso } from '../utils/format'
@@ -87,11 +88,11 @@ onMounted(loadDashboard)
       <div class="form-grid">
         <label>
           <span>ตั้งแต่วันที่</span>
-          <input v-model="dateFrom" type="date">
+          <CompatDateTimeInput v-model="dateFrom" mode="date" />
         </label>
         <label>
           <span>ถึงวันที่</span>
-          <input v-model="dateTo" type="date" :min="dateFrom || undefined">
+          <CompatDateTimeInput v-model="dateTo" mode="date" :min="dateFrom || undefined" />
         </label>
         <label>
           <span>พนักงานขาย</span>

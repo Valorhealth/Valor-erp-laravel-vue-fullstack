@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../api/client'
 import AppShell from '../components/AppShell.vue'
+import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
 import { auth } from '../stores/auth'
 import type { Notice } from '../types/api'
@@ -75,8 +76,8 @@ onMounted(load)
       <label class="span-2"><span>หัวข้อประกาศ *</span><input v-model="form.title" required maxlength="500"></label>
       <label><span>ประเภท</span><select v-model="form.notice_type"><option>ประกาศทั่วไป</option><option>นัดประชุม</option><option>แจ้งเตือนด่วน</option></select></label>
       <label class="span-2"><span>รายละเอียด</span><textarea v-model="form.body" rows="5"></textarea></label>
-      <label><span>วันที่</span><input v-model="form.meeting_date" type="date"></label>
-      <label><span>เวลา</span><input v-model="form.meeting_time" type="time"></label>
+      <label><span>วันที่</span><CompatDateTimeInput v-model="form.meeting_date" mode="date" /></label>
+      <label><span>เวลา</span><CompatDateTimeInput v-model="form.meeting_time" mode="time" /></label>
       <label class="span-2"><span>สถานที่หรือช่องทางประชุม</span><input v-model="form.location"></label>
       <label class="check-field"><input v-model="form.is_pinned" type="checkbox"> ปักหมุดไว้ด้านบน</label>
       <button class="primary-button span-2" :disabled="saving">{{ saving ? 'กำลังบันทึก…' : 'บันทึกประกาศ' }}</button>

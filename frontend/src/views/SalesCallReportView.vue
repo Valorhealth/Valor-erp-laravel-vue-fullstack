@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import axios from 'axios'
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
+import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import { api, downloadFile } from '../api/client'
 import { auth } from '../stores/auth'
 import type { Paginated, SalesCallActivity, SalesCallDashboard, SalesCallOptions } from '../types/api'
@@ -97,19 +99,24 @@ const importSaving = ref(false)
 const selectedLookupRows = computed(() => lookupOptions.value.filter(item => item.category === selectedLookupCategory.value))
 
 const selectedDate = ref(localDate(new Date()))
+const loadedPeriodDate = ref(selectedDate.value)
 const periodRows = ref<Array<DailyRow & { activity_date: string }>>([])
 const history = ref<Paginated<SalesCallActivity> | null>(null)
 const historyLoading = ref(false)
+const historyLoadingMore = ref(false)
 const historyActionLoading = ref(false)
 const selectedHistoryIds = ref<number[]>([])
+const historyLoadSentinel = ref<HTMLElement | null>(null)
 const historyFilters = reactive({
   date_from: localDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1)),
   date_to: localDate(new Date()),
-  per_page: 50,
+  per_page: 100,
 })
 
 const dashboard = ref<SalesCallDashboard | null>(null)
 const activities = ref<Paginated<SalesCallActivity> | null>(null)
+const activitiesLoadingMore = ref(false)
+const activitiesLoadSentinel = ref<HTMLElement | null>(null)
 const submissionMonth = ref(localDate(new Date()).slice(0, 7))
 const submissionDepartment = ref('')
 const submissions = ref<SalesCallSubmission[]>([])
@@ -127,8 +134,16 @@ const filters = reactive({
   stages: [] as string[],
   statuses: [] as string[],
   customer: '',
-  per_page: 25,
+  per_page: 100,
 })
+
+type AutosaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'waiting' | 'error'
+const autosaveStatuses = reactive<Record<string, AutosaveStatus>>({})
+const autosaveErrors = reactive<Record<string, string>>({})
+const autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const autosaveVersions = new Map<string, number>()
+const autosaveRequests = new Map<string, Promise<void>>()
+let infiniteScrollObserver: IntersectionObserver | null = null
 
 const maxSeller = computed(() => Math.max(...(dashboard.value?.by_seller.map(row => Number(row.total)) ?? [1]), 1))
 const sellerAxisTicks = [0, 25, 50, 75, 100]
@@ -227,6 +242,17 @@ const periodDays = computed(() => dateRange(periodBounds.value.date_from, period
 })))
 const periodCallCount = computed(() => periodRows.value.filter(isCountedCallRow).length)
 const allHistoryPageSelected = computed(() => Boolean(history.value?.data.length) && history.value!.data.every(row => selectedHistoryIds.value.includes(row.call_id)))
+const autosaveSummary = computed(() => {
+  const states = Object.values(autosaveStatuses)
+  if (states.includes('error')) return { label: 'บันทึกอัตโนมัติไม่สำเร็จ', className: 'error' }
+  if (states.includes('waiting')) return { label: 'รอกรอก Call Outcome ให้ครบ', className: 'waiting' }
+  if (states.includes('saving')) return { label: 'กำลังบันทึกอัตโนมัติ…', className: 'saving' }
+  if (states.includes('pending')) return { label: 'กำลังรอบันทึก…', className: 'pending' }
+  if (states.includes('saved')) return { label: 'บันทึกอัตโนมัติแล้ว', className: 'saved' }
+  return { label: 'ระบบบันทึกให้อัตโนมัติ', className: 'idle' }
+})
+const hasUnsavedAutosave = computed(() => Object.values(autosaveStatuses)
+  .some(status => ['pending', 'saving', 'waiting', 'error'].includes(status)))
 
 function blankRow(activityDate = selectedDate.value): DailyRow & { activity_date: string } {
   return {
@@ -375,7 +401,108 @@ function donutStyle(rows: Array<{ total: number }>, colors: string[]): Record<st
   return { background: `conic-gradient(${stops.join(',')})` }
 }
 
+function isMeaningfulPlannerRow(row: DailyRow): boolean {
+  return [
+    row.place_of_work, row.customer_name, row.specialty, row.department, row.customer_group,
+    row.product_1, row.call_detail_objective, row.call_detail_outcome,
+    row.next_follow_up_date, row.notes, row.sm_comment,
+  ].some(value => String(value ?? '').trim() !== '')
+}
+
+function cancelAutosaveTimers() {
+  autosaveTimers.forEach(timer => clearTimeout(timer))
+  autosaveTimers.clear()
+}
+
+function scheduleDayAutosave(date: string, delay = 1500) {
+  const version = (autosaveVersions.get(date) ?? 0) + 1
+  autosaveVersions.set(date, version)
+  autosaveStatuses[date] = 'pending'
+  delete autosaveErrors[date]
+  const existing = autosaveTimers.get(date)
+  if (existing) clearTimeout(existing)
+  autosaveTimers.set(date, setTimeout(() => {
+    autosaveTimers.delete(date)
+    void autosaveDay(date, version)
+  }, delay))
+}
+
+async function autosaveDay(date: string, requestedVersion = autosaveVersions.get(date) ?? 0): Promise<void> {
+  const activeRequest = autosaveRequests.get(date)
+  if (activeRequest) {
+    await activeRequest
+    if ((autosaveVersions.get(date) ?? 0) >= requestedVersion) scheduleDayAutosave(date, 250)
+    return
+  }
+
+  const dayRows = periodRows.value.filter(row => row.activity_date === date)
+  if (dayRows.some(row => row.specialty?.trim() && !row.outcome?.trim())) {
+    autosaveStatuses[date] = 'waiting'
+    autosaveErrors[date] = 'กรุณาเลือก Call Outcome ให้ครบก่อนบันทึก'
+    return
+  }
+
+  const meaningfulRows = dayRows.filter(isMeaningfulPlannerRow)
+  autosaveStatuses[date] = 'saving'
+  const request = (async () => {
+    try {
+      const response = await api.put<{ data: { date: string; rows: SalesCallActivity[] } }>('/api/v1/sales-calls/day', {
+        date,
+        rows: dayRows.map(row => ({ ...row, call_id: row.call_id || null })),
+      })
+      response.data.data.rows.forEach((saved, index) => {
+        const target = meaningfulRows[index]
+        if (target && periodRows.value.includes(target)) target.call_id = saved.call_id
+      })
+      delete autosaveErrors[date]
+      autosaveStatuses[date] = (autosaveVersions.get(date) ?? 0) === requestedVersion ? 'saved' : 'pending'
+    } catch (cause) {
+      autosaveStatuses[date] = 'error'
+      autosaveErrors[date] = apiMessage(cause, `บันทึกอัตโนมัติวันที่ ${displayDate(date)} ไม่สำเร็จ`)
+    }
+  })()
+
+  autosaveRequests.set(date, request)
+  await request.finally(() => autosaveRequests.delete(date))
+  const statusAfterRequest = autosaveStatuses[date] as AutosaveStatus | undefined
+  if (statusAfterRequest === 'pending') scheduleDayAutosave(date, 250)
+}
+
+async function flushPendingAutosaves(): Promise<void> {
+  const dates = [...new Set([
+    ...autosaveTimers.keys(),
+    ...Object.entries(autosaveStatuses).filter(([, status]) => status === 'pending').map(([date]) => date),
+  ])]
+  dates.forEach((date) => {
+    const timer = autosaveTimers.get(date)
+    if (timer) clearTimeout(timer)
+    autosaveTimers.delete(date)
+  })
+  await Promise.all(dates.map(date => autosaveDay(date, autosaveVersions.get(date) ?? 0)))
+  await Promise.all([...autosaveRequests.values()])
+  const pendingAfterActive = Object.entries(autosaveStatuses)
+    .filter(([, status]) => status === 'pending')
+    .map(([date]) => date)
+  pendingAfterActive.forEach((date) => {
+    const timer = autosaveTimers.get(date)
+    if (timer) clearTimeout(timer)
+    autosaveTimers.delete(date)
+  })
+  await Promise.all(pendingAfterActive.map(date => autosaveDay(date, autosaveVersions.get(date) ?? 0)))
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!hasUnsavedAutosave.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'hidden') void flushPendingAutosaves()
+}
+
 async function loadPeriod() {
+  cancelAutosaveTimers()
   loading.value = true
   error.value = ''
   notice.value = ''
@@ -385,6 +512,9 @@ async function loadPeriod() {
     const loaded = response.data.data.rows.map(activityToPlannerRow)
     periodRows.value = dateRange(response.data.data.date_from, response.data.data.date_to)
       .flatMap(date => loaded.some(row => row.activity_date === date) ? loaded.filter(row => row.activity_date === date) : [blankRow(date)])
+    loadedPeriodDate.value = selectedDate.value
+    Object.keys(autosaveStatuses).forEach(key => delete autosaveStatuses[key])
+    Object.keys(autosaveErrors).forEach(key => delete autosaveErrors[key])
   } catch (cause) {
     error.value = apiMessage(cause, 'โหลดตาราง Call Sale ช่วงครึ่งเดือนไม่สำเร็จ')
     periodRows.value = dateRange(periodBounds.value.date_from, periodBounds.value.date_to).map(date => blankRow(date))
@@ -394,6 +524,8 @@ async function loadPeriod() {
 }
 
 async function savePeriod() {
+  cancelAutosaveTimers()
+  await Promise.all([...autosaveRequests.values()])
   saving.value = true
   error.value = ''
   notice.value = ''
@@ -405,8 +537,12 @@ async function savePeriod() {
     const saved = response.data.data.rows.map(activityToPlannerRow)
     periodRows.value = dateRange(response.data.data.date_from, response.data.data.date_to)
       .flatMap(date => saved.some(row => row.activity_date === date) ? saved.filter(row => row.activity_date === date) : [blankRow(date)])
+    dateRange(response.data.data.date_from, response.data.data.date_to).forEach((date) => {
+      autosaveStatuses[date] = 'saved'
+      delete autosaveErrors[date]
+    })
     notice.value = response.data.message
-    await loadHistory(history.value?.current_page ?? 1)
+    await loadHistory()
   } catch (cause) {
     error.value = apiMessage(cause, 'บันทึกตาราง Call Sale ช่วงครึ่งเดือนไม่สำเร็จ')
   } finally {
@@ -476,20 +612,34 @@ async function confirmImport() {
   }
 }
 
-async function loadHistory(page = 1) {
-  historyLoading.value = true
+async function loadHistory(page = 1, append = false) {
+  if (append) historyLoadingMore.value = true
+  else historyLoading.value = true
   error.value = ''
   try {
     const response = await api.get<{ data: Paginated<SalesCallActivity> }>('/api/v1/sales-calls/history', {
       params: { ...historyFilters, page },
     })
-    history.value = response.data.data
-    selectedHistoryIds.value = []
+    const nextPage = response.data.data
+    if (append && history.value) {
+      const rows = new Map(history.value.data.map(row => [row.call_id, row]))
+      nextPage.data.forEach(row => rows.set(row.call_id, row))
+      history.value = { ...nextPage, data: [...rows.values()] }
+    } else {
+      history.value = nextPage
+      selectedHistoryIds.value = []
+    }
   } catch (cause) {
     error.value = apiMessage(cause, 'โหลดประวัติ Call Plan ไม่สำเร็จ')
   } finally {
-    historyLoading.value = false
+    if (append) historyLoadingMore.value = false
+    else historyLoading.value = false
   }
+}
+
+async function loadMoreHistory() {
+  if (!history.value?.next_page_url || historyLoading.value || historyLoadingMore.value) return
+  await loadHistory(history.value.current_page + 1, true)
 }
 
 function addRow(date: string) {
@@ -503,12 +653,16 @@ function addRow(date: string) {
 }
 
 function removeRow(row: DailyRow & { activity_date: string }) {
+  const date = row.activity_date
   const index = periodRows.value.indexOf(row)
   if (index >= 0) periodRows.value.splice(index, 1)
   if (!periodRows.value.some(item => item.activity_date === row.activity_date)) periodRows.value.splice(index, 0, blankRow(row.activity_date))
+  scheduleDayAutosave(date)
 }
 
 async function changePeriod(direction: number) {
+  await flushPendingAutosaves()
+  if (hasUnsavedAutosave.value && !confirm('ยังมีข้อมูลที่บันทึกอัตโนมัติไม่สำเร็จหรือกรอกไม่ครบ ต้องการเปลี่ยนช่วงและละทิ้งข้อมูลนั้นหรือไม่?')) return
   const [year, month, day] = selectedDate.value.split('-').map(Number)
   if (direction > 0) {
     selectedDate.value = day <= 15
@@ -519,6 +673,15 @@ async function changePeriod(direction: number) {
       ? `${year}-${String(month).padStart(2, '0')}-01`
       : localDate(new Date(year, month - 2, 16))
   }
+  await loadPeriod()
+}
+
+async function changePeriodFromPicker() {
+  const nextDate = selectedDate.value
+  selectedDate.value = loadedPeriodDate.value
+  await flushPendingAutosaves()
+  if (hasUnsavedAutosave.value && !confirm('ยังมีข้อมูลที่บันทึกอัตโนมัติไม่สำเร็จหรือกรอกไม่ครบ ต้องการเปิดช่วงใหม่หรือไม่?')) return
+  selectedDate.value = nextDate
   await loadPeriod()
 }
 
@@ -547,8 +710,11 @@ async function deleteSelectedHistory() {
   historyActionLoading.value = true
   error.value = ''
   try {
-    const response = await api.delete<{ message: string }>('/api/v1/sales-calls/history', { data: { call_ids: selectedHistoryIds.value } })
-    notice.value = response.data.message
+    const ids = [...selectedHistoryIds.value]
+    for (let index = 0; index < ids.length; index += 100) {
+      await api.delete('/api/v1/sales-calls/history', { data: { call_ids: ids.slice(index, index + 100) } })
+    }
+    notice.value = `ลบประวัติ Call Sale ${ids.length} รายการเรียบร้อยแล้ว`
     await Promise.all([loadPeriod(), loadHistory()])
   } catch (cause) {
     error.value = apiMessage(cause, 'ลบประวัติ Call Sale ไม่สำเร็จ')
@@ -557,23 +723,58 @@ async function deleteSelectedHistory() {
   }
 }
 
-async function loadReport(page = 1) {
-  loading.value = true
+async function loadReport(page = 1, append = false) {
+  if (append) activitiesLoadingMore.value = true
+  else loading.value = true
   error.value = ''
   try {
     const params = { ...filters, page }
-    const [dashResponse, listResponse] = await Promise.all([
-      api.get<{ data: SalesCallDashboard; options: SalesCallOptions }>('/api/v1/sales-calls/dashboard', { params }),
-      api.get<{ data: Paginated<SalesCallActivity>; options: SalesCallOptions }>('/api/v1/sales-calls', { params }),
-    ])
-    dashboard.value = dashResponse.data.data
-    activities.value = listResponse.data.data
-    options.value = dashResponse.data.options
+    if (append && activities.value) {
+      const listResponse = await api.get<{ data: Paginated<SalesCallActivity>; options: SalesCallOptions }>('/api/v1/sales-calls', { params })
+      const nextPage = listResponse.data.data
+      const rows = new Map(activities.value.data.map(row => [row.call_id, row]))
+      nextPage.data.forEach(row => rows.set(row.call_id, row))
+      activities.value = { ...nextPage, data: [...rows.values()] }
+    } else {
+      const [dashResponse, listResponse] = await Promise.all([
+        api.get<{ data: SalesCallDashboard; options: SalesCallOptions }>('/api/v1/sales-calls/dashboard', { params }),
+        api.get<{ data: Paginated<SalesCallActivity>; options: SalesCallOptions }>('/api/v1/sales-calls', { params }),
+      ])
+      dashboard.value = dashResponse.data.data
+      activities.value = listResponse.data.data
+      options.value = dashResponse.data.options
+    }
   } catch (cause) {
     error.value = apiMessage(cause, 'โหลด Call Sale Report ไม่สำเร็จ')
   } finally {
-    loading.value = false
+    if (append) activitiesLoadingMore.value = false
+    else loading.value = false
   }
+}
+
+async function loadMoreActivities() {
+  if (!activities.value?.next_page_url || loading.value || activitiesLoadingMore.value) return
+  await loadReport(activities.value.current_page + 1, true)
+}
+
+function setupInfiniteScroll() {
+  infiniteScrollObserver?.disconnect()
+  if (typeof IntersectionObserver === 'undefined') {
+    void (async () => {
+      while (history.value?.next_page_url) await loadMoreHistory()
+      while (activities.value?.next_page_url) await loadMoreActivities()
+    })()
+    return
+  }
+  infiniteScrollObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return
+      if (entry.target === historyLoadSentinel.value) void loadMoreHistory()
+      if (entry.target === activitiesLoadSentinel.value) void loadMoreActivities()
+    })
+  }, { rootMargin: '300px 0px' })
+  if (historyLoadSentinel.value) infiniteScrollObserver.observe(historyLoadSentinel.value)
+  if (activitiesLoadSentinel.value) infiniteScrollObserver.observe(activitiesLoadSentinel.value)
 }
 
 async function loadSubmissions() {
@@ -638,12 +839,17 @@ async function saveManagedCall() {
       customer_group: row.customer_group,
       product_1: row.product_1,
       objective: row.objective,
+      call_detail_objective: row.call_detail_objective,
       outcome: row.outcome,
+      call_detail_outcome: row.call_detail_outcome,
+      next_follow_up_date: row.next_follow_up_date,
+      notes: row.notes,
+      sm_comment: row.sm_comment,
       status: row.status,
     })
     editingManagedCall.value = null
     notice.value = response.data.message
-    await Promise.all([loadReport(activities.value?.current_page ?? 1), loadSubmissions()])
+    await Promise.all([loadReport(), loadSubmissions()])
   } catch (cause) {
     error.value = apiMessage(cause, 'แก้ไขข้อมูล Call Sale ไม่สำเร็จ')
   } finally {
@@ -692,6 +898,24 @@ function apiMessage(cause: unknown, fallback: string): string {
 onMounted(async () => {
   if (managerView.value) await Promise.all([loadReport(), loadSubmissions(), ...(canManageLookupOptions.value ? [loadLookupOptions()] : [])])
   else await Promise.all([loadPeriod(), loadHistory()])
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  await nextTick()
+  setupInfiniteScroll()
+})
+
+onBeforeRouteLeave(async () => {
+  if (managerView.value) return true
+  await flushPendingAutosaves()
+  if (!hasUnsavedAutosave.value) return true
+  return confirm('ยังมีข้อมูลที่บันทึกอัตโนมัติไม่สำเร็จหรือกรอกไม่ครบ ต้องการออกจากหน้านี้และละทิ้งข้อมูลดังกล่าวหรือไม่?')
+})
+
+onBeforeUnmount(() => {
+  cancelAutosaveTimers()
+  infiniteScrollObserver?.disconnect()
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 
@@ -716,6 +940,7 @@ onMounted(async () => {
             <button class="btn import-button" type="button" :disabled="importLoading || saving" @click="chooseImportFile">
               {{ importLoading ? 'กำลังอ่าน Excel...' : 'นำเข้า Excel' }}
             </button>
+            <span class="autosave-status" :class="`is-${autosaveSummary.className}`">{{ autosaveSummary.label }}</span>
             <div class="row-count">{{ periodCallCount }} Call</div>
           </div>
         </div>
@@ -728,7 +953,7 @@ onMounted(async () => {
               <button class="btn add-row" type="button" @click="addRow(day.date)">＋ เพิ่ม Row วันนี้</button>
             </div>
             <div class="planner-scroll">
-              <table class="planner-table">
+              <table class="planner-table" @input="scheduleDayAutosave(day.date)" @change="scheduleDayAutosave(day.date)">
                 <thead><tr><th class="col-no">Call No.</th><th class="col-date">Date</th><th>PLACE OF WORK</th><th>CUSTOMER NAME</th><th>SPECIALTY</th><th>DEPARTMENT</th><th>GROUP</th><th>PRODUCT-1</th><th>CALL OBJECTIVE</th><th>CALL DETAIL (Obj)</th><th>CALL OUTCOME</th><th>CALL DETAIL (Out)</th><th>F/U DATE</th><th>NOTE</th><th>SM Comment</th><th>Status</th><th class="col-remove"></th></tr></thead>
                 <tbody>
                   <tr v-for="(row, index) in day.rows" :id="row.call_id ? `call-row-${row.call_id}` : undefined" :key="row.call_id || `new-${day.date}-${index}`">
@@ -736,7 +961,7 @@ onMounted(async () => {
                     <td><textarea v-model.trim="row.place_of_work" rows="2" placeholder="สถานที่ทำงาน"></textarea></td><td><textarea v-model.trim="row.customer_name" rows="2" placeholder="ชื่อลูกค้า"></textarea></td>
                     <td><select v-model="row.specialty"><option value="">เลือก</option><option v-for="item in optionValues('specialties', row.specialty || '')" :key="item">{{ item }}</option></select></td><td><select v-model="row.department"><option value="">เลือก</option><option v-for="item in optionValues('departments', row.department || '')" :key="item">{{ item }}</option></select></td><td><select v-model="row.customer_group"><option value="">เลือก</option><option v-for="item in optionValues('groups', row.customer_group || '')" :key="item">{{ item }}</option></select></td><td><select v-model="row.product_1"><option value="">เลือก</option><option v-for="item in optionValues('products', row.product_1 || '')" :key="item">{{ item }}</option></select></td>
                     <td><select v-model="row.objective"><option v-for="item in optionValues('objectives', row.objective)" :key="item">{{ item }}</option></select></td><td><textarea v-model.trim="row.call_detail_objective" rows="2" placeholder="รายละเอียดวัตถุประสงค์"></textarea></td><td><select v-model="row.outcome"><option value="">เลือกผลลัพธ์</option><option v-for="item in optionValues('outcomes', row.outcome)" :key="item">{{ item }}</option></select></td><td><textarea v-model.trim="row.call_detail_outcome" rows="2" placeholder="รายละเอียดผลลัพธ์"></textarea></td>
-                    <td><input v-model="row.next_follow_up_date" type="date"></td><td><textarea v-model.trim="row.notes" rows="2" placeholder="หมายเหตุ"></textarea></td><td><textarea v-model.trim="row.sm_comment" rows="2" placeholder="SM Comment"></textarea></td><td><select v-model="row.status"><option v-for="item in optionValues('statuses', row.status)" :key="item">{{ item }}</option></select></td><td class="col-remove"><button class="remove-row" type="button" title="ลบแถว" @click="removeRow(row)">×</button></td>
+                    <td><CompatDateTimeInput v-model="row.next_follow_up_date" mode="date" /></td><td><textarea v-model.trim="row.notes" rows="2" placeholder="หมายเหตุ"></textarea></td><td><textarea :value="row.sm_comment || ''" class="sm-comment-readonly" rows="2" readonly placeholder="SM ยังไม่มีความคิดเห็น" title="SM Comment แก้ไขได้จาก Call Sale Report โดยผู้มีสิทธิ์เท่านั้น"></textarea></td><td><select v-model="row.status"><option v-for="item in optionValues('statuses', row.status)" :key="item">{{ item }}</option></select></td><td class="col-remove"><button class="remove-row" type="button" title="ลบแถว" @click="removeRow(row)">×</button></td>
                   </tr>
                 </tbody>
               </table>
@@ -746,11 +971,11 @@ onMounted(async () => {
 
         <div class="planner-footer">
           <div class="planner-actions">
-            <button style="background-color: #88E788; color: black;" class="btn btn-primary save-table" type="button" :disabled="loading || saving" @click="savePeriod">{{ saving ? 'กำลังบันทึก...' : 'บันทึกข้อมูลทั้งครึ่งเดือน' }}</button>
+            <button style="background-color: #88E788; color: black;" class="btn btn-primary save-table" type="button" :disabled="loading || saving" @click="savePeriod">{{ saving ? 'กำลังบันทึก...' : 'บันทึกทันที' }}</button>
           </div>
           <div class="day-switcher">
             <button type="button" aria-label="ครึ่งเดือนก่อนหน้า" @click="changePeriod(-1)">«</button>
-            <input v-model="selectedDate" type="date" aria-label="เลือกช่วงครึ่งเดือน" @change="loadPeriod">
+            <CompatDateTimeInput v-model="selectedDate" mode="date" aria-label="เลือกช่วงครึ่งเดือน" @change="changePeriodFromPicker" />
             <strong>{{ displayDate(periodBounds.date_from) }} – {{ displayDate(periodBounds.date_to) }}</strong>
             <button type="button" aria-label="ครึ่งเดือนถัดไป" @click="changePeriod(1)">»</button>
           </div>
@@ -845,9 +1070,8 @@ onMounted(async () => {
             <p class="muted">แสดงเฉพาะข้อมูลที่บัญชีของคุณบันทึกไว้ {{ history?.total ?? 0 }} รายการ</p>
           </div>
           <div class="history-filters">
-            <label>ตั้งแต่<input v-model="historyFilters.date_from" type="date"></label>
-            <label>ถึง<input v-model="historyFilters.date_to" type="date"></label>
-            <label>แถว<select v-model="historyFilters.per_page"><option :value="25">25</option><option :value="50">50</option><option :value="100">100</option></select></label>
+            <label>ตั้งแต่<CompatDateTimeInput v-model="historyFilters.date_from" mode="date" /></label>
+            <label>ถึง<CompatDateTimeInput v-model="historyFilters.date_to" mode="date" /></label>
             <button class="btn btn-primary" type="button" :disabled="historyLoading" @click="loadHistory()">ดูประวัติ</button>
           </div>
         </div>
@@ -857,16 +1081,16 @@ onMounted(async () => {
           <button class="btn danger-action" type="button" :disabled="!selectedHistoryIds.length || historyActionLoading" @click="deleteSelectedHistory">{{ historyActionLoading ? 'กำลังลบ...' : 'ลบรายการที่เลือก' }}</button>
         </div>
         <div v-if="historyLoading" class="loading-box">กำลังโหลดประวัติ...</div>
-        <div v-else class="history-scroll">
-          <table class="history-table">
-            <thead><tr><th class="history-check"><input type="checkbox" :checked="allHistoryPageSelected" aria-label="เลือกทั้งหมดในหน้านี้" @change="toggleHistoryPage(($event.target as HTMLInputElement).checked)"></th><th>Date</th><th>Call No.</th><th>PLACE OF WORK</th><th>CUSTOMER</th><th>PRODUCT</th><th>OBJECTIVE</th><th>OUTCOME</th><th>F/U DATE</th><th>Status</th></tr></thead>
+        <div v-else class="raw-scroll">
+          <table class="raw-table sale-history-table">
+            <thead><tr><th class="history-check"><input type="checkbox" :checked="allHistoryPageSelected" aria-label="เลือกข้อมูลที่โหลดแล้วทั้งหมด" @change="toggleHistoryPage(($event.target as HTMLInputElement).checked)"></th><th>Date</th><th>Call No.</th><th>PLACE OF WORK</th><th>CUSTOMER NAME</th><th>SPECIALTY</th><th>DEPARTMENT</th><th>GROUP</th><th>PRODUCT-1</th><th>CALL OBJECTIVE</th><th>CALL DETAIL (Obj)</th><th>CALL OUTCOME</th><th>CALL DETAIL (Out)</th><th>F/U DATE</th><th>NOTE</th><th>SM Comment</th><th>Status</th></tr></thead>
             <tbody>
-              <tr v-for="row in history?.data" :key="row.call_id" :class="{ 'is-selected-history': selectedHistoryIds.includes(row.call_id) }"><td class="history-check"><input v-model="selectedHistoryIds" type="checkbox" :value="row.call_id" :aria-label="`เลือก Call ${row.call_no} วันที่ ${displayDate(row.activity_date)}`"></td><td>{{ displayDate(row.activity_date) }}</td><td>{{ row.call_no }}</td><td>{{ row.place_of_work || '-' }}</td><td>{{ row.customer_name || '-' }}</td><td>{{ row.product_1 || '-' }}</td><td>{{ row.objective }}</td><td><span class="outcome-chip" :class="row.outcome.toLowerCase().replace(' ', '-')">{{ row.outcome }}</span></td><td>{{ displayDate(row.next_follow_up_date) }}</td><td><span class="status-chip" :class="row.status === 'ทำงาน' ? 'work' : 'leave'">{{ row.status }}</span></td></tr>
-              <tr v-if="!history?.data.length"><td colspan="10" class="empty-cell">ยังไม่มี Call Plan ในช่วงวันที่เลือก</td></tr>
+              <tr v-for="row in history?.data" :key="row.call_id" :class="{ 'is-selected-history': selectedHistoryIds.includes(row.call_id) }"><td class="history-check"><input v-model="selectedHistoryIds" type="checkbox" :value="row.call_id" :aria-label="`เลือก Call ${row.call_no} วันที่ ${displayDate(row.activity_date)}`"></td><td>{{ displayDate(row.activity_date) }}</td><td>{{ row.call_no }}</td><td>{{ row.place_of_work || '-' }}</td><td>{{ row.customer_name || '-' }}</td><td>{{ row.specialty || '-' }}</td><td>{{ row.department || '-' }}</td><td>{{ row.customer_group || '-' }}</td><td>{{ row.product_1 || '-' }}</td><td>{{ row.objective }}</td><td>{{ row.call_detail_objective || '-' }}</td><td><span class="outcome-chip" :class="row.outcome.toLowerCase().replace(' ', '-')">{{ row.outcome }}</span></td><td>{{ row.call_detail_outcome || '-' }}</td><td>{{ displayDate(row.next_follow_up_date) }}</td><td>{{ row.notes || '-' }}</td><td class="sm-comment-cell">{{ row.sm_comment || '-' }}</td><td><span class="status-chip" :class="row.status === 'ทำงาน' ? 'work' : 'leave'">{{ row.status }}</span></td></tr>
+              <tr v-if="!history?.data.length"><td colspan="17" class="empty-cell">ยังไม่มี Call Plan ในช่วงวันที่เลือก</td></tr>
             </tbody>
           </table>
         </div>
-        <div v-if="history && history.last_page > 1" class="pagination compact-pagination"><button class="btn" :disabled="!history.prev_page_url" @click="loadHistory(history.current_page - 1)">ก่อนหน้า</button><span>หน้า {{ history.current_page }} / {{ history.last_page }}</span><button class="btn" :disabled="!history.next_page_url" @click="loadHistory(history.current_page + 1)">ถัดไป</button></div>
+        <div ref="historyLoadSentinel" class="infinite-load-sentinel"><span v-if="historyLoadingMore">กำลังโหลดข้อมูลเพิ่มเติม…</span><span v-else-if="history?.next_page_url">เลื่อนลงเพื่อโหลดข้อมูลต่อ</span><span v-else-if="history?.data.length">แสดงครบ {{ history.total }} รายการแล้ว</span></div>
       </section>
     </template>
 
@@ -874,7 +1098,7 @@ onMounted(async () => {
       <section class="content-card section-gap submission-card">
         <div class="section-heading">
           <div><p class="eyebrow">MONTHLY SUBMISSION CHECKLIST</p><h2>Checklist การส่ง Call Sale รายเดือน</h2><p class="muted">ตรวจว่า Sale คนใดส่งข้อมูลแล้ว ดาวน์โหลดไฟล์ Excel ต้นฉบับ หรือจัดการข้อมูลทั้งเดือน</p></div>
-          <div class="submission-actions"><label>เดือน<input v-model="submissionMonth" type="month" @change="loadSubmissions"></label><label>แผนก<select v-model="submissionDepartment" @change="selectedSubmissionSellerIds = []"><option value="">ทุกแผนก</option><option v-for="department in submissionDepartments" :key="department" :value="department">{{ department }}</option></select></label><button class="btn" type="button" :disabled="submissionsLoading" @click="loadSubmissions">รีเฟรช</button><button class="btn danger-action" type="button" :disabled="submissionsLoading || !selectedSubmissionSellerIds.length" @click="deleteSelectedSubmissionMonths">ลบข้อมูลทั้งเดือนที่เลือก</button></div>
+          <div class="submission-actions"><label>เดือน<CompatDateTimeInput v-model="submissionMonth" mode="month" @change="loadSubmissions" /></label><label>แผนก<select v-model="submissionDepartment" @change="selectedSubmissionSellerIds = []"><option value="">ทุกแผนก</option><option v-for="department in submissionDepartments" :key="department" :value="department">{{ department }}</option></select></label><button class="btn" type="button" :disabled="submissionsLoading" @click="loadSubmissions">รีเฟรช</button><button class="btn danger-action" type="button" :disabled="submissionsLoading || !selectedSubmissionSellerIds.length" @click="deleteSelectedSubmissionMonths">ลบข้อมูลทั้งเดือนที่เลือก</button></div>
         </div>
         <div v-if="submissionsLoading" class="loading-box">กำลังตรวจสอบรายการส่ง Call Sale...</div>
         <div v-else class="summary-scroll"><table class="summary-table submission-table"><thead><tr><th>เลือก</th><th>สถานะ</th><th>Sale</th><th>แผนก</th><th>Total Call</th><th>ไฟล์ Excel ต้นฉบับ / กิจกรรมอื่น</th><th>จัดการ</th></tr></thead><tbody>
@@ -891,8 +1115,8 @@ onMounted(async () => {
         <div class="filter-grid">
           <label>Sale (เลือกได้หลายคน)<select v-model="filters.seller_ids" multiple><option v-for="seller in options.sellers" :key="seller.id" :value="seller.id">{{ [seller.first_name, seller.last_name].filter(Boolean).join(' ') || seller.username }}</option></select></label>
           <label>แผนกของ Sale (เลือกได้หลายแผนก)<select v-model="filters.seller_departments" multiple><option v-for="department in options.seller_departments" :key="department">{{ department }}</option></select></label>
-          <label>ตั้งแต่วันที่<input v-model="filters.date_from" type="date"></label>
-          <label>ถึงวันที่<input v-model="filters.date_to" type="date"></label>
+          <label>ตั้งแต่วันที่<CompatDateTimeInput v-model="filters.date_from" mode="date" /></label>
+          <label>ถึงวันที่<CompatDateTimeInput v-model="filters.date_to" mode="date" /></label>
           <label>ค้นหาโรงพยาบาล/ลูกค้า<input v-model.trim="filters.customer" placeholder="PLACE OF WORK หรือ CUSTOMER NAME"></label>
           <label>Product<select v-model="filters.products" multiple><option v-for="item in options.products" :key="item">{{ item }}</option></select></label>
           <label>Call Outcome<select v-model="filters.outcomes" multiple><option v-for="item in options.outcomes" :key="item">{{ item }}</option></select></label>
@@ -1085,7 +1309,7 @@ onMounted(async () => {
         <div class="section-heading"><div><p class="eyebrow">RAW DATA</p><h2>ข้อมูล Call Sale ทั้งทีม</h2><p class="muted">{{ activities?.total ?? 0 }} รายการตามตัวกรอง</p></div></div>
         <div v-if="loading" class="loading-box">กำลังประมวลผลรายงาน...</div>
         <div v-else class="raw-scroll"><table class="raw-table"><thead><tr><th>จัดการ</th><th>Sale</th><th>Call No.</th><th>Date</th><th>PLACE OF WORK</th><th>CUSTOMER NAME</th><th>SPECIALTY</th><th>DEPARTMENT</th><th>GROUP</th><th>PRODUCT-1</th><th>CALL OBJECTIVE</th><th>CALL DETAIL (Obj)</th><th>CALL OUTCOME</th><th>CALL DETAIL (Out)</th><th>F/U DATE</th><th>NOTE</th><th>SM Comment</th><th>Status</th></tr></thead><tbody><tr v-for="row in activities?.data" :key="row.call_id"><td><button class="btn compact-button" type="button" @click="editManagedCall(row)">แก้ไข</button></td><td>{{ row.seller_username }}</td><td>{{ row.call_no }}</td><td>{{ shortDate(row.activity_date) }}</td><td>{{ row.place_of_work || '-' }}</td><td>{{ row.customer_name || '-' }}</td><td>{{ row.specialty || '-' }}</td><td>{{ row.department || '-' }}</td><td>{{ row.customer_group || '-' }}</td><td>{{ row.product_1 || '-' }}</td><td>{{ row.objective }}</td><td>{{ row.call_detail_objective || '-' }}</td><td>{{ row.outcome }}</td><td>{{ row.call_detail_outcome || '-' }}</td><td>{{ shortDate(row.next_follow_up_date) }}</td><td>{{ row.notes || '-' }}</td><td>{{ row.sm_comment || '-' }}</td><td><span class="status-chip" :class="row.status === 'ทำงาน' ? 'work' : 'leave'">{{ row.status }}</span></td></tr><tr v-if="!activities?.data.length"><td colspan="18" class="empty-cell">ไม่พบข้อมูลตามตัวกรอง</td></tr></tbody></table></div>
-        <div v-if="activities && activities.last_page > 1" class="pagination"><button class="btn" :disabled="!activities.prev_page_url" @click="loadReport(activities.current_page - 1)">ก่อนหน้า</button><span>หน้า {{ activities.current_page }} / {{ activities.last_page }}</span><button class="btn" :disabled="!activities.next_page_url" @click="loadReport(activities.current_page + 1)">ถัดไป</button></div>
+        <div ref="activitiesLoadSentinel" class="infinite-load-sentinel"><span v-if="activitiesLoadingMore">กำลังโหลดข้อมูลเพิ่มเติม…</span><span v-else-if="activities?.next_page_url">เลื่อนลงเพื่อโหลดข้อมูลต่อ</span><span v-else-if="activities?.data.length">แสดงครบ {{ activities.total }} รายการแล้ว</span></div>
       </section>
 
       <Teleport to="body">
@@ -1100,8 +1324,13 @@ onMounted(async () => {
               <label>GROUP *<select v-model="editingManagedCall.customer_group" required><option v-for="item in optionValues('groups', editingManagedCall.customer_group || '')" :key="item">{{ item }}</option></select></label>
               <label>PRODUCT-1 *<select v-model="editingManagedCall.product_1" required><option v-for="item in optionValues('products', editingManagedCall.product_1 || '')" :key="item">{{ item }}</option></select></label>
               <label>CALL OBJECTIVE *<select v-model="editingManagedCall.objective" required><option v-for="item in optionValues('objectives', editingManagedCall.objective)" :key="item">{{ item }}</option></select></label>
+              <label>CALL DETAIL (Obj)<textarea v-model.trim="editingManagedCall.call_detail_objective" rows="3" placeholder="รายละเอียดวัตถุประสงค์"></textarea></label>
               <label>CALL OUTCOME *<select v-model="editingManagedCall.outcome" required><option v-for="item in optionValues('outcomes', editingManagedCall.outcome)" :key="item">{{ item }}</option></select></label>
+              <label>CALL DETAIL (Out)<textarea v-model.trim="editingManagedCall.call_detail_outcome" rows="3" placeholder="รายละเอียดผลลัพธ์"></textarea></label>
+              <label>F/U DATE<CompatDateTimeInput v-model="editingManagedCall.next_follow_up_date" mode="date" /></label>
+              <label>NOTE<textarea v-model.trim="editingManagedCall.notes" rows="3" placeholder="หมายเหตุของ Sale"></textarea></label>
               <label>Status *<select v-model="editingManagedCall.status" required><option v-for="item in optionValues('statuses', editingManagedCall.status)" :key="item">{{ item }}</option></select></label>
+              <label class="manager-comment-field">SM COMMENT<textarea v-model.trim="editingManagedCall.sm_comment" rows="4" maxlength="10000" placeholder="ความคิดเห็นหรือคำแนะนำจาก SM เพื่อให้ Sale เห็นในตารางของตนเอง"></textarea></label>
             </div>
             <div class="import-confirmation"><p>การแก้ไขจะเปลี่ยนข้อมูลรายงานของ Sale รายนี้และถูกบันทึกใน Audit Log</p><div><button class="btn" type="button" :disabled="managerSaving" @click="editingManagedCall = null">ยกเลิก</button><button class="btn btn-primary" type="submit" :disabled="managerSaving">{{ managerSaving ? 'กำลังบันทึก...' : 'บันทึกการแก้ไข' }}</button></div></div>
           </form>
@@ -1119,11 +1348,11 @@ onMounted(async () => {
 .hospital-ranking-table td:first-child,.hospital-ranking-table th:first-child{text-align:center;width:62px}.rank-badge{display:inline-grid;place-items:center;min-width:30px;height:30px;border-radius:50%;background:#fff0f2;color:#b82032}.hospital-ranking-table tr:nth-child(1) .rank-badge{background:#fbbf24;color:#713f12}.hospital-ranking-table tr:nth-child(2) .rank-badge{background:#cbd5e1;color:#334155}.hospital-ranking-table tr:nth-child(3) .rank-badge{background:#d97706;color:#fff}
 .period-days{display:grid;gap:14px;padding:16px;background:#f5f7fa}.planner-day{overflow:hidden;border:1px solid #dfe3e9;border-radius:12px;background:#fff;box-shadow:0 2px 8px #1822300a}.planner-day.is-selected-day{border-color:#d24959;box-shadow:0 0 0 2px #d2495920}.planner-day-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;background:#fff8f9;border-bottom:1px solid #eadde0}.planner-day-heading>div{display:flex;align-items:center;gap:10px}.planner-day-heading small{color:#9d1d2d;font-weight:800}.planner-heading-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}.history-bulk-actions{display:flex;align-items:center;justify-content:flex-end;gap:9px;padding:10px 18px;border-top:1px solid #e7e9ed;background:#f8fafc}.history-check{width:42px;text-align:center!important}.history-check input{width:17px;height:17px;accent-color:#b82032}.history-table tr.is-selected-history{background:#fff0f2!important}.danger-action{border-color:#efb4bb;color:#a61b2b}.danger-action:not(:disabled):hover{background:#fff0f2}.visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}.import-button{border-color:#b82032;color:#a61b2b;background:#fff}.import-modal{width:min(1180px,100%)}.import-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:13px}.import-summary article{padding:12px;border:1px solid #e2e5ea;border-radius:10px;background:#f8fafc}.import-summary article.warning{border-color:#f5c26b;background:#fff8e8}.import-summary span{display:block;color:#667085;font-size:.72rem}.import-summary strong{display:block;margin-top:5px;font-size:1rem}.import-quality-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-bottom:13px}.quality-card{padding:10px 12px;border:1px solid #dce4ee;border-radius:10px;background:#f8fafc;font-size:.75rem}.quality-card strong{display:block;margin-bottom:5px}.quality-card p{margin:0;color:#475569;line-height:1.45}.quality-card p span{display:inline-block;margin:0 10px 2px 0}.quality-good{border-color:#a7e2bd;background:#f0fdf4}.quality-warning{border-color:#f3c66f;background:#fff9e9}.import-warnings{max-height:150px;overflow:auto;margin-bottom:13px;padding:12px 14px;border:1px solid #f3c66f;border-radius:10px;background:#fff9e9;color:#7a4b00;font-size:.76rem}.import-warnings ul{margin:7px 0;padding-left:20px}.import-preview-scroll{min-height:180px;overflow:auto;border:1px solid #e2e5ea;border-radius:10px}.import-preview-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;font-size:.75rem}.import-preview-table th{position:sticky;top:0;z-index:2;padding:9px 10px;background:#263142;color:#fff;text-align:left;white-space:nowrap}.import-preview-table td{max-width:220px;padding:8px 10px;border-bottom:1px solid #e7e9ed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.import-preview-note{margin:8px 0 0}.import-confirmation{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:13px;padding-top:13px;border-top:1px solid #e2e5ea}.import-confirmation p{max-width:760px;margin:0;font-size:.78rem;color:#475569}.import-confirmation>div{display:flex;gap:8px;flex-shrink:0}
 .lookup-modal-backdrop{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;padding:24px;background:#11182799;backdrop-filter:blur(3px)}.lookup-modal{display:flex;flex-direction:column;width:min(960px,100%);max-height:calc(100vh - 48px);padding:22px;border-radius:16px;background:#fff;box-shadow:0 24px 70px #11182755;overflow:hidden}.lookup-modal-header{flex-shrink:0;margin:0 0 15px}.lookup-modal-close{width:38px;height:38px;flex-shrink:0;border:0;border-radius:10px;background:#f3f4f6;color:#475569;font-size:1.6rem;line-height:1;cursor:pointer}.lookup-modal-close:hover{background:#fee2e2;color:#991b1b}.lookup-tabs{display:flex;flex-shrink:0;gap:7px;overflow-x:auto;padding:2px 0 13px;border-bottom:1px solid #e7e9ed}.lookup-tabs button{border:1px solid #d7dbe2;border-radius:99px;background:#fff;color:#475569;padding:7px 12px;white-space:nowrap;cursor:pointer}.lookup-tabs button.active{border-color:#b82032;background:#b82032;color:#fff}.lookup-add{display:grid;grid-template-columns:minmax(240px,1fr) auto;flex-shrink:0;gap:10px;align-items:end;padding:15px 0}.lookup-add label{display:grid;gap:6px;font-size:.8rem;font-weight:700}.lookup-add input,.lookup-table input{width:100%;border:1px solid #d5d9e0;border-radius:8px;padding:8px 10px;background:#fff;color:#172033}.lookup-table-wrap{min-height:0;overflow:auto;border:1px solid #e2e5ea;border-radius:10px}.lookup-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.8rem}.lookup-table th{position:sticky;top:0;z-index:2;background:#263142;color:#fff;text-align:left;padding:9px 10px;white-space:nowrap}.lookup-table td{padding:8px 10px;border-bottom:1px solid #e7e9ed;vertical-align:middle}.lookup-table tbody tr:nth-child(even){background:#f8fafc}.lookup-table tr.inactive{background:#f5f5f5;color:#8a93a2}.lookup-table .sort-input{width:85px}.active-toggle{display:flex;align-items:center;gap:7px;white-space:nowrap}.active-toggle input{width:17px;height:17px;accent-color:#b82032}
-.required-errors{margin-bottom:13px;padding:13px 14px;border:1px solid #f09aa4;border-radius:10px;background:#fff1f2;color:#8f1624;font-size:.78rem}.required-errors>p{margin:6px 0 10px}.required-errors-scroll{max-height:190px;overflow:auto;border:1px solid #fecdd3;border-radius:8px;background:#fff}.required-errors-table{width:100%;border-collapse:collapse;color:#172033}.required-errors-table th,.required-errors-table td{padding:8px 10px;border-bottom:1px solid #fee2e2;text-align:left;vertical-align:top}.required-errors-table th{position:sticky;top:0;background:#9f1d2d;color:#fff}.required-errors-table td:last-child{color:#991b1b;font-weight:700}.submission-actions{display:flex;align-items:flex-end;justify-content:flex-end;gap:8px;flex-wrap:wrap}.submission-actions label{display:grid;gap:4px;color:#475569;font-size:.74rem;font-weight:700}.submission-actions input{border:1px solid #d5d9e0;border-radius:8px;padding:8px 10px;background:#fff}.submission-table{min-width:930px}.submission-status{display:inline-block;padding:5px 9px;border-radius:99px;font-weight:800}.submission-status.submitted{background:#dcfce7;color:#166534}.submission-status.missing{background:#fff1f2;color:#9f1239}.source-files{display:grid;gap:6px;min-width:280px}.file-download{display:grid;gap:3px;width:100%;border:1px solid #dbe2ea;border-radius:8px;background:#fff;padding:8px 10px;text-align:left;color:#172033;cursor:pointer}.file-download:hover{border-color:#c92d3e;background:#fff8f9}.file-download strong{max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-download small{color:#64748b}.compact-button{padding:5px 9px;font-size:.72rem}.manager-edit-modal{width:min(900px,100%)}.manager-edit-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;overflow:auto;padding:2px}.manager-edit-grid label{display:grid;gap:6px;color:#344054;font-size:.78rem;font-weight:800}.manager-edit-grid input,.manager-edit-grid select{width:100%;border:1px solid #d5d9e0;border-radius:9px;padding:9px 11px;background:#fff;color:#172033}
+.required-errors{margin-bottom:13px;padding:13px 14px;border:1px solid #f09aa4;border-radius:10px;background:#fff1f2;color:#8f1624;font-size:.78rem}.required-errors>p{margin:6px 0 10px}.required-errors-scroll{max-height:190px;overflow:auto;border:1px solid #fecdd3;border-radius:8px;background:#fff}.required-errors-table{width:100%;border-collapse:collapse;color:#172033}.required-errors-table th,.required-errors-table td{padding:8px 10px;border-bottom:1px solid #fee2e2;text-align:left;vertical-align:top}.required-errors-table th{position:sticky;top:0;background:#9f1d2d;color:#fff}.required-errors-table td:last-child{color:#991b1b;font-weight:700}.submission-actions{display:flex;align-items:flex-end;justify-content:flex-end;gap:8px;flex-wrap:wrap}.submission-actions label{display:grid;gap:4px;color:#475569;font-size:.74rem;font-weight:700}.submission-actions input{border:1px solid #d5d9e0;border-radius:8px;padding:8px 10px;background:#fff}.submission-table{min-width:930px}.submission-status{display:inline-block;padding:5px 9px;border-radius:99px;font-weight:800}.submission-status.submitted{background:#dcfce7;color:#166534}.submission-status.missing{background:#fff1f2;color:#9f1239}.source-files{display:grid;gap:6px;min-width:280px}.file-download{display:grid;gap:3px;width:100%;border:1px solid #dbe2ea;border-radius:8px;background:#fff;padding:8px 10px;text-align:left;color:#172033;cursor:pointer}.file-download:hover{border-color:#c92d3e;background:#fff8f9}.file-download strong{max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-download small{color:#64748b}.compact-button{padding:5px 9px;font-size:.72rem}.manager-edit-modal{width:min(900px,100%)}.manager-edit-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;overflow:auto;padding:2px}.manager-edit-grid label{display:grid;gap:6px;color:#344054;font-size:.78rem;font-weight:800}.manager-edit-grid input,.manager-edit-grid select,.manager-edit-grid textarea{width:100%;border:1px solid #d5d9e0;border-radius:9px;padding:9px 11px;background:#fff;color:#172033;font:inherit;resize:vertical}.manager-comment-field{grid-column:1/-1}.manager-comment-field textarea{border-color:#e6a7af;background:#fff8f9}.autosave-status{display:inline-flex;align-items:center;min-height:32px;padding:6px 10px;border-radius:99px;background:#f1f5f9;color:#475569;font-size:.72rem;font-weight:800;white-space:nowrap}.autosave-status.is-saved{background:#dcfce7;color:#166534}.autosave-status.is-saving,.autosave-status.is-pending{background:#eff6ff;color:#1d4ed8}.autosave-status.is-waiting{background:#fff7ed;color:#9a3412}.autosave-status.is-error{background:#fee2e2;color:#991b1b}.planner-table textarea.sm-comment-readonly{background:#f8fafc;color:#475569;cursor:default}.sm-comment-cell{min-width:190px;white-space:pre-wrap}.infinite-load-sentinel{display:flex;min-height:48px;align-items:center;justify-content:center;padding:12px;color:#64748b;font-size:.78rem}.sale-history-table{min-width:2050px}
 @media(max-width:1000px){.filter-grid,.report-metrics,.import-summary{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){.planner-heading,.planner-footer{padding:16px}.planner-footer,.report-grid{display:grid;grid-template-columns:1fr}.planner-heading-actions{width:100%;justify-content:space-between}.day-switcher{margin:0;justify-content:center}.planner-actions .btn{flex:1}.filter-grid,.report-metrics,.import-summary,.manager-edit-grid{grid-template-columns:1fr}.export-actions .btn{flex:1}.objective-chart>div{grid-template-columns:90px 1fr 30px}.history-heading{display:grid}.history-filters{margin-top:12px}.donut-layout,.specialty-layout{grid-template-columns:1fr;justify-items:center}.chart-legend{width:100%}.bubble-chart svg{min-width:580px}.bubble-chart{overflow-x:auto}.section-heading{align-items:flex-start}.lookup-modal-backdrop{padding:10px}.lookup-modal{max-height:calc(100vh - 20px);padding:16px}.lookup-add{grid-template-columns:1fr}.lookup-add .btn{width:100%}.import-confirmation{display:grid}.import-confirmation>div{justify-content:flex-end}.submission-actions{justify-content:flex-start}.submission-actions .btn{flex:1}}
 .submission-status.archived{background:#f1f5f9;color:#475569}
 .submission-actions select{min-width:146px;border:1px solid #d5d9e0;border-radius:8px;padding:8px 10px;background:#fff;color:#172033}
 .line-labels{position:relative;display:block;height:36px;padding:4px 0 0}.line-labels span{position:absolute;width:48px;text-align:center;transform:translateX(-50%)}
 .bubble-chart .bubble-name,.bubble-chart .bubble-value{font-weight:900;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round}.bubble-chart .bubble-name{font-size:15px}.bubble-chart .bubble-value{font-size:12px}.seller-bubble-details{display:grid;gap:7px;margin-top:8px;padding-top:10px;border-top:1px solid #e5e7eb}.seller-bubble-details>div{display:grid;grid-template-columns:12px minmax(110px,1fr) minmax(55px,auto) minmax(60px,auto) minmax(90px,auto) minmax(105px,auto);gap:8px;align-items:center;padding:7px 9px;border-radius:8px;background:#f8fafc;font-size:.72rem}.seller-bubble-details i{width:11px;height:11px;border-radius:50%}.seller-bubble-details small{display:block;color:#64748b}.seller-bubble-details span{text-align:right;color:#475569}.seller-bubble-details b{text-align:right;color:#15803d}
-.bubble-chart g:has(circle),.line-chart g:has(circle),.donut,.chart-legend>div,.report-bar,.objective-chart>div,.treemap article,.line-labels span,.seller-bubble-details>div{cursor:help}
+.bubble-chart g,.line-chart g,.donut,.chart-legend>div,.report-bar,.objective-chart>div,.treemap article,.line-labels span,.seller-bubble-details>div{cursor:help}
 </style>

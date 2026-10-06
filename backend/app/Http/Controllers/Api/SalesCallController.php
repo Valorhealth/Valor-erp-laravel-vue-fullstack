@@ -315,12 +315,18 @@ class SalesCallController extends Controller
             'customer_group' => ['required', 'string', 'max:100', Rule::in($allowed('group', $salesCall->customer_group))],
             'product_1' => ['required', 'string', 'max:100', Rule::in($allowed('product', $salesCall->product_1))],
             'objective' => ['required', Rule::in($allowed('objective', $salesCall->objective))],
+            'call_detail_objective' => ['nullable', 'string', 'max:10000'],
             'outcome' => ['required', Rule::in($allowed('outcome', $salesCall->outcome))],
+            'call_detail_outcome' => ['nullable', 'string', 'max:10000'],
+            'next_follow_up_date' => ['nullable', 'date'],
+            'notes' => ['nullable', 'string', 'max:10000'],
+            'sm_comment' => ['nullable', 'string', 'max:10000'],
             'status' => ['required', Rule::in($allowed('status', $salesCall->status))],
         ]);
         $salesCall->forceFill([
             ...$data,
             'product_interest' => $data['product_1'],
+            'next_action' => $this->nullableText($data['call_detail_outcome'] ?? null),
             'opportunity_stage' => $this->stageFor($data['objective'], $data['outcome']),
         ])->save();
 
@@ -413,35 +419,7 @@ class SalesCallController extends Controller
 
             return $meaningfulRows->map(function (array $row, int $index) use ($request, $data, $existing): SalesCallActivity {
                 $activity = isset($row['call_id']) ? $existing->get((int) $row['call_id']) : new SalesCallActivity;
-                $activity->forceFill([
-                    'seller_user_id' => $request->user()->id,
-                    'seller_username' => $request->user()->username,
-                    'call_no' => $index + 1,
-                    'activity_date' => $data['date'],
-                    'activity_type' => 'เข้าพบ',
-                    'place_of_work' => $this->nullableText($row['place_of_work'] ?? null),
-                    'customer_name' => $this->nullableText($row['customer_name'] ?? null),
-                    'specialty' => $row['specialty'] ?? null,
-                    'department' => $row['department'] ?? null,
-                    'customer_group' => $row['customer_group'] ?? null,
-                    'product_1' => $row['product_1'] ?? null,
-                    'product_interest' => $row['product_1'] ?? null,
-                    'objective' => $row['objective'],
-                    'call_detail_objective' => $this->nullableText($row['call_detail_objective'] ?? null),
-                    'outcome' => $row['outcome'],
-                    'call_detail_outcome' => $this->nullableText($row['call_detail_outcome'] ?? null),
-                    'opportunity_stage' => $this->stageFor(
-                        $row['objective'],
-                        $row['outcome'] ?? ''
-                    ),
-                    'next_follow_up_date' => $row['next_follow_up_date'] ?? null,
-                    'next_action' => $this->nullableText($row['call_detail_outcome'] ?? null),
-                    'notes' => $this->nullableText($row['notes'] ?? null),
-                    'sm_comment' => $this->nullableText($row['sm_comment'] ?? null),
-                    'status' => $row['status'],
-                    'estimated_value' => $activity->estimated_value ?? 0,
-                    'actual_value' => $activity->actual_value ?? 0,
-                ])->save();
+                $activity->forceFill($this->activityValues($request, $row, $data['date'], $index + 1, $activity))->save();
 
                 return $activity->fresh();
             });
@@ -644,13 +622,15 @@ class SalesCallController extends Controller
             'product_interest' => $row['product_1'] ?? null,
             'objective' => $row['objective'],
             'call_detail_objective' => $this->nullableText($row['call_detail_objective'] ?? null),
-            'outcome' => $row['outcome'],
+            'outcome' => $row['outcome'] ?? '',
             'call_detail_outcome' => $this->nullableText($row['call_detail_outcome'] ?? null),
-            'opportunity_stage' => $this->stageFor($row['objective'], $row['outcome']),
+            'opportunity_stage' => $this->stageFor($row['objective'], $row['outcome'] ?? ''),
             'next_follow_up_date' => $row['next_follow_up_date'] ?? null,
             'next_action' => $this->nullableText($row['call_detail_outcome'] ?? null),
             'notes' => $this->nullableText($row['notes'] ?? null),
-            'sm_comment' => $this->nullableText($row['sm_comment'] ?? null),
+            // SM comments belong to the manager workflow. A Sale autosave must
+            // never overwrite a comment that was added after the table loaded.
+            'sm_comment' => $activity->exists ? $activity->sm_comment : null,
             'status' => $row['status'],
             'estimated_value' => $activity->estimated_value ?? 0,
             'actual_value' => $activity->actual_value ?? 0,

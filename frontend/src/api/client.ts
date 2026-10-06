@@ -29,10 +29,13 @@ export async function downloadFile(url: string, filename?: string, method: 'get'
     const link = document.createElement('a')
     link.href = objectUrl
     link.download = responseFilename(response.headers['content-disposition']) || filename || 'download'
+    link.rel = 'noopener'
+    link.style.display = 'none'
     document.body.appendChild(link)
     link.click()
     link.remove()
-    URL.revokeObjectURL(objectUrl)
+    // Safari may cancel a download when the Blob URL is revoked in the same task.
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000)
   } catch (cause) {
     let message = 'ระบบไม่สามารถสร้างไฟล์ได้ กรุณาลองใหม่หรือติดต่อผู้ดูแลระบบ'
     if (axios.isAxiosError(cause) && cause.response?.data instanceof Blob) {

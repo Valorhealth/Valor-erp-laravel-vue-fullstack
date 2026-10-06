@@ -26,8 +26,18 @@ function closeMenuOnMobile() {
   if (!desktopMenuQuery.matches) menuOpen.value = false
 }
 
-onMounted(() => desktopMenuQuery.addEventListener('change', syncMenuWithViewport))
-onBeforeUnmount(() => desktopMenuQuery.removeEventListener('change', syncMenuWithViewport))
+function addViewportListener() {
+  if (typeof desktopMenuQuery.addEventListener === 'function') desktopMenuQuery.addEventListener('change', syncMenuWithViewport)
+  else desktopMenuQuery.addListener(syncMenuWithViewport)
+}
+
+function removeViewportListener() {
+  if (typeof desktopMenuQuery.removeEventListener === 'function') desktopMenuQuery.removeEventListener('change', syncMenuWithViewport)
+  else desktopMenuQuery.removeListener(syncMenuWithViewport)
+}
+
+onMounted(addViewportListener)
+onBeforeUnmount(removeViewportListener)
 
 async function signOut() {
   await auth.logout()

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class FibroscanBooking extends Model
 {
@@ -18,6 +19,7 @@ class FibroscanBooking extends Model
         return [
             'reserved_from' => 'datetime',
             'reserved_until' => 'datetime',
+            'reviewed_at' => 'datetime',
         ];
     }
 
@@ -29,5 +31,16 @@ class FibroscanBooking extends Model
     public function owner(): BelongsTo
     {
         return $this->belongsTo(User::class, 'booked_by_user_id', 'id');
+    }
+
+    public function reviewer(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reviewed_by_user_id', 'id');
+    }
+
+    public function changes(): HasMany
+    {
+        return $this->hasMany(FibroscanBookingChange::class, 'booking_id', 'booking_id')
+            ->latest('change_id');
     }
 }

@@ -100,6 +100,7 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/fibroscan-bookings-availability', [FibroscanBookingController::class, 'availability'])->middleware('ability:equipment_booking');
         Route::post('/fibroscan-bookings', [FibroscanBookingController::class, 'store'])->middleware('ability:equipment_booking');
         Route::put('/fibroscan-bookings/{booking}', [FibroscanBookingController::class, 'update'])->middleware('ability:equipment_booking');
+        Route::patch('/fibroscan-bookings/{booking}/approval', [FibroscanBookingController::class, 'review'])->middleware('ability:approve_bills,system_admin');
         Route::patch('/fibroscan-bookings/{booking}/status', [FibroscanBookingController::class, 'updateStatus'])->middleware('ability:equipment_booking');
         Route::post('/fibroscan-machines', [FibroscanMachineController::class, 'store'])->middleware('ability:system_admin');
         Route::put('/fibroscan-machines/{machine}', [FibroscanMachineController::class, 'update'])->middleware('ability:system_admin');

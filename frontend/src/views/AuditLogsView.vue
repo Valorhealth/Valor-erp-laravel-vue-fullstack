@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api/client'
 import AppShell from '../components/AppShell.vue'
+import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
 import type { AuditLog, AuditLogResponse } from '../types/api'
 import { apiError, todayIso } from '../utils/format'
@@ -89,8 +90,8 @@ onMounted(() => load())
         <label><span>หมวดหมู่</span><select v-model="category"><option value="">ทุกหมวดหมู่</option><option v-for="item in result?.filters.categories" :key="item" :value="item">{{ item }}</option></select></label>
         <label><span>การกระทำ</span><select v-model="action"><option value="">ทุกการกระทำ</option><option v-for="item in result?.filters.actions" :key="item" :value="item">{{ item }}</option></select></label>
         <label><span>ผลลัพธ์</span><select v-model="outcome"><option value="">ทั้งหมด</option><option value="success">สำเร็จ</option><option value="failed">ไม่สำเร็จ</option></select></label>
-        <label><span>ตั้งแต่วันที่</span><input v-model="dateFrom" type="date" :max="dateTo || undefined"></label>
-        <label><span>ถึงวันที่</span><input v-model="dateTo" type="date" :min="dateFrom || undefined"></label>
+        <label><span>ตั้งแต่วันที่</span><CompatDateTimeInput v-model="dateFrom" mode="date" :max="dateTo || undefined" /></label>
+        <label><span>ถึงวันที่</span><CompatDateTimeInput v-model="dateTo" mode="date" :min="dateFrom || undefined" /></label>
         <div class="actions span-2"><button class="primary-button" :disabled="loading">ค้นหา</button><button class="secondary-button" type="button" @click="clearFilters">ล้างตัวกรอง</button><button class="secondary-button" type="button" :disabled="loading" @click="load(result?.data.current_page || 1)">รีเฟรช</button></div>
       </form>
     </section>

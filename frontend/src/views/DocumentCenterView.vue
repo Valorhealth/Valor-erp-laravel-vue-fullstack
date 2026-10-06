@@ -6,6 +6,7 @@ import StatusPill from '../components/StatusPill.vue'
 import { auth } from '../stores/auth'
 import type { BillingRecord, CreditRequest, Paginated, Quotation } from '../types/api'
 import { apiError, money, shortDate, todayIso } from '../utils/format'
+import { copyText } from '../utils/browser'
 
 const tab = ref<'quotations' | 'bills' | 'purchase-orders' | 'credit-documents'>('quotations')
 const purchaseOrders = ref<Paginated<BillingRecord> | null>(null)
@@ -95,8 +96,12 @@ function acceptanceLink(qt: Quotation) {
 async function copyAcceptanceLink(qt: Quotation) {
   const link = acceptanceLink(qt)
   if (!link) return
-  await navigator.clipboard.writeText(link)
-  message.value = 'คัดลอกลิงก์ให้ลูกค้าเรียบร้อยแล้ว'
+  try {
+    await copyText(link)
+    message.value = 'คัดลอกลิงก์ให้ลูกค้าเรียบร้อยแล้ว'
+  } catch {
+    error.value = 'Browser ไม่อนุญาตให้คัดลอกอัตโนมัติ กรุณาเปิดลิงก์แล้วคัดลอกจาก Address Bar'
+  }
 }
 function selectEvidenceFile(qt: Quotation, event: Event) {
   evidenceFiles[qt.qt_id] = (event.target as HTMLInputElement).files?.[0] || null

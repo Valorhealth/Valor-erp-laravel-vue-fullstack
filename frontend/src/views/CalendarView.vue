@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../api/client'
 import AppShell from '../components/AppShell.vue'
+import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
 import { auth } from '../stores/auth'
 import type { SalesTask, User } from '../types/api'
@@ -123,7 +124,7 @@ onMounted(load)
     <div class="status-legend"><span v-for="item in statusLegend" :key="item.label"><i :style="{background:item.color}"></i>{{ item.label }}</span></div>
     <div class="calendar-layout">
       <section class="content-card">
-        <div class="calendar-toolbar"><div class="actions"><button class="secondary-button" @click="shiftMonth(-1)">‹</button><button class="secondary-button" @click="shiftMonth(1)">›</button><button class="secondary-button" @click="goToday">วันนี้</button></div><input v-model="month" type="month"><div class="calendar-modes"><button v-for="mode in ['month','week','day','list']" :key="mode" :class="{active:calendarMode===mode}" @click="calendarMode=mode as typeof calendarMode">{{ {month:'เดือน',week:'สัปดาห์',day:'วัน',list:'รายการ'}[mode] }}</button></div></div>
+        <div class="calendar-toolbar"><div class="actions"><button class="secondary-button" @click="shiftMonth(-1)">‹</button><button class="secondary-button" @click="shiftMonth(1)">›</button><button class="secondary-button" @click="goToday">วันนี้</button></div><CompatDateTimeInput v-model="month" mode="month" aria-label="เลือกเดือน" /><div class="calendar-modes"><button v-for="mode in ['month','week','day','list']" :key="mode" :class="{active:calendarMode===mode}" @click="calendarMode=mode as typeof calendarMode">{{ {month:'เดือน',week:'สัปดาห์',day:'วัน',list:'รายการ'}[mode] }}</button></div></div>
         <template v-if="calendarMode==='month'">
           <div class="calendar-weekdays"><span v-for="name in ['จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์','อาทิตย์']" :key="name">{{ name }}</span></div>
           <div class="task-calendar-weeks">
@@ -152,7 +153,7 @@ onMounted(load)
           </div>
         </template>
         <template v-else-if="calendarMode==='week'"><div class="week-grid"><section v-for="day in weekDays" :key="day.iso" :class="{today:day.iso===todayIso()}" @click="selectDate(day.iso)"><header>{{ shortDate(day.iso) }}</header><button v-for="task in day.tasks" :key="task.task_id" :class="`calendar-event event--${task.status}`" @click.stop="selected=task">{{ task.title }}<small>{{ task.assigned_to }} · โดย {{ task.assigned_by }}</small></button></section></div></template>
-        <div v-else class="calendar-list"><div class="section-heading"><h2>{{ calendarMode==='day' ? `งานวันที่ ${shortDate(selectedDate)}` : 'รายการงานประจำเดือน' }}</h2><input v-if="calendarMode==='day'" v-model="selectedDate" type="date"></div><button v-for="task in (calendarMode==='day'?selectedDateTasks:monthTasks)" :key="task.task_id" class="task-card" :class="`task-card--${task.status}`" @click="selected=task"><span>{{ shortDate(task.start_date) }}{{task.end_date!==task.start_date?` – ${shortDate(task.end_date)}`:''}}</span><strong>{{task.title}}</strong><small>{{task.assigned_to}} · มอบหมายโดย {{ task.assigned_by }} · {{task.priority}} · {{task.all_day?'ทั้งวัน':`${task.start_time?.slice(0,5)}–${task.end_time?.slice(0,5)}`}}</small></button><p v-if="!(calendarMode==='day'?selectedDateTasks:monthTasks).length" class="empty-state">ไม่มีงานในช่วงนี้</p></div>
+        <div v-else class="calendar-list"><div class="section-heading"><h2>{{ calendarMode==='day' ? `งานวันที่ ${shortDate(selectedDate)}` : 'รายการงานประจำเดือน' }}</h2><CompatDateTimeInput v-if="calendarMode==='day'" v-model="selectedDate" mode="date" aria-label="เลือกวันที่" /></div><button v-for="task in (calendarMode==='day'?selectedDateTasks:monthTasks)" :key="task.task_id" class="task-card" :class="`task-card--${task.status}`" @click="selected=task"><span>{{ shortDate(task.start_date) }}{{task.end_date!==task.start_date?` – ${shortDate(task.end_date)}`:''}}</span><strong>{{task.title}}</strong><small>{{task.assigned_to}} · มอบหมายโดย {{ task.assigned_by }} · {{task.priority}} · {{task.all_day?'ทั้งวัน':`${task.start_time?.slice(0,5)}–${task.end_time?.slice(0,5)}`}}</small></button><p v-if="!(calendarMode==='day'?selectedDateTasks:monthTasks).length" class="empty-state">ไม่มีงานในช่วงนี้</p></div>
       </section>
       <aside class="content-card calendar-aside">
         <h2>งานวันนี้</h2><article v-for="task in todayTasks" :key="task.task_id" class="mini-task"><strong>{{ task.title }}</strong><small>{{ task.assigned_to }} · มอบหมายโดย {{ task.assigned_by }}</small><StatusPill :status="task.status" /></article>
@@ -165,9 +166,9 @@ onMounted(load)
       <label><span>ความสำคัญ</span><select v-model="form.priority"><option>ปกติ</option><option>ด่วน</option><option>สำคัญมาก</option></select></label>
       <label class="span-2"><span>รายละเอียด</span><textarea v-model="form.description" rows="3"></textarea></label>
       <label class="span-2"><span>มอบหมายให้ (เลือกได้ทุก Role) *</span><select v-model="form.assigned_to" multiple required><option v-for="person in assignableUsers" :key="person.id" :value="person.username">{{ assigneeLabel(person) }}</option></select><small>เลือกได้หลายบัญชี ระบบจะสร้างงานแยกให้แต่ละคน และบันทึกผู้มอบหมายเป็น {{ auth.user.value?.username }}</small></label>
-      <label><span>วันที่เริ่ม</span><input v-model="form.start_date" type="date" required></label><label><span>วันที่สิ้นสุด</span><input v-model="form.end_date" type="date" required></label>
+      <label><span>วันที่เริ่ม</span><CompatDateTimeInput v-model="form.start_date" mode="date" required /></label><label><span>วันที่สิ้นสุด</span><CompatDateTimeInput v-model="form.end_date" mode="date" required /></label>
       <label class="check-field"><input v-model="form.all_day" type="checkbox"> ทั้งวัน</label><div></div>
-      <label v-if="!form.all_day"><span>เวลาเริ่ม</span><input v-model="form.start_time" type="time"></label><label v-if="!form.all_day"><span>เวลาสิ้นสุด</span><input v-model="form.end_time" type="time"></label>
+      <label v-if="!form.all_day"><span>เวลาเริ่ม</span><CompatDateTimeInput v-model="form.start_time" mode="time" /></label><label v-if="!form.all_day"><span>เวลาสิ้นสุด</span><CompatDateTimeInput v-model="form.end_time" mode="time" /></label>
       <button class="primary-button span-2">เพิ่มลงปฏิทิน</button>
     </form>
   </AppShell>

@@ -2,9 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
+import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
 import type { BillingRecord, Paginated } from '../types/api'
-import { apiError, money, shortDate } from '../utils/format'
+import { apiError, money, shortDate, todayIso } from '../utils/format'
 
 const ready = ref<BillingRecord[]>([])
 const records = ref<Paginated<BillingRecord> | null>(null)
@@ -101,7 +102,7 @@ async function loadSelected() {
 async function exportBills() {
   if (!selectedExportIds.value.length) return
   try {
-    await downloadFile('/api/v1/bills/export', `Bplus_Import_${new Date().toISOString().slice(0, 10)}.xlsx`, 'post', { bill_ids: selectedExportIds.value })
+    await downloadFile('/api/v1/bills/export', `Bplus_Import_${todayIso()}.xlsx`, 'post', { bill_ids: selectedExportIds.value })
     selectedExportIds.value = []
     await load()
   } catch (cause) { error.value = apiError(cause) }
@@ -113,7 +114,7 @@ async function exportQuotationsPdf() {
     return
   }
   try {
-    await downloadFile('/api/v1/bills/export-quotations.pdf', `Quotations_${new Date().toISOString().slice(0, 10)}.pdf`, 'post', { bill_ids: selectedExportIds.value })
+    await downloadFile('/api/v1/bills/export-quotations.pdf', `Quotations_${todayIso()}.pdf`, 'post', { bill_ids: selectedExportIds.value })
   } catch (cause) { error.value = apiError(cause) }
 }
 
@@ -270,7 +271,7 @@ onMounted(() => load(1))
         <label v-for="field in editableFields" :key="field">
           <span>{{ fieldLabels[field] }}</span>
           <textarea v-if="textAreaFields.has(field)" v-model="selected[field]"></textarea>
-          <input v-else-if="dateFields.has(field)" v-model="selected[field]" type="date">
+          <CompatDateTimeInput v-else-if="dateFields.has(field)" v-model="selected[field]" mode="date" />
           <input v-else-if="numericFields.has(field)" v-model="selected[field]" type="number" min="0" step="0.01">
           <input v-else v-model="selected[field]">
         </label>

@@ -277,6 +277,17 @@ export interface SalesTaskUpdate {
 
 export type FibroscanMachineStatus = 'พร้อมใช้งาน' | 'ซ่อมบำรุง' | 'เลิกใช้งาน'
 export type FibroscanBookingStatus = 'จองแล้ว' | 'กำลังใช้งาน' | 'คืนแล้ว' | 'ยกเลิก'
+export type FibroscanApprovalStatus = 'รออนุมัติ' | 'อนุมัติแล้ว' | 'ไม่อนุมัติ'
+
+export interface FibroscanBookingChange {
+  change_id: number
+  booking_id: number
+  changed_by: string
+  action: string
+  changes: Record<string, { from: unknown; to: unknown }>
+  created_at: string
+  actor?: Pick<User, 'id' | 'username' | 'first_name' | 'last_name'> | null
+}
 
 export interface FibroscanMachine {
   machine_id: number
@@ -300,14 +311,24 @@ export interface FibroscanBooking {
   contact_name: string | null
   contact_phone: string | null
   note: string | null
+  approval_status: FibroscanApprovalStatus
+  reviewed_by_user_id: number | null
+  reviewed_by: string | null
+  reviewed_at: string | null
+  review_note: string | null
   status: FibroscanBookingStatus
   booked_by_user_id: number
   booked_by: string
   booked_by_department: string | null
+  created_at: string
+  updated_at: string
   can_edit: boolean
   can_manage_all: boolean
+  can_review: boolean
   machine: Pick<FibroscanMachine, 'machine_id' | 'machine_code' | 'machine_name' | 'status'>
   owner?: Pick<User, 'id' | 'username' | 'first_name' | 'last_name' | 'department'> | null
+  reviewer?: Pick<User, 'id' | 'username' | 'first_name' | 'last_name'> | null
+  changes?: FibroscanBookingChange[]
 }
 
 export interface Salesman {

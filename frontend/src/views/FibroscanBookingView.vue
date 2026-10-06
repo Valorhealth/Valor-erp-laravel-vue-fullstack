@@ -2,9 +2,10 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../api/client'
 import AppShell from '../components/AppShell.vue'
+import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
 import { auth } from '../stores/auth'
-import type { FibroscanBooking, FibroscanBookingStatus, FibroscanMachine, FibroscanMachineStatus } from '../types/api'
+import type { FibroscanApprovalStatus, FibroscanBooking, FibroscanBookingStatus, FibroscanMachine, FibroscanMachineStatus } from '../types/api'
 import { apiError } from '../utils/format'
 
 const bookings = ref<FibroscanBooking[]>([])
@@ -17,16 +18,24 @@ const success = ref('')
 const editingId = ref<number | null>(null)
 const selectedBooking = ref<FibroscanBooking | null>(null)
 const selectedBookingStatus = ref<FibroscanBookingStatus>('จองแล้ว')
+const selectedDate = ref(localIso(new Date()))
+const reviewNote = ref('')
 const availabilityConflicts = ref<Array<Pick<FibroscanBooking, 'booking_id' | 'machine_id' | 'hospital_name' | 'reserved_from' | 'reserved_until'>>>([])
 let availabilityTimer: ReturnType<typeof setTimeout> | null = null
 let availabilityRequest = 0
 const canManageMachines = computed(() => auth.can('system_admin'))
+const canReviewBookings = computed(() => auth.can('approve_bills') || auth.can('system_admin'))
 const purposes = ['ทดลองใช้', 'Event', 'เช่า', 'สาธิต', 'อื่นๆ'] as const
 const bookingStatuses: FibroscanBookingStatus[] = ['จองแล้ว', 'กำลังใช้งาน', 'คืนแล้ว', 'ยกเลิก']
+const approvalStatuses: FibroscanApprovalStatus[] = ['รออนุมัติ', 'อนุมัติแล้ว', 'ไม่อนุมัติ']
 const machineStatuses: FibroscanMachineStatus[] = ['พร้อมใช้งาน', 'ซ่อมบำรุง', 'เลิกใช้งาน']
 
 function canChangeBooking(booking: FibroscanBooking): boolean {
   return booking.can_edit && (booking.can_manage_all || !['คืนแล้ว', 'ยกเลิก'].includes(booking.status))
+}
+
+function canChangeOperationalStatus(booking: FibroscanBooking): boolean {
+  return booking.can_manage_all && booking.approval_status === 'อนุมัติแล้ว'
 }
 
 function localDateTime(date: Date): string {
@@ -44,7 +53,7 @@ function monthBounds(): { from: string; to: string } {
 
 const bounds = monthBounds()
 const calendarMonth = ref(bounds.from.slice(0, 7))
-const filters = reactive({ date_from: bounds.from, date_to: bounds.to, machine_id: '', status: '' })
+const filters = reactive({ date_from: '', date_to: '', machine_id: '', status: '', approval_status: '' })
 const bookingForm = reactive({
   machine_id: '', hospital_name: '', purpose: 'เช่า' as FibroscanBooking['purpose'],
   reserved_from: localDateTime(new Date()),
@@ -58,6 +67,29 @@ const selectedUntil = computed(() => new Date(bookingForm.reserved_until).getTim
 const machineAvailability = computed(() => machines.value.map((machine) => {
   const conflict = availabilityConflicts.value.find((booking) => booking.machine_id === machine.machine_id)
   return { machine, conflict, available: machine.status === 'พร้อมใช้งาน' && !conflict }
+}))
+
+const approvedCalendarBookings = computed(() => calendarBookings.value.filter((booking) =>
+  booking.approval_status === 'อนุมัติแล้ว' && booking.status !== 'ยกเลิก',
+))
+
+const selectedDayBookings = computed(() => {
+  const start = new Date(`${selectedDate.value}T00:00:00`).getTime()
+  const end = new Date(`${selectedDate.value}T00:00:00`)
+  end.setDate(end.getDate() + 1)
+  return approvedCalendarBookings.value.filter((booking) =>
+    new Date(booking.reserved_from).getTime() < end.getTime()
+    && new Date(booking.reserved_until).getTime() > start,
+  )
+})
+
+const selectedDayMachines = computed(() => machines.value.map((machine) => {
+  const booking = selectedDayBookings.value.find(item => item.machine_id === machine.machine_id)
+  return {
+    machine,
+    booking,
+    available: machine.status === 'พร้อมใช้งาน' && !booking,
+  }
 }))
 
 function localIso(date: Date): string {
@@ -83,7 +115,7 @@ const calendarDays = computed(() => {
     const dayStart = new Date(`${iso}T00:00:00`).getTime()
     const dayEnd = new Date(`${iso}T00:00:00`)
     dayEnd.setDate(dayEnd.getDate() + 1)
-    const dayBookings = calendarBookings.value.filter((booking) =>
+    const dayBookings = approvedCalendarBookings.value.filter((booking) =>
       new Date(booking.reserved_from).getTime() < dayEnd.getTime()
       && new Date(booking.reserved_until).getTime() > dayStart,
     )
@@ -105,7 +137,7 @@ const calendarWeeks = computed(() => Array.from({ length: 6 }, (_, weekIndex) =>
   weekEndDate.setDate(weekEndDate.getDate() + 1)
   const weekEnd = weekEndDate.getTime()
   const tracks: number[] = []
-  const segments = calendarBookings.value
+  const segments = approvedCalendarBookings.value
     .map((booking) => {
       const from = new Date(booking.reserved_from).getTime()
       const until = new Date(booking.reserved_until).getTime()
@@ -193,6 +225,11 @@ async function load() {
   }
 }
 
+function clearRequestFilters() {
+  Object.assign(filters, { date_from: '', date_to: '', machine_id: '', status: '', approval_status: '' })
+  void load()
+}
+
 async function loadCalendar() {
   const { start, end } = calendarRange(calendarMonth.value)
   try {
@@ -225,7 +262,14 @@ function goCurrentMonth() {
 
 function openBooking(booking: FibroscanBooking) {
   selectedBooking.value = booking
+  selectedDate.value = localIso(new Date(booking.reserved_from))
   selectedBookingStatus.value = booking.status
+  reviewNote.value = booking.review_note || ''
+}
+
+function selectCalendarDay(date: string) {
+  selectedDate.value = date
+  selectedBooking.value = null
 }
 
 async function checkAvailability() {
@@ -266,7 +310,7 @@ async function saveBooking() {
     }
     if (editingId.value) await api.put(`/api/v1/fibroscan-bookings/${editingId.value}`, payload)
     else await api.post('/api/v1/fibroscan-bookings', payload)
-    success.value = editingId.value ? 'แก้ไขรายการจองแล้ว' : 'จองเครื่องเรียบร้อยแล้ว Sale ทุกคนสามารถเห็นรายการนี้ได้'
+    success.value = editingId.value ? 'บันทึกการแก้ไขแล้ว ผู้ขอสามารถตรวจสอบประวัติได้' : 'ส่งคำขอจองแล้ว กรุณารอ Admin หรือ Approver พิจารณา'
     resetBookingForm()
     await Promise.all([load(), loadCalendar()])
   } catch (cause) {
@@ -299,6 +343,43 @@ async function changeBookingStatus(booking: FibroscanBooking, status: FibroscanB
   } catch (cause) { error.value = apiError(cause, 'เปลี่ยนสถานะไม่สำเร็จ') }
 }
 
+async function reviewBooking(booking: FibroscanBooking, approvalStatus: Exclude<FibroscanApprovalStatus, 'รออนุมัติ'>) {
+  const message = approvalStatus === 'อนุมัติแล้ว'
+    ? `อนุมัติคำขอ ${booking.machine.machine_code} ของ ${booking.owner?.username || booking.booked_by} หรือไม่?`
+    : `ไม่อนุมัติคำขอ ${booking.machine.machine_code} ของ ${booking.owner?.username || booking.booked_by} หรือไม่?`
+  if (!confirm(message)) return
+  error.value = ''; success.value = ''
+  try {
+    await api.patch(`/api/v1/fibroscan-bookings/${booking.booking_id}/approval`, {
+      approval_status: approvalStatus,
+      review_note: reviewNote.value || null,
+    })
+    success.value = approvalStatus === 'อนุมัติแล้ว'
+      ? 'อนุมัติคำขอแล้ว รายการถูกเพิ่มลงปฏิทินกลาง'
+      : 'บันทึกผลไม่อนุมัติแล้ว Sale สามารถดูเหตุผลและประวัติได้'
+    await Promise.all([load(), loadCalendar()])
+    const updated = calendarBookings.value.find(item => item.booking_id === booking.booking_id)
+      || bookings.value.find(item => item.booking_id === booking.booking_id)
+    selectedBooking.value = updated || null
+  } catch (cause) {
+    error.value = apiError(cause, 'พิจารณาคำขอไม่สำเร็จ')
+  }
+}
+
+const historyFieldLabels: Record<string, string> = {
+  machine_id: 'เครื่อง', hospital_name: 'โรงพยาบาล', purpose: 'วัตถุประสงค์',
+  reserved_from: 'วันเวลาเริ่ม', reserved_until: 'วันเวลาสิ้นสุด', contact_name: 'ผู้ประสานงาน',
+  contact_phone: 'เบอร์โทร', note: 'หมายเหตุ', approval_status: 'ผลอนุมัติ',
+  review_note: 'หมายเหตุการพิจารณา', status: 'สถานะใช้งาน',
+}
+
+function historyValue(field: string, value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-'
+  if (field === 'machine_id') return machines.value.find(machine => machine.machine_id === Number(value))?.machine_code || String(value)
+  if (['reserved_from', 'reserved_until'].includes(field)) return dateTime(String(value))
+  return String(value)
+}
+
 async function addMachine() {
   error.value = ''; success.value = ''
   try {
@@ -320,13 +401,17 @@ async function changeMachineStatus(machine: FibroscanMachine, status: FibroscanM
 }
 
 watch([() => bookingForm.reserved_from, () => bookingForm.reserved_until, editingId], scheduleAvailabilityCheck, { immediate: true })
-watch(selectedBooking, (booking) => { if (booking) selectedBookingStatus.value = booking.status })
+watch(selectedBooking, (booking) => {
+  if (!booking) return
+  selectedBookingStatus.value = booking.status
+  reviewNote.value = booking.review_note || ''
+})
 onMounted(() => { load(); loadCalendar() })
 onBeforeUnmount(() => { if (availabilityTimer) clearTimeout(availabilityTimer) })
 </script>
 
 <template>
-  <AppShell title="ตารางจองเครื่อง FibroScan" subtitle="Sale ทุกคนเห็นคิวร่วมกัน จองเครื่องที่ว่างได้ทันทีโดยไม่ต้องส่งคำขออนุมัติ">
+  <AppShell title="ตารางจองเครื่อง FibroScan" subtitle="Sale ตรวจสอบเครื่องว่างและส่งคำขอ จากนั้น Admin หรือ Approver ตรวจสอบ แก้ไข และอนุมัติก่อนลงปฏิทินกลาง">
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="success" class="success-message">{{ success }}</p>
 
@@ -345,7 +430,16 @@ onBeforeUnmount(() => { if (availabilityTimer) clearTimeout(availabilityTimer) }
         <div class="equipment-calendar-weeks">
           <section v-for="(week, weekIndex) in calendarWeeks" :key="weekIndex" class="equipment-calendar-week" :style="{ minHeight: `${Math.max(140, 42 + week.trackCount * 34)}px` }">
             <div class="equipment-week-days">
-              <article v-for="day in week.days" :key="day.iso" class="equipment-calendar-day" :class="{ muted: !day.current, today: day.today }">
+              <article
+                v-for="day in week.days"
+                :key="day.iso"
+                class="equipment-calendar-day"
+                :class="{ muted: !day.current, today: day.today, selected: selectedDate === day.iso }"
+                role="button"
+                tabindex="0"
+                @click="selectCalendarDay(day.iso)"
+                @keydown.enter="selectCalendarDay(day.iso)"
+              >
                 <header><b>{{ day.day }}</b><small v-if="day.machineCount">{{ day.machineCount }} เครื่อง</small></header>
               </article>
             </div>
@@ -372,8 +466,17 @@ onBeforeUnmount(() => { if (availabilityTimer) clearTimeout(availabilityTimer) }
       </section>
 
       <aside class="content-card equipment-booking-detail">
+        <div class="section-heading"><div><p class="eyebrow">Daily availability</p><h2>{{ new Intl.DateTimeFormat('th-TH', { dateStyle: 'long' }).format(new Date(`${selectedDate}T00:00:00`)) }}</h2></div><small>{{ selectedDayBookings.length }} รายการจอง</small></div>
+        <div class="equipment-day-machines">
+          <button v-for="item in selectedDayMachines" :key="item.machine.machine_id" type="button" :class="{ available: item.available, occupied: !item.available }" :disabled="!item.booking" @click="item.booking && openBooking(item.booking)">
+            <span><b>{{ item.machine.machine_code }}</b><small>{{ item.machine.machine_name }}</small></span>
+            <strong>{{ item.available ? 'ว่าง' : item.machine.status !== 'พร้อมใช้งาน' ? item.machine.status : 'มีการจอง' }}</strong>
+            <small v-if="item.booking">{{ item.booking.hospital_name }}<br>{{ dateTime(item.booking.reserved_from) }} – {{ dateTime(item.booking.reserved_until) }}</small>
+          </button>
+        </div>
+
         <template v-if="selectedBooking">
-          <div class="section-heading"><div><p class="eyebrow eyebrow--red">Booking detail</p><h2>{{ selectedBooking.machine.machine_code }}</h2></div><StatusPill :status="selectedBooking.status" /></div>
+          <div class="section-heading equipment-selected-heading"><div><p class="eyebrow eyebrow--red">Request / booking detail</p><h2>{{ selectedBooking.machine.machine_code }}</h2></div><span class="approval-pill" :class="`approval-${selectedBooking.approval_status}`">{{ selectedBooking.approval_status }}</span></div>
           <dl class="equipment-booking-detail__grid">
             <div><dt>เครื่อง</dt><dd>{{ selectedBooking.machine.machine_name }}</dd></div>
             <div><dt>โรงพยาบาล</dt><dd>{{ selectedBooking.hospital_name }}</dd></div>
@@ -382,28 +485,42 @@ onBeforeUnmount(() => { if (availabilityTimer) clearTimeout(availabilityTimer) }
             <div><dt>Sale ผู้จอง</dt><dd>{{ selectedBooking.owner?.username || selectedBooking.booked_by }}<br><small>{{ selectedBooking.owner?.department || selectedBooking.booked_by_department || '-' }}</small></dd></div>
             <div><dt>ผู้ประสานงานลูกค้า</dt><dd>{{ selectedBooking.contact_name || '-' }}<br><small>{{ selectedBooking.contact_phone || '-' }}</small></dd></div>
             <div class="equipment-booking-detail__wide"><dt>รายละเอียดงาน/หมายเหตุ</dt><dd>{{ selectedBooking.note || '-' }}</dd></div>
+            <div class="equipment-booking-detail__wide"><dt>ผลการพิจารณา</dt><dd>{{ selectedBooking.review_note || '-' }}<br><small v-if="selectedBooking.reviewed_by">โดย {{ selectedBooking.reviewed_by }} · {{ selectedBooking.reviewed_at ? dateTime(selectedBooking.reviewed_at) : '-' }}</small></dd></div>
           </dl>
-          <div v-if="canChangeBooking(selectedBooking)" class="equipment-detail-actions">
+          <div v-if="canReviewBookings && selectedBooking.approval_status === 'รออนุมัติ'" class="equipment-review-actions">
+            <label><span>หมายเหตุถึง Sale</span><textarea v-model.trim="reviewNote" rows="3" maxlength="5000" placeholder="ระบุเหตุผลหรือรายละเอียดที่แก้ไข (ถ้ามี)"></textarea></label>
+            <div><button type="button" class="primary-button" @click="reviewBooking(selectedBooking, 'อนุมัติแล้ว')">อนุมัติคำขอ</button><button type="button" class="danger-button" @click="reviewBooking(selectedBooking, 'ไม่อนุมัติ')">ไม่อนุมัติ</button></div>
+          </div>
+          <div v-if="canChangeOperationalStatus(selectedBooking)" class="equipment-detail-actions">
             <label><span>อัปเดตสถานะงาน</span><select v-model="selectedBookingStatus"><option v-for="status in bookingStatuses" :key="status">{{ status }}</option></select></label>
             <button type="button" class="primary-button" :disabled="selectedBookingStatus === selectedBooking.status" @click="changeBookingStatus(selectedBooking, selectedBookingStatus)">บันทึกสถานะ</button>
-            <button type="button" class="secondary-button" @click="editBooking(selectedBooking)">แก้ไขรายละเอียดงาน</button>
           </div>
-          <p v-else-if="selectedBooking.can_edit" class="muted">รายการนี้สิ้นสุดแล้วและเก็บไว้เป็นประวัติ</p>
-          <p v-else class="muted">คุณสามารถดูรายละเอียดได้ แต่แก้ไขได้เฉพาะผู้จองหรือผู้ดูแลเท่านั้น</p>
+          <button v-if="canChangeBooking(selectedBooking)" type="button" class="secondary-button equipment-edit-button" @click="editBooking(selectedBooking)">{{ selectedBooking.can_manage_all ? 'แก้ไขข้อมูลคำขอ/การจอง' : 'แก้ไขคำขอของฉัน' }}</button>
+
+          <div class="equipment-change-history">
+            <h3>ประวัติการดำเนินการ</h3>
+            <article v-for="change in selectedBooking.changes || []" :key="change.change_id">
+              <header><strong>{{ change.action }}</strong><small>{{ change.changed_by }} · {{ dateTime(change.created_at) }}</small></header>
+              <ul v-if="Object.keys(change.changes || {}).length">
+                <li v-for="(values, field) in change.changes" :key="field"><b>{{ historyFieldLabels[field] || field }}:</b> {{ historyValue(field, values.from) }} → {{ historyValue(field, values.to) }}</li>
+              </ul>
+            </article>
+            <p v-if="!selectedBooking.changes?.length" class="muted">ยังไม่มีประวัติการเปลี่ยนแปลง</p>
+          </div>
         </template>
-        <div v-else class="equipment-detail-empty"><span>🩺</span><strong>เลือกรายการจากปฏิทิน</strong><p>กดที่เครื่องในแต่ละวันเพื่อดูผู้จอง ลูกค้า ลักษณะงาน และสถานะ</p></div>
+        <div v-else class="equipment-detail-empty"><span>🩺</span><strong>เลือกวันที่แล้ว</strong><p>เครื่องว่างและเครื่องที่ถูกจองในวันดังกล่าวแสดงอยู่ด้านบน กดรายการเครื่องที่จองเพื่อดูรายละเอียด</p></div>
       </aside>
     </div>
 
     <form class="content-card form-grid" @submit.prevent="saveBooking">
       <div class="span-2 section-heading">
-        <div><p class="eyebrow eyebrow--red">Shared booking</p><h2>{{ editingId ? 'แก้ไขรายการจอง' : 'เพิ่มรายการจองเครื่อง' }}</h2></div>
+        <div><p class="eyebrow eyebrow--red">Booking request</p><h2>{{ editingId ? 'แก้ไขคำขอ/ข้อมูลการจอง' : 'ขอจองเครื่อง' }}</h2><small class="muted">การส่งคำขอยังไม่ถือว่าได้จอง จนกว่า Admin หรือ Approver จะอนุมัติ</small></div>
         <button v-if="editingId" type="button" class="secondary-button" @click="resetBookingForm">ยกเลิกการแก้ไข</button>
       </div>
       <label><span>เครื่อง *</span><select v-model="bookingForm.machine_id" required><option value="" disabled>เลือกเครื่อง</option><option v-for="machine in machines.filter((item) => item.status === 'พร้อมใช้งาน' || item.machine_id === Number(bookingForm.machine_id))" :key="machine.machine_id" :value="String(machine.machine_id)">{{ machine.machine_code }} · {{ machine.machine_name }}</option></select></label>
       <label><span>โรงพยาบาล *</span><input v-model.trim="bookingForm.hospital_name" required maxlength="500" placeholder="ชื่อโรงพยาบาล"></label>
-      <label><span>เริ่มใช้/นำเครื่องออก *</span><input v-model="bookingForm.reserved_from" type="datetime-local" required></label>
-      <label><span>สิ้นสุด/เครื่องกลับถึงบริษัท *</span><input v-model="bookingForm.reserved_until" type="datetime-local" required></label>
+      <label><span>เริ่มใช้/นำเครื่องออก *</span><CompatDateTimeInput v-model="bookingForm.reserved_from" mode="datetime-local" required /></label>
+      <label><span>สิ้นสุด/เครื่องกลับถึงบริษัท *</span><CompatDateTimeInput v-model="bookingForm.reserved_until" mode="datetime-local" required /></label>
       <label><span>วัตถุประสงค์ *</span><select v-model="bookingForm.purpose"><option v-for="purpose in purposes" :key="purpose">{{ purpose }}</option></select></label>
       <label><span>ผู้ประสานงานโรงพยาบาล</span><input v-model.trim="bookingForm.contact_name" maxlength="255"></label>
       <label><span>เบอร์โทรศัพท์</span><input v-model.trim="bookingForm.contact_phone" maxlength="100"></label>
@@ -414,40 +531,12 @@ onBeforeUnmount(() => { if (availabilityTimer) clearTimeout(availabilityTimer) }
         <div class="equipment-availability__grid">
           <article v-for="item in machineAvailability" :key="item.machine.machine_id" :class="{ 'is-unavailable': !item.available }">
             <b>{{ item.machine.machine_code }}</b><span>{{ item.machine.machine_name }}</span>
-            <small>{{ item.available ? 'ว่าง — สามารถจองได้' : item.machine.status !== 'พร้อมใช้งาน' ? item.machine.status : `ไม่ว่าง · ${item.conflict?.hospital_name}` }}</small>
+            <small>{{ item.available ? 'ว่าง — สามารถส่งคำขอได้' : item.machine.status !== 'พร้อมใช้งาน' ? item.machine.status : `มีผู้จองแล้ว · ${item.conflict?.hospital_name}` }}</small>
           </article>
         </div>
       </div>
-      <button class="primary-button span-2" :disabled="saving || !machines.length">{{ saving ? 'กำลังบันทึก…' : editingId ? 'บันทึกการแก้ไข' : 'จองเครื่อง' }}</button>
+      <button class="primary-button span-2" :disabled="saving || !machines.length">{{ saving ? 'กำลังบันทึก…' : editingId ? 'บันทึกการแก้ไข' : 'ส่งคำขอจองเครื่อง' }}</button>
     </form>
-
-    <section class="content-card section-gap">
-      <div class="section-heading"><div><p class="eyebrow">Booking schedule</p><h2>ตารางการใช้งานเครื่อง</h2></div><button class="secondary-button" :disabled="loading" @click="load">{{ loading ? 'กำลังโหลด…' : 'โหลดข้อมูลใหม่' }}</button></div>
-      <div class="equipment-filters">
-        <label><span>ตั้งแต่</span><input v-model="filters.date_from" type="date"></label>
-        <label><span>ถึง</span><input v-model="filters.date_to" type="date"></label>
-        <label><span>เครื่อง</span><select v-model="filters.machine_id"><option value="">ทุกเครื่อง</option><option v-for="machine in machines" :key="machine.machine_id" :value="String(machine.machine_id)">{{ machine.machine_code }}</option></select></label>
-        <label><span>สถานะ</span><select v-model="filters.status"><option value="">ทุกสถานะ</option><option v-for="status in bookingStatuses" :key="status">{{ status }}</option></select></label>
-        <button class="secondary-button" @click="load">ค้นหา</button>
-      </div>
-      <div class="table-wrap equipment-booking-table">
-        <table><thead><tr><th>เครื่อง</th><th>ช่วงเวลา</th><th>โรงพยาบาล/วัตถุประสงค์</th><th>Sale ผู้จอง</th><th>ผู้ประสานงาน</th><th>หมายเหตุ</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
-          <tbody>
-            <tr v-for="booking in bookings" :key="booking.booking_id" :class="{ 'booking-row--canceled': booking.status === 'ยกเลิก' }">
-              <td><strong>{{ booking.machine.machine_code }}</strong><small>{{ booking.machine.machine_name }}</small></td>
-              <td>{{ dateTime(booking.reserved_from) }}<small>ถึง {{ dateTime(booking.reserved_until) }}</small></td>
-              <td><strong>{{ booking.hospital_name }}</strong><small>{{ booking.purpose }}</small></td>
-              <td>{{ booking.owner?.username || booking.booked_by }}<small>{{ booking.owner?.department || booking.booked_by_department || '-' }}</small></td>
-              <td>{{ booking.contact_name || '-' }}<small>{{ booking.contact_phone || '-' }}</small></td>
-              <td class="equipment-note">{{ booking.note || '-' }}</td>
-              <td><StatusPill :status="booking.status" /></td>
-              <td><div v-if="canChangeBooking(booking)" class="booking-actions"><button class="secondary-button" @click="editBooking(booking)">แก้ไข</button><select :value="booking.status" @change="changeBookingStatus(booking, ($event.target as HTMLSelectElement).value as FibroscanBookingStatus)"><option v-for="status in bookingStatuses" :key="status">{{ status }}</option></select></div><span v-else class="muted">ดูอย่างเดียว</span></td>
-            </tr>
-            <tr v-if="!bookings.length"><td colspan="8" class="empty-state">{{ loading ? 'กำลังโหลดข้อมูล…' : 'ไม่พบรายการจองในช่วงที่เลือก' }}</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
 
     <section v-if="canManageMachines" class="content-card section-gap">
       <div class="section-heading"><div><p class="eyebrow eyebrow--red">Equipment registry</p><h2>ทะเบียนเครื่อง FibroScan</h2></div><small class="muted">เครื่องที่ขายออกให้เปลี่ยนเป็น “เลิกใช้งาน” เพื่อเก็บประวัติเดิม</small></div>
@@ -461,6 +550,40 @@ onBeforeUnmount(() => { if (availabilityTimer) clearTimeout(availabilityTimer) }
       <div class="equipment-machine-list">
         <article v-for="machine in machines" :key="machine.machine_id"><div><strong>{{ machine.machine_code }} · {{ machine.machine_name }}</strong><small>Serial: {{ machine.serial_number || '-' }} · {{ machine.note || 'ไม่มีหมายเหตุ' }}</small></div><select :value="machine.status" @change="changeMachineStatus(machine, ($event.target as HTMLSelectElement).value as FibroscanMachineStatus)"><option v-for="status in machineStatuses" :key="status">{{ status }}</option></select></article>
         <p v-if="!machines.length" class="empty-state">ยังไม่มีเครื่องในทะเบียน กรุณาเพิ่มเครื่องก่อนเริ่มจอง</p>
+      </div>
+    </section>
+
+    <section class="content-card section-gap equipment-request-queue">
+      <div class="section-heading">
+        <div><p class="eyebrow">Booking request queue</p><h2>คำขอและตารางการใช้งานเครื่อง</h2><small class="muted">คำขอรออนุมัติจะแสดงก่อน และเรียงจากเวลาที่ส่งคำขอล่าสุด ไม่ว่ากำหนดใช้งานจะล่วงหน้าไปกี่เดือน</small></div>
+        <button class="secondary-button" :disabled="loading" @click="load">{{ loading ? 'กำลังโหลด…' : 'โหลดข้อมูลใหม่' }}</button>
+      </div>
+      <div class="equipment-filters">
+        <label><span>วันใช้งานตั้งแต่</span><CompatDateTimeInput v-model="filters.date_from" mode="date" /></label>
+        <label><span>วันใช้งานถึง</span><CompatDateTimeInput v-model="filters.date_to" mode="date" /></label>
+        <label><span>เครื่อง</span><select v-model="filters.machine_id"><option value="">ทุกเครื่อง</option><option v-for="machine in machines" :key="machine.machine_id" :value="String(machine.machine_id)">{{ machine.machine_code }}</option></select></label>
+        <label><span>สถานะใช้งาน</span><select v-model="filters.status"><option value="">ทุกสถานะ</option><option v-for="status in bookingStatuses" :key="status">{{ status }}</option></select></label>
+        <label><span>ผลอนุมัติ</span><select v-model="filters.approval_status"><option value="">ทุกสถานะ</option><option v-for="status in approvalStatuses" :key="status">{{ status }}</option></select></label>
+        <div class="equipment-filter-actions"><button class="secondary-button" @click="load">ค้นหา</button><button class="secondary-button" @click="clearRequestFilters">ล้างตัวกรอง</button></div>
+      </div>
+      <div class="table-wrap equipment-booking-table">
+        <table><thead><tr><th>วันที่ส่งคำขอ</th><th>เครื่อง</th><th>ช่วงเวลาใช้งาน</th><th>โรงพยาบาล/วัตถุประสงค์</th><th>Sale ผู้ขอ</th><th>ผู้ประสานงาน</th><th>หมายเหตุ</th><th>ผลอนุมัติ</th><th>สถานะใช้งาน</th><th>จัดการ</th></tr></thead>
+          <tbody>
+            <tr v-for="booking in bookings" :key="booking.booking_id" :class="{ 'booking-row--pending': booking.approval_status === 'รออนุมัติ', 'booking-row--canceled': booking.status === 'ยกเลิก' }">
+              <td><strong>{{ dateTime(booking.created_at) }}</strong><small>คำขอ #{{ booking.booking_id }}</small></td>
+              <td><strong>{{ booking.machine.machine_code }}</strong><small>{{ booking.machine.machine_name }}</small></td>
+              <td>{{ dateTime(booking.reserved_from) }}<small>ถึง {{ dateTime(booking.reserved_until) }}</small></td>
+              <td><strong>{{ booking.hospital_name }}</strong><small>{{ booking.purpose }}</small></td>
+              <td>{{ booking.owner?.username || booking.booked_by }}<small>{{ booking.owner?.department || booking.booked_by_department || '-' }}</small></td>
+              <td>{{ booking.contact_name || '-' }}<small>{{ booking.contact_phone || '-' }}</small></td>
+              <td class="equipment-note">{{ booking.note || '-' }}</td>
+              <td><button type="button" class="approval-pill approval-pill--button" :class="`approval-${booking.approval_status}`" @click="openBooking(booking)">{{ booking.approval_status }}</button><small v-if="booking.review_note">{{ booking.review_note }}</small></td>
+              <td><StatusPill v-if="booking.approval_status === 'อนุมัติแล้ว'" :status="booking.status" /><span v-else class="muted">ยังไม่ลงคิว</span></td>
+              <td><div class="booking-actions"><button class="secondary-button" @click="openBooking(booking)">ดูรายละเอียด</button><button v-if="canChangeBooking(booking)" class="secondary-button" @click="editBooking(booking)">แก้ไข</button><template v-if="canReviewBookings && booking.approval_status === 'รออนุมัติ'"><button class="primary-button" @click="openBooking(booking); reviewBooking(booking, 'อนุมัติแล้ว')">อนุมัติ</button><button class="danger-button" @click="openBooking(booking); reviewBooking(booking, 'ไม่อนุมัติ')">ไม่อนุมัติ</button></template><select v-if="canChangeOperationalStatus(booking)" :value="booking.status" @change="changeBookingStatus(booking, ($event.target as HTMLSelectElement).value as FibroscanBookingStatus)"><option v-for="status in bookingStatuses" :key="status">{{ status }}</option></select></div></td>
+            </tr>
+            <tr v-if="!bookings.length"><td colspan="10" class="empty-state">{{ loading ? 'กำลังโหลดข้อมูล…' : 'ไม่พบคำขอหรือรายการจองตามตัวกรอง' }}</td></tr>
+          </tbody>
+        </table>
       </div>
     </section>
   </AppShell>
