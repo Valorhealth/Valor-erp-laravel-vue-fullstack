@@ -1,12 +1,11 @@
 import axios from 'axios'
+import { i18n } from '../stores/i18n'
 
-export const money = (value: string | number | null | undefined) => new Intl.NumberFormat('th-TH', {
+export const money = (value: string | number | null | undefined) => i18n.formatNumber(value, {
   style: 'currency', currency: 'THB', maximumFractionDigits: 2,
-}).format(Number(value || 0))
+})
 
-export const shortDate = (value: string | null | undefined) => value
-  ? new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium' }).format(new Date(value))
-  : '-'
+export const shortDate = (value: string | null | undefined) => i18n.formatDate(value)
 
 export function apiError(error: unknown, fallback = 'ดำเนินการไม่สำเร็จ'): string {
   if (!axios.isAxiosError(error)) return fallback

@@ -3,8 +3,8 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class BillingRecord extends Model
 {
@@ -39,6 +39,7 @@ class BillingRecord extends Model
             'credit_outstanding' => 'decimal:2',
             'credit_remain' => 'decimal:2',
             'admin_discount_final' => 'decimal:2',
+            'submission_document_requirements' => 'array',
         ];
     }
 
@@ -57,11 +58,26 @@ class BillingRecord extends Model
         return $this->belongsTo(Quotation::class, 'ref_qt_id', 'qt_id');
     }
 
+    public function quotationDocumentVersion(): BelongsTo
+    {
+        return $this->belongsTo(QuotationDocumentVersion::class, 'quotation_document_version_id', 'document_version_id');
+    }
+
+    public function powerOfAttorneyVersion(): HasMany
+    {
+        return $this->hasMany(QuotationPowerOfAttorneyVersion::class, 'bill_id', 'bill_id');
+    }
+
     public function documents(): HasMany
     {
         return $this->hasMany(BillingDocument::class, 'bill_id', 'bill_id')
             ->where('is_current', true)
             ->select(['doc_id', 'bill_id', 'document_type', 'file_name', 'mime_type', 'version_no', 'sha256', 'uploaded_by', 'uploaded_at']);
+    }
+
+    public function documentPreparationItems(): HasMany
+    {
+        return $this->hasMany(BillingDocumentPreparationItem::class, 'bill_id', 'bill_id');
     }
 
     public function signatures(): HasMany

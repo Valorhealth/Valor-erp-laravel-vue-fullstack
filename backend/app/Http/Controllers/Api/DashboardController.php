@@ -61,8 +61,8 @@ class DashboardController extends Controller
             ->when($statuses !== [], fn ($query) => $query->whereIn('status', $statuses))
             ->when($departments !== [], fn ($query) => $query->whereIn('creator_user_id', $departmentUserIds))
             ->when(($data['scope'] ?? 'all') === 'successful', fn ($query) => $query->whereIn('status', DashboardService::SUCCESS_STATUSES))
-            ->when($data['date_from'] ?? null, fn ($query, $date) => $query->whereDate('bill_date', '>=', $date))
-            ->when($data['date_to'] ?? null, fn ($query, $date) => $query->whereDate('bill_date', '<=', $date))
+            ->when($data['date_from'] ?? null, fn ($query, $date) => $query->where('bill_date', '>=', $date))
+            ->when($data['date_to'] ?? null, fn ($query, $date) => $query->where('bill_date', '<=', $date))
             ->orderBy('bill_date')
             ->orderBy('bill_id')
             ->get();

@@ -49,7 +49,7 @@ class BudgetAnalysisController extends Controller
     public function analyze(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'file' => ['required', 'file', 'mimes:xlsx', 'max:102400'],
+            'file' => ['required', 'file', 'mimes:xlsx', 'max:20480'],
             'product_desc' => ['required', 'string', 'max:10000'],
             'score_threshold' => ['required', 'numeric', 'between:0,0.9'],
             'max_ai_rows' => ['required', 'integer', 'between:1,100'],
@@ -59,7 +59,7 @@ class BudgetAnalysisController extends Controller
         ], [
             'file.uploaded' => 'อัปโหลดไฟล์ Excel ไม่สำเร็จ กรุณาเลือกไฟล์อีกครั้ง',
             'file.mimes' => 'ไฟล์ที่เลือกต้องเป็น Excel นามสกุล .xlsx',
-            'file.max' => 'ไฟล์ Excel ต้องมีขนาดไม่เกิน 100 MB',
+            'file.max' => 'ไฟล์ Excel ต้องมีขนาดไม่เกิน 20 MB เพื่อป้องกันหน่วยความจำเซิร์ฟเวอร์ไม่เพียงพอ',
         ]);
 
         $userId = $request->user()->getAuthIdentifier();

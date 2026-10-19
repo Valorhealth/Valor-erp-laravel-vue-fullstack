@@ -7,13 +7,47 @@ export interface MenuItem {
   icon: string
 }
 
+export interface UserPreferences {
+  language: 'th' | 'en'
+  document_language: 'th' | 'en'
+  date_format: 'DD/MM/YYYY' | 'MM/DD/YYYY' | 'YYYY-MM-DD'
+  calendar_system: 'buddhist' | 'gregorian'
+  timezone: 'Asia/Bangkok' | 'UTC'
+  time_format: '24h' | '12h'
+  number_format: 'en-US' | 'th-TH-u-nu-thai' | 'de-DE'
+  default_path: string
+  table_density: 'comfortable' | 'compact'
+  rows_per_page: 25 | 50 | 100
+  sidebar_collapsed: boolean
+  font_scale: 'small' | 'normal' | 'large'
+  high_contrast: boolean
+  reduce_motion: boolean
+  in_app_notifications: boolean
+  email_notifications: boolean
+  notification_categories: {
+    billing: boolean
+    credit: boolean
+    booking: boolean
+    tasks: boolean
+    call_sale: boolean
+  }
+}
+
 export interface User {
   id: number
   username: string
   first_name: string | null
   last_name: string | null
   email: string | null
+  phone: string | null
+  job_title: string | null
+  representative_address: string | null
+  national_id: string | null
+  national_id_issued_at: string | null
+  national_id_expires_at: string | null
   department: string | null
+  salesman_id?: number | null
+  salesman?: Salesman | null
   role: string | null
   quotation_signing_authorized: boolean
   permission_overrides?: Record<string, boolean>
@@ -21,6 +55,7 @@ export interface User {
   role_group: RoleGroup
   abilities: string[]
   menu: MenuItem[]
+  preferences?: Partial<UserPreferences>
 }
 
 export interface BillItem {
@@ -54,6 +89,7 @@ export interface BillingRecord {
   creator_user_id?: number | null
   created_at: string | null
   workflow_type?: string | null
+  submission_document_requirements?: string[] | null
   items?: BillItem[]
   address_note?: string | null
   province?: string | null
@@ -80,6 +116,24 @@ export interface BillingRecord {
   requested_credit_term?: number | null
   reject_reason?: string | null
   ref_qt_id?: number | null
+  quotation_document_version_id?: number | null
+  quotation_document_version?: {
+    document_version_id: number
+    template_id: string
+    revision_no: number
+    filename: string
+    pdf_sha256: string
+    confirmed_by: string
+    created_at: string
+    power_of_attorney?: {
+      authorization_version_id: number
+      authorization_no: string
+      filename: string
+      draft_pdf_sha256?: string
+      created_at: string
+    } | null
+  } | null
+  quotation?: Pick<Quotation, 'qt_id' | 'qt_no'> | null
   tax_info_filled?: boolean | null
   tax_cust_name?: string | null
   tax_cust_address?: string | null
@@ -187,6 +241,15 @@ export interface Quotation {
     customer_acceptance_expires_at?: string | null
     customer_acceptance_used_at?: string | null
     documents?: BillingDocument[]
+    quotation_document_version?: {
+      document_version_id: number
+      power_of_attorney?: {
+        authorization_version_id: number
+        authorization_no: string
+        filename: string
+        created_at: string
+      } | null
+    } | null
   } | null
 }
 
@@ -538,4 +601,12 @@ export interface Product {
   sku_code: string
   sku_name: string
   sku_e_name: string | null
+  units?: ProductUnit[]
+}
+
+export interface ProductUnit {
+  unit_id: number
+  unit_name: string
+  products_count?: number
+  pivot?: { is_default: boolean }
 }

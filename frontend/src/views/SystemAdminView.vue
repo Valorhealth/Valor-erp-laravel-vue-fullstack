@@ -1,17 +1,23 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
+import QuotationDownloadDialog from '../components/QuotationDownloadDialog.vue'
 import type { BillingRecord, Paginated } from '../types/api'
 import { apiError, money, shortDate, todayIso } from '../utils/format'
+import { preferredRowsPerPage } from '../utils/preferences'
 
 const ready = ref<BillingRecord[]>([])
+const router = useRouter()
+type QuotationHelpRequest = { help_request_id: number; qt_id: number; template_id: string; document_mode: string; request_note: string; status: string; requested_by: string; assigned_to: string | null; requested_at: string; quotation: { qt_no: string; buyer_name: string } | null }
+const helpRequests = ref<QuotationHelpRequest[]>([])
 const records = ref<Paginated<BillingRecord> | null>(null)
 const selectedId = ref<number | null>(null)
 const selected = ref<BillingRecord | null>(null)
-const tab = ref<'export' | 'history' | 'edit'>('export')
+const tab = ref<'export' | 'history' | 'edit' | 'sale-help'>('export')
 const search = ref('')
 const error = ref('')
 const message = ref('')
@@ -19,6 +25,7 @@ const saving = ref(false)
 const statusSaving = ref(false)
 const persistedStatus = ref('')
 const selectedExportIds = ref<number[]>([])
+const quotationDownloadBillIds = ref<number[] | null>(null)
 const expandedReadyBillId = ref<number | null>(null)
 
 const statuses = ['ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอลูกค้ายืนยัน', 'รอแอดมินส่งออก', 'รอแก้ไข', 'อนุมัติแล้ว', 'ดำเนินการเสร็จสิ้น', 'ไม่อนุมัติ', 'ยกเลิกบิล']
@@ -78,15 +85,21 @@ function toggleReadyBillDetails(billId: number) {
 async function load(page = records.value?.current_page || 1) {
   error.value = ''
   try {
-    const [readyResponse, allResponse] = await Promise.all([
+    const [readyResponse, allResponse, helpResponse] = await Promise.all([
       api.get<{ data: BillingRecord[] }>('/api/v1/bills/ready-export'),
-      api.get<Paginated<BillingRecord>>('/api/v1/billing-records', { params: { page, per_page: 25, search: search.value || undefined } }),
+      api.get<Paginated<BillingRecord>>('/api/v1/billing-records', { params: { page, per_page: preferredRowsPerPage(25), search: search.value || undefined } }),
+      api.get<Paginated<QuotationHelpRequest>>('/api/v1/quotation-document-help-requests', { params: { per_page: 100 } }),
     ])
     ready.value = readyResponse.data.data
     selectedExportIds.value = selectedExportIds.value.filter((id) => ready.value.some((bill) => bill.bill_id === id))
     if (expandedReadyBillId.value && !ready.value.some((bill) => bill.bill_id === expandedReadyBillId.value)) expandedReadyBillId.value = null
     records.value = allResponse.data
+    helpRequests.value = helpResponse.data.data
   } catch (cause) { error.value = apiError(cause) }
+}
+
+function openHelpRequest(item: QuotationHelpRequest) {
+  router.push({ name: 'quotation-editor', params: { quotationId: item.qt_id }, query: { template: item.template_id, mode: item.document_mode } })
 }
 
 async function loadSelected() {
@@ -113,9 +126,7 @@ async function exportQuotationsPdf() {
     error.value = 'PDF ใบเสนอราคาใช้ได้เฉพาะรายการที่สร้างจากใบเสนอราคา กรุณานำบิลแบบ PO โดยตรงออกจากรายการที่เลือก'
     return
   }
-  try {
-    await downloadFile('/api/v1/bills/export-quotations.pdf', `Quotations_${todayIso()}.pdf`, 'post', { bill_ids: selectedExportIds.value })
-  } catch (cause) { error.value = apiError(cause) }
+  quotationDownloadBillIds.value = [...selectedExportIds.value]
 }
 
 async function complete(id: number) {
@@ -184,6 +195,7 @@ onMounted(() => load(1))
       <button :class="{ active: tab === 'export' }" @click="tab = 'export'">ศูนย์ Export</button>
       <button :class="{ active: tab === 'history' }" @click="tab = 'history'">ประวัติทั้งหมด</button>
       <button :class="{ active: tab === 'edit' }" @click="tab = 'edit'">แก้ไข / ยกเลิก</button>
+      <button :class="{ active: tab === 'sale-help' }" @click="tab = 'sale-help'">คำขอ Sale COO ({{ helpRequests.filter(item => ['pending', 'in_progress'].includes(item.status)).length }})</button>
     </div>
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="message" class="success-message">{{ message }}</p>
@@ -252,6 +264,14 @@ onMounted(() => load(1))
       <div v-if="records" class="pagination"><span>แสดง {{ records.from || 0 }}–{{ records.to || 0 }} จาก {{ records.total }}</span><div><button class="secondary-button" :disabled="!records.prev_page_url" @click="load(records.current_page - 1)">ก่อนหน้า</button><span>หน้า {{ records.current_page }} / {{ records.last_page }}</span><button class="secondary-button" :disabled="!records.next_page_url" @click="load(records.current_page + 1)">ถัดไป</button></div></div>
     </section>
 
+    <section v-else-if="tab === 'sale-help'" class="content-card">
+      <div class="section-heading"><div><h2>คำขอความช่วยเหลือจาก Sale</h2><p class="muted">รายการล่าสุดอยู่ด้านบน เปิด Draft เพื่อรับเรื่อง แก้ไข และแจ้งผลกลับ Sale</p></div><button class="secondary-button" @click="load(1)">รีเฟรช</button></div>
+      <div class="table-wrap"><table><thead><tr><th>เวลาที่ขอ</th><th>ใบเสนอราคา</th><th>ลูกค้า</th><th>Sale</th><th>ปัญหาที่แจ้ง</th><th>สถานะ</th><th>ผู้รับเรื่อง</th><th>จัดการ</th></tr></thead><tbody>
+        <tr v-for="item in helpRequests" :key="item.help_request_id"><td>{{ new Date(item.requested_at).toLocaleString('th-TH') }}</td><td class="strong">{{ item.quotation?.qt_no || `#${item.qt_id}` }}</td><td>{{ item.quotation?.buyer_name || '-' }}</td><td>{{ item.requested_by }}</td><td class="help-note-cell">{{ item.request_note }}</td><td>{{ item.status === 'pending' ? 'รอรับเรื่อง' : item.status === 'in_progress' ? 'กำลังดำเนินการ' : item.status === 'resolved' ? 'เสร็จแล้ว' : 'ยกเลิก' }}</td><td>{{ item.assigned_to || '-' }}</td><td><button class="primary-button primary-button--compact" @click="openHelpRequest(item)">{{ ['pending', 'in_progress'].includes(item.status) ? 'เปิดและดำเนินการ' : 'เปิดดู' }}</button></td></tr>
+        <tr v-if="!helpRequests.length"><td colspan="8" class="empty-cell">ยังไม่มีคำขอความช่วยเหลือ</td></tr>
+      </tbody></table></div>
+    </section>
+
     <section v-else>
       <div class="content-card search-row">
         <label><span>กรอก Bill ID</span><input v-model.number="selectedId" type="number" min="1" @change="loadSelected"></label>
@@ -299,5 +319,10 @@ onMounted(() => load(1))
         <button class="primary-button span-2" :disabled="saving || selected.status === 'ยกเลิกบิล'">{{ saving ? 'กำลังตรวจสอบและคำนวณ…' : 'บันทึกการแก้ไขทั้งหมด' }}</button>
       </form>
     </section>
+    <QuotationDownloadDialog v-if="quotationDownloadBillIds" :bill-ids="quotationDownloadBillIds" @close="quotationDownloadBillIds = null" />
   </AppShell>
 </template>
+
+<style scoped>
+.help-note-cell{min-width:260px;max-width:430px;white-space:pre-wrap;overflow-wrap:anywhere}
+</style>

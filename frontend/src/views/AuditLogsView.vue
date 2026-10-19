@@ -6,6 +6,7 @@ import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
 import type { AuditLog, AuditLogResponse } from '../types/api'
 import { apiError, todayIso } from '../utils/format'
+import { i18n } from '../stores/i18n'
 
 const result = ref<AuditLogResponse | null>(null)
 const search = ref('')
@@ -77,10 +78,10 @@ onMounted(() => load())
 <template>
   <AppShell title="บันทึกกิจกรรมระบบ" subtitle="ตรวจสอบว่าใครทำอะไร เมื่อใด กับข้อมูลหรือเอกสารใด พร้อมผลลัพธ์ของการทำรายการ">
     <div v-if="result" class="metrics-grid metrics-grid--three">
-      <article class="metric-card metric-card--primary"><span>กิจกรรมตามตัวกรอง</span><strong>{{ result.summary.total.toLocaleString() }}</strong><small>วันนี้ทั้งระบบ {{ result.summary.today.toLocaleString() }} รายการ</small></article>
-      <article class="metric-card"><span>สำเร็จ</span><strong>{{ result.summary.successful.toLocaleString() }}</strong><small>HTTP response ต่ำกว่า 400</small></article>
-      <article class="metric-card"><span>ไม่สำเร็จ</span><strong>{{ result.summary.failed.toLocaleString() }}</strong><small>ใช้ตรวจสอบข้อผิดพลาดหรือรายการที่ถูกปฏิเสธ</small></article>
-      <article class="metric-card"><span>ผู้ใช้งานที่มีกิจกรรม</span><strong>{{ result.summary.active_users.toLocaleString() }}</strong><small>เฉพาะข้อมูลตามตัวกรองปัจจุบัน</small></article>
+      <article class="metric-card metric-card--primary"><span>กิจกรรมตามตัวกรอง</span><strong>{{ i18n.formatNumber(result.summary.total) }}</strong><small>วันนี้ทั้งระบบ {{ i18n.formatNumber(result.summary.today) }} รายการ</small></article>
+      <article class="metric-card"><span>สำเร็จ</span><strong>{{ i18n.formatNumber(result.summary.successful) }}</strong><small>HTTP response ต่ำกว่า 400</small></article>
+      <article class="metric-card"><span>ไม่สำเร็จ</span><strong>{{ i18n.formatNumber(result.summary.failed) }}</strong><small>ใช้ตรวจสอบข้อผิดพลาดหรือรายการที่ถูกปฏิเสธ</small></article>
+      <article class="metric-card"><span>ผู้ใช้งานที่มีกิจกรรม</span><strong>{{ i18n.formatNumber(result.summary.active_users) }}</strong><small>เฉพาะข้อมูลตามตัวกรองปัจจุบัน</small></article>
     </div>
 
     <section class="content-card filter-panel">
@@ -120,7 +121,7 @@ onMounted(() => load())
           </tbody>
         </table>
       </div>
-      <div v-if="result" class="pagination"><span>แสดง {{ result.data.from || 0 }}–{{ result.data.to || 0 }} จาก {{ result.data.total.toLocaleString() }} รายการ</span><div><button class="secondary-button" :disabled="!result.data.prev_page_url" @click="load(result.data.current_page - 1)">ก่อนหน้า</button><span>หน้า {{ result.data.current_page }} / {{ result.data.last_page }}</span><button class="secondary-button" :disabled="!result.data.next_page_url" @click="load(result.data.current_page + 1)">ถัดไป</button></div></div>
+      <div v-if="result" class="pagination"><span>แสดง {{ result.data.from || 0 }}–{{ result.data.to || 0 }} จาก {{ i18n.formatNumber(result.data.total) }} รายการ</span><div><button class="secondary-button" :disabled="!result.data.prev_page_url" @click="load(result.data.current_page - 1)">ก่อนหน้า</button><span>หน้า {{ result.data.current_page }} / {{ result.data.last_page }}</span><button class="secondary-button" :disabled="!result.data.next_page_url" @click="load(result.data.current_page + 1)">ถัดไป</button></div></div>
     </section>
   </AppShell>
 </template>

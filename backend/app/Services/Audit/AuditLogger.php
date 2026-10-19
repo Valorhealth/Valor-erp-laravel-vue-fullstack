@@ -19,10 +19,12 @@ final class AuditLogger
         'AuthController@logout' => ['auth.logout', 'การเข้าสู่ระบบ', 'ออกจากระบบ'],
         'PasswordResetController@requestLink' => ['auth.password_reset_request', 'การเข้าสู่ระบบ', 'ขอลิงก์ตั้งรหัสผ่านใหม่'],
         'PasswordResetController@reset' => ['auth.reset_password', 'การเข้าสู่ระบบ', 'เปลี่ยนรหัสผ่านด้วย Token'],
+        'UserSettingsController@updateProfile' => ['user.profile_update', 'ผู้ใช้งาน', 'แก้ไขข้อมูลบัญชีของตนเอง'],
         'QuotationController@store' => ['quotation.create', 'ใบเสนอราคา', 'สร้างใบเสนอราคา'],
         'QuotationController@show' => ['quotation.view', 'ใบเสนอราคา', 'เปิดดูรายละเอียดใบเสนอราคา'],
         'QuotationController@pdf' => ['quotation.print', 'เอกสาร', 'ดาวน์โหลดใบเสนอราคา'],
-        'QuotationController@customNamePdf' => ['quotation.custom_name_print', 'เอกสาร', 'สร้างใบเสนอราคาที่เปลี่ยนชื่อสินค้า'],
+        'QuotationController@requestEditorHelp' => ['quotation.help_request', 'ใบเสนอราคา', 'ส่งคำขอให้ Sale COO ช่วยแก้ใบเสนอราคา'],
+        'QuotationController@updateEditorHelp' => ['quotation.help_update', 'ใบเสนอราคา', 'อัปเดตสถานะคำขอช่วยแก้ใบเสนอราคา'],
         'BillingWorkflowController@createFromQuotation' => ['bill.create_from_quotation', 'บิล', 'สร้างบิลจากใบเสนอราคา'],
         'BillingWorkflowController@createFromPurchaseOrder' => ['bill.create_from_purchase_order', 'บิล', 'สร้างรายการเปิดบิลจาก PO โดยตรง'],
         'BillingWorkflowController@show' => ['bill.view', 'บิล', 'เปิดดูรายละเอียดบิล'],
@@ -101,6 +103,7 @@ final class AuditLogger
     private const SENSITIVE_KEYS = [
         'password', 'password_confirmation', 'token', 'secret', 'authorization',
         'cookie', 'tax_qr_token', 'customer_acceptance_token', 'file_bytes', 'signature_image', 'signature_image_base64',
+        'national_id', 'sale_identity_no', 'representative_address',
     ];
 
     public function shouldLog(Request $request): bool
@@ -296,7 +299,11 @@ final class AuditLogger
         $clean = [];
         foreach ($payload as $key => $value) {
             $normalizedKey = mb_strtolower((string) $key);
-            if (in_array($normalizedKey, self::SENSITIVE_KEYS, true) || str_contains($normalizedKey, 'password')) {
+            if (in_array($normalizedKey, self::SENSITIVE_KEYS, true)
+                || str_contains($normalizedKey, 'password')
+                || str_contains($normalizedKey, 'token')
+                || str_contains($normalizedKey, 'secret')
+                || str_contains($normalizedKey, 'signature_image')) {
                 $clean[$key] = '[REDACTED]';
 
                 continue;

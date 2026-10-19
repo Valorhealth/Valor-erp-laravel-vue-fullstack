@@ -3,14 +3,17 @@
 namespace App\Services\Billing;
 
 use App\Models\BillingRecord;
-use App\Models\BillItem;
+use App\Models\BillingDocumentPreparationItem;
 use App\Models\EditLog;
 use App\Models\Quotation;
+use App\Models\QuotationDocumentDraft;
+use App\Models\QuotationDocumentVersion;
 use App\Models\User;
 use App\Services\Credit\CustomerCreditResolver;
-use App\Services\Documents\ElectronicSignatureService;
 use App\Services\Documents\BillingDocumentStorage;
+use App\Services\Documents\ElectronicSignatureService;
 use App\Services\Quotations\QuotationRevisionService;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -34,6 +37,11 @@ final class BillingWorkflow
     ];
 
     public const SALE_EDITABLE_STATUSES = [self::DRAFT_STATUS, 'รอแก้ไข'];
+
+    public const SUBMISSION_DOCUMENT_TYPES = [
+        'quotation', 'power_of_attorney', 'company_affidavit', 'vat_registration',
+        'grantor_id_copies', 'representative_id_copy', 'product_documents', 'other',
+    ];
 
     public function __construct(
         private readonly CustomerCreditResolver $creditResolver,
@@ -66,6 +74,24 @@ final class BillingWorkflow
                 throw ValidationException::withMessages(['items' => 'ใบเสนอราคาไม่มีรายการสินค้า']);
             }
 
+            $quotationDocument = QuotationDocumentVersion::query()
+                ->where('qt_id', $quotation->qt_id)
+                ->where('document_mode', 'original')
+                ->latest('created_at')
+                ->latest('document_version_id')
+                ->first();
+            if (! $isDraft && ! $quotationDocument) {
+                throw ValidationException::withMessages([
+                    'quotation_document' => 'กรุณาเลือกรูปแบบ แก้ไข และกด “ยืนยันและดาวน์โหลด” ใบเสนอราคาก่อนส่งให้ Approve',
+                ]);
+            }
+            if (! $isDraft && in_array('power_of_attorney', $this->normalizedSubmissionDocuments($payload), true)
+                && ! $quotationDocument?->powerOfAttorney()->exists()) {
+                throw ValidationException::withMessages([
+                    'submission_documents' => 'เลือกหนังสือมอบอำนาจไว้ แต่ Draft Revision นี้ยังไม่มีหนังสือมอบอำนาจ กรุณาจัดทำและยืนยันเอกสารก่อนส่ง',
+                ]);
+            }
+
             $creditProfile = $this->creditResolver->resolve($quotation->bplus_customer_code, $quotation->buyer_name);
             $creditLimit = (float) ($creditProfile?->credit_limit ?? $quotation->credit_limit ?? 0);
             $creditTerm = (int) ($creditProfile?->credit_term ?? $quotation->credit_term ?? 0);
@@ -75,6 +101,7 @@ final class BillingWorkflow
             $initialStatus = 'รอหัวหน้าอนุมัติ';
             $autoReason = null;
 
+            $submissionDocuments = $this->normalizedSubmissionDocuments($payload);
             $bill = BillingRecord::query()->create([
                 ...Arr::only($quotation->getAttributes(), [
                     'buyer_name', 'tax_id', 'total_amount', 'province', 'district', 'sub_district',
@@ -87,10 +114,12 @@ final class BillingWorkflow
                 ...Arr::only($payload, ['bill_date', 'shipping_type', 'shipping_text', 'bill_note']),
                 'created_by' => $user->username,
                 'creator_user_id' => $user->id,
+                'bplus_salesman_code' => $user->salesman()->value('salesman_code'),
                 'created_at' => now(),
                 'status' => $isDraft ? self::DRAFT_STATUS : $initialStatus,
                 'req_tax_invoice' => true,
                 'ref_qt_id' => $quotation->qt_id,
+                'quotation_document_version_id' => $quotationDocument?->document_version_id,
                 'auto_approved_reason' => $isDraft ? null : $autoReason,
                 'submitted_at' => $isDraft ? null : now(),
                 'credit_outstanding' => $creditOutstanding,
@@ -100,6 +129,7 @@ final class BillingWorkflow
                 'tax_qr_token' => Str::random(48),
                 'customer_acceptance_token' => Str::random(64),
                 'customer_acceptance_expires_at' => now()->addDays(30),
+                'submission_document_requirements' => $submissionDocuments,
             ]);
 
             foreach ($quotation->items as $item) {
@@ -109,6 +139,14 @@ final class BillingWorkflow
                 ]));
             }
 
+            if ($quotationDocument && $quotationDocument->bill_id === null) {
+                $quotationDocument->forceFill(['bill_id' => $bill->bill_id])->save();
+            }
+
+            if (! $isDraft) {
+                $this->syncDocumentPreparationQueue($bill, $submissionDocuments);
+            }
+
             $this->revisions->record($bill, $user->username, 'สร้างฉบับร่างเริ่มต้น');
 
             return $bill->load(['items', 'documents']);
@@ -116,7 +154,7 @@ final class BillingWorkflow
     }
 
     /** @param array<string, mixed> $payload */
-    public function createFromPurchaseOrder(User $user, array $payload, \Illuminate\Http\UploadedFile $purchaseOrder): BillingRecord
+    public function createFromPurchaseOrder(User $user, array $payload, UploadedFile $purchaseOrder): BillingRecord
     {
         return DB::transaction(function () use ($user, $payload, $purchaseOrder): BillingRecord {
             $items = collect($payload['items'])->map(function (array $item): array {
@@ -153,6 +191,7 @@ final class BillingWorkflow
                 'requested_credit_term' => $payload['requested_credit_term'] ?? $credit?->credit_term ?? 0,
                 'created_by' => $user->username,
                 'creator_user_id' => $user->id,
+                'bplus_salesman_code' => $user->salesman()->value('salesman_code'),
                 'created_at' => now(),
                 'submitted_at' => now(),
                 'status' => 'รอหัวหน้าอนุมัติ',
@@ -195,13 +234,23 @@ final class BillingWorkflow
                 'customer_po_no', 'customer_confirmed_at', 'customer_contact_name', 'customer_contact_channel',
                 'quotation_valid_until', 'payment_terms', 'delivery_due_date', 'delivery_terms',
             ]);
+            $beforeItems = $bill->items->sortBy('item_id')->map(fn ($item): array => $item->only([
+                'item_id', 'main_category', 'unit_type', 'quantity', 'unit_price', 'sale_discount_unit',
+            ]))->values()->all();
             $billFields = Arr::only($payload, array_keys($before));
             unset($billFields['total_amount']);
             $bill->fill($billFields);
+            if ($bill->ref_qt_id && $bill->workflow_type !== 'customer_po_direct') {
+                // Any sale-side data change invalidates the previously confirmed
+                // quotation snapshot. The sale must review and confirm a new PDF.
+                $bill->quotation_document_version_id = null;
+            }
             if ($bill->status === 'รอแก้ไข') {
-                $bill->status = 'รอหัวหน้าอนุมัติ';
+                // A rejected quotation must be confirmed as a fresh immutable PDF
+                // before it can re-enter approval; never carry the old approved view forward.
+                $bill->status = self::DRAFT_STATUS;
                 $bill->reject_reason = null;
-                $bill->submitted_at = now();
+                $bill->submitted_at = null;
             }
             $bill->save();
 
@@ -241,10 +290,18 @@ final class BillingWorkflow
                     : $bill->items()->create($itemValues);
                 $itemsTotal += $lineTotal;
             }
+            $normalizedDocuments = $this->normalizedSubmissionDocuments(['submission_documents' => $submissionDocuments]);
             $bill->forceFill([
                 'sale_discount_total' => min((float) ($payload['sale_discount_total'] ?? 0), $itemsTotal),
                 'total_amount' => max(round($itemsTotal - (float) ($payload['sale_discount_total'] ?? 0), 2), 0),
             ])->save();
+
+            $afterItems = $bill->items()->orderBy('item_id')->get()->map(fn ($item): array => $item->only([
+                'item_id', 'main_category', 'unit_type', 'quantity', 'unit_price', 'sale_discount_unit',
+            ]))->values()->all();
+            if ($bill->ref_qt_id && ($beforeItems !== $afterItems || (float) ($before['sale_discount_total'] ?? 0) !== (float) $bill->sale_discount_total)) {
+                QuotationDocumentDraft::query()->where('qt_id', $bill->ref_qt_id)->delete();
+            }
 
             $changes = [];
             foreach ($billFields as $key => $value) {
@@ -270,9 +327,9 @@ final class BillingWorkflow
         });
     }
 
-    public function submitDraft(User $user, BillingRecord $bill): BillingRecord
+    public function submitDraft(User $user, BillingRecord $bill, array $submissionDocuments): BillingRecord
     {
-        return DB::transaction(function () use ($user, $bill): BillingRecord {
+        return DB::transaction(function () use ($user, $bill, $submissionDocuments): BillingRecord {
             $bill = BillingRecord::query()->lockForUpdate()->with('items')->findOrFail($bill->bill_id);
             if (! $this->isOwnedBy($bill, $user)) {
                 abort(403, 'คุณไม่มีสิทธิ์ส่งบิลนี้');
@@ -282,6 +339,25 @@ final class BillingWorkflow
             }
             if ($bill->items->isEmpty()) {
                 throw ValidationException::withMessages(['items' => 'Draft ต้องมีรายการสินค้าอย่างน้อย 1 รายการ']);
+            }
+
+            if ($bill->ref_qt_id && $bill->workflow_type !== 'customer_po_direct') {
+                $documentVersion = QuotationDocumentVersion::query()
+                    ->where('document_version_id', $bill->quotation_document_version_id)
+                    ->where('bill_id', $bill->bill_id)
+                    ->where('qt_id', $bill->ref_qt_id)
+                    ->where('document_mode', 'original')
+                    ->first();
+                if (! $documentVersion) {
+                    throw ValidationException::withMessages([
+                        'quotation_document' => 'กรุณาเลือกรูปแบบ แก้ไข และกด “ยืนยันและดาวน์โหลด” ใบเสนอราคาก่อนส่งให้ Approve',
+                    ]);
+                }
+                if (in_array('power_of_attorney', $submissionDocuments, true) && ! $documentVersion->powerOfAttorney()->exists()) {
+                    throw ValidationException::withMessages([
+                        'power_of_attorney' => 'เลือกหนังสือมอบอำนาจไว้ แต่ Revision นี้ยังไม่มี Draft หนังสือมอบอำนาจ กรุณาจัดทำและยืนยันเอกสารใหม่',
+                    ]);
+                }
             }
 
             $required = [
@@ -319,12 +395,14 @@ final class BillingWorkflow
             $bill->forceFill([
                 'status' => 'รอหัวหน้าอนุมัติ',
                 'submitted_at' => now(),
+                'submission_document_requirements' => $normalizedDocuments,
                 'auto_approved_reason' => $autoReason,
                 'reject_reason' => null,
-                'customer_acceptance_token' => $bill->ref_qt_id ? Str::random(64) : null,
-                'customer_acceptance_expires_at' => $bill->ref_qt_id ? now()->addDays(30) : null,
+                'customer_acceptance_token' => $bill->workflow_type !== 'customer_po_direct' && $bill->ref_qt_id ? Str::random(64) : null,
+                'customer_acceptance_expires_at' => $bill->workflow_type !== 'customer_po_direct' && $bill->ref_qt_id ? now()->addDays(30) : null,
                 'customer_acceptance_used_at' => null,
             ])->save();
+            $this->syncDocumentPreparationQueue($bill, $normalizedDocuments);
             EditLog::query()->create([
                 'bill_id' => $bill->bill_id,
                 'edited_by' => $user->username,
@@ -336,6 +414,47 @@ final class BillingWorkflow
         });
     }
 
+    /** @param array<string, mixed> $payload
+     * @return array<int, string>
+     */
+    private function normalizedSubmissionDocuments(array $payload): array
+    {
+        $documents = collect((array) ($payload['submission_documents'] ?? ['quotation']))
+            ->map(fn (mixed $document): string => trim((string) $document))
+            ->filter(fn (string $document): bool => in_array($document, self::SUBMISSION_DOCUMENT_TYPES, true))
+            ->unique()->values();
+        if (! $documents->contains('quotation')) {
+            $documents->prepend('quotation');
+        }
+
+        return $documents->all();
+    }
+
+    /** @param array<int, string> $documentTypes */
+    private function syncDocumentPreparationQueue(BillingRecord $bill, array $documentTypes): void
+    {
+        BillingDocumentPreparationItem::query()
+            ->where('bill_id', $bill->bill_id)
+            ->whereNotIn('document_type', $documentTypes)
+            ->update(['status' => 'cancelled', 'updated_at' => now(), 'prepared_at' => null, 'prepared_by' => null]);
+
+        foreach ($documentTypes as $documentType) {
+            $item = BillingDocumentPreparationItem::query()->firstOrNew([
+                'bill_id' => $bill->bill_id,
+                'document_type' => $documentType,
+            ]);
+            if (! $item->exists || $item->status === 'cancelled') {
+                $item->status = 'pending';
+                $item->admin_note = null;
+                $item->prepared_at = null;
+                $item->prepared_by = null;
+            }
+            $item->requested_at = $bill->submitted_at ?: now();
+            $item->updated_at = now();
+            $item->save();
+        }
+    }
+
     public function approve(
         User $user,
         BillingRecord $bill,
@@ -343,8 +462,7 @@ final class BillingWorkflow
         string $intent,
         ?string $ipAddress,
         ?string $userAgent,
-    ): BillingRecord
-    {
+    ): BillingRecord {
         return DB::transaction(function () use ($user, $bill, $password, $intent, $ipAddress, $userAgent): BillingRecord {
             $bill = BillingRecord::query()->lockForUpdate()->with('items')->findOrFail($bill->bill_id);
             if ($bill->status !== 'รอหัวหน้าอนุมัติ') {

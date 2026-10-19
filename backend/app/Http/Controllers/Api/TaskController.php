@@ -6,9 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Models\SalesTask;
 use App\Models\User;
 use App\Services\Authorization\RoleAccess;
+use App\Services\Notifications\WorkflowEmailNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class TaskController extends Controller
@@ -38,7 +40,7 @@ class TaskController extends Controller
         return response()->json(['data' => ['tasks' => $tasks, 'assignable_users' => $assignableUsers]]);
     }
 
-    public function store(Request $request): JsonResponse
+    public function store(Request $request, WorkflowEmailNotifier $notifier): JsonResponse
     {
         $data = $request->validate([
             'title' => ['required', 'string', 'max:500'],
@@ -60,11 +62,13 @@ class TaskController extends Controller
             ]);
         }
 
-        $tasks = DB::transaction(function () use ($request, $data) {
-            $assignees = User::query()->whereIn('username', array_unique($data['assigned_to']))->get()->keyBy('username');
+        [$tasks, $assignees] = DB::transaction(function () use ($request, $data) {
+            $assignees = User::query()->whereIn('username', array_unique($data['assigned_to']))
+                ->get(['id', 'username', 'email', 'preferences'])->keyBy('username');
 
-            return collect(array_unique($data['assigned_to']))->map(function (string $username) use ($request, $data, $assignees): SalesTask {
+            $tasks = collect(array_unique($data['assigned_to']))->map(function (string $username) use ($request, $data, $assignees): SalesTask {
                 $assignee = $assignees->get($username);
+                abort_unless($assignee, 422, "ไม่พบบัญชีผู้รับงาน {$username}");
 
                 return SalesTask::query()->create([
                     ...collect($data)->except('assigned_to')->all(),
@@ -74,7 +78,7 @@ class TaskController extends Controller
                     'assigned_by_user_id' => $request->user()->id,
                     'status' => 'รอดำเนินการ',
                     'progress_updates' => [[
-                        'update_id' => (string) \Illuminate\Support\Str::uuid(),
+                        'update_id' => (string) Str::uuid(),
                         'status' => 'รอดำเนินการ',
                         'progress_note' => 'มอบหมายงานให้ '.$username,
                         'updated_by' => $request->user()->username,
@@ -84,12 +88,17 @@ class TaskController extends Controller
                     'updated_at' => now(),
                 ]);
             });
+
+            return [$tasks, $assignees];
         });
+        foreach ($tasks as $task) {
+            $notifier->taskAssigned($task, $request->user(), $assignees->get($task->assigned_to));
+        }
 
         return response()->json(['data' => $tasks], 201);
     }
 
-    public function updateStatus(Request $request, SalesTask $task): JsonResponse
+    public function updateStatus(Request $request, SalesTask $task, WorkflowEmailNotifier $notifier): JsonResponse
     {
         $data = $request->validate([
             'status' => ['required', 'in:รอดำเนินการ,กำลังดำเนินการ,สำเร็จ,ยกเลิก'],
@@ -105,7 +114,7 @@ class TaskController extends Controller
             $task = SalesTask::query()->lockForUpdate()->findOrFail($task->task_id);
             $updates = $task->progress_updates ?? [];
             $updates[] = [
-                'update_id' => (string) \Illuminate\Support\Str::uuid(),
+                'update_id' => (string) Str::uuid(),
                 'status' => $data['status'],
                 'progress_note' => trim($data['progress_note']),
                 'updated_by' => $request->user()->username,
@@ -117,8 +126,10 @@ class TaskController extends Controller
                 'updated_at' => now(),
             ])->save();
         });
+        $task = $task->fresh();
+        $notifier->taskUpdated($task, $request->user());
 
-        return response()->json(['data' => $task->fresh()]);
+        return response()->json(['data' => $task]);
     }
 
     public function destroy(SalesTask $task): JsonResponse

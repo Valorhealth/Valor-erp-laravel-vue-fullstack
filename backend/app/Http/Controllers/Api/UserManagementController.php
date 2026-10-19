@@ -4,15 +4,16 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
-use App\Models\User;
 use App\Models\BillingRecord;
 use App\Models\Quotation;
 use App\Models\SalesTask;
+use App\Models\Salesman;
+use App\Models\User;
 use App\Services\Authorization\RoleAccess;
+use App\Services\Users\UserIdentityUpdater;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
@@ -30,6 +31,7 @@ class UserManagementController extends Controller
     {
         $search = trim((string) $request->query('search', ''));
         $users = User::query()
+            ->with('salesman:id,salesman_code,salesman_name')
             ->withExists(['signatureAssets as has_signature' => fn ($query) => $query->where('is_current', true)])
             ->when($search !== '', fn ($query) => $query->where('username', 'ilike', "%{$search}%")
                 ->orWhere('first_name', 'ilike', "%{$search}%")
@@ -52,6 +54,11 @@ class UserManagementController extends Controller
         return response()->json(['data' => RoleAccess::permissionCatalog()]);
     }
 
+    public function salesmen(): JsonResponse
+    {
+        return response()->json(['data' => Salesman::query()->select(['id', 'salesman_code', 'salesman_name'])->orderBy('salesman_code')->get()]);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $data = $this->validatedData($request);
@@ -64,10 +71,10 @@ class UserManagementController extends Controller
             'created_at' => now(),
         ]);
 
-        return response()->json(['data' => new UserResource($user)], 201);
+        return response()->json(['data' => new UserResource($user->load('salesman'))], 201);
     }
 
-    public function update(Request $request, User $user): JsonResponse
+    public function update(Request $request, User $user, UserIdentityUpdater $identityUpdater): JsonResponse
     {
         $data = $this->validatedData($request, $user);
         if ($data['quotation_signing_authorized'] && ! $user->signatureAssets()->where('is_current', true)->exists()) {
@@ -78,26 +85,9 @@ class UserManagementController extends Controller
             $updates['password_hash'] = Hash::make($data['password']);
             $updates['password_changed_at'] = now();
         }
-        DB::transaction(function () use ($user, $updates): void {
-            $oldUsername = $user->username;
-            $user->fill($updates)->save();
-            if ($oldUsername === $user->username) {
-                return;
-            }
+        $user = $identityUpdater->update($user, $updates);
 
-            DB::table('billing_records')->where('creator_user_id', $user->id)->update(['created_by' => $user->username]);
-            DB::table('quotations')->where('creator_user_id', $user->id)->update(['created_by' => $user->username]);
-            DB::table('credit_requests')->where('created_by', $oldUsername)->update(['created_by' => $user->username]);
-            DB::table('notice_board')->where('created_by', $oldUsername)->update(['created_by' => $user->username]);
-            DB::table('sales_tasks')->where('assigned_to_user_id', $user->id)
-                ->orWhere(fn ($query) => $query->whereNull('assigned_to_user_id')->where('assigned_to', $oldUsername))
-                ->update(['assigned_to' => $user->username]);
-            DB::table('sales_tasks')->where('assigned_by_user_id', $user->id)
-                ->orWhere(fn ($query) => $query->whereNull('assigned_by_user_id')->where('assigned_by', $oldUsername))
-                ->update(['assigned_by' => $user->username]);
-        });
-
-        return response()->json(['data' => new UserResource($user->fresh())]);
+        return response()->json(['data' => new UserResource($user->load('salesman'))]);
     }
 
     public function destroy(Request $request, User $user): JsonResponse
@@ -141,8 +131,10 @@ class UserManagementController extends Controller
             'first_name' => ['required', 'string', 'max:255'],
             'last_name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255'],
+            'phone' => ['nullable', 'string', 'max:30', 'regex:/^[0-9+().\\-\\s]{6,30}$/'],
             'role' => ['required', Rule::in(self::ROLES)],
             'department' => ['nullable', 'string', 'max:255'],
+            'salesman_id' => ['nullable', 'integer', 'exists:salesmen,id', Rule::unique('users', 'salesman_id')->ignore($user?->id)],
             'quotation_signing_authorized' => ['required', 'boolean'],
             'permission_overrides' => ['nullable', 'array'],
             'permission_overrides.*' => ['boolean'],

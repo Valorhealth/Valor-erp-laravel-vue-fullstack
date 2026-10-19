@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\BillingRecord;
 use App\Models\CustomerAcceptanceSignature;
 use App\Models\Quotation;
+use App\Models\QuotationDocumentVersion;
 use App\Models\User;
+use App\Services\Documents\DocumentDownloadAudit;
 use App\Services\Documents\DocumentService;
 use App\Services\Notifications\WorkflowEmailNotifier;
 use Illuminate\Http\JsonResponse;
@@ -72,6 +74,7 @@ final class CustomerAcceptanceController extends Controller
             }
 
             $quotation = Quotation::query()->findOrFail($bill->ref_qt_id);
+            $quotationDocument = $this->quotationDocumentForBill($bill);
             $snapshot = $this->canonicalize([
                 'bill' => $bill->only([
                     'bill_id', 'ref_qt_id', 'revision_no', 'bill_date', 'buyer_name', 'tax_id', 'address_note',
@@ -79,6 +82,13 @@ final class CustomerAcceptanceController extends Controller
                     'sale_discount_total', 'total_amount', 'created_by', 'submitted_at',
                 ]),
                 'quotation' => ['qt_no' => $quotation->qt_no],
+                'quotation_document' => [
+                    'document_version_id' => (int) $quotationDocument->document_version_id,
+                    'template_id' => (string) $quotationDocument->template_id,
+                    'revision_no' => (int) $quotationDocument->revision_no,
+                    'filename' => (string) $quotationDocument->filename,
+                    'pdf_sha256' => (string) $quotationDocument->pdf_sha256,
+                ],
                 'items' => $bill->items->map(fn ($item): array => $item->only([
                     'item_id', 'main_category', 'sub_category', 'customer_product_name', 'unit_type',
                     'quantity', 'unit_price', 'sale_discount_unit', 'line_total_before_discount', 'line_total',
@@ -133,16 +143,27 @@ final class CustomerAcceptanceController extends Controller
 
     public function pdf(string $token, DocumentService $documents): mixed
     {
-        $bill = $this->billForToken($token)->load(['items', 'documents', 'signatures', 'customerAcceptanceSignatures']);
-        $quotation = Quotation::query()->with(['items', 'creator:id,username,department'])->findOrFail($bill->ref_qt_id);
-        $bytes = $documents->quotationPdf($quotation, draft: $bill);
-        \App\Services\Documents\DocumentDownloadAudit::capture(request(), 'customer_quotation', $quotation, $bill);
+        $bill = $this->billForToken($token);
+        $quotation = Quotation::query()->findOrFail($bill->ref_qt_id);
+        $version = $this->quotationDocumentForBill($bill);
+        $bytes = $documents->confirmedQuotationVersionPdf($version, $bill);
+        DocumentDownloadAudit::capture(request(), 'customer_quotation', $quotation, $bill);
 
         return response($bytes, 200, [
             'Content-Type' => 'application/pdf',
-            'Content-Disposition' => $documents->attachmentDisposition('Quotation_'.$quotation->qt_no.'_R'.max(1, (int) $bill->revision_no).'.pdf'),
+            'Content-Disposition' => $documents->attachmentDisposition($version->filename),
             'Cache-Control' => 'no-store',
+            'X-Document-SHA256' => hash('sha256', $bytes),
         ]);
+    }
+
+    private function quotationDocumentForBill(BillingRecord $bill): QuotationDocumentVersion
+    {
+        return QuotationDocumentVersion::query()
+            ->where('document_version_id', $bill->quotation_document_version_id)
+            ->where('bill_id', $bill->bill_id)
+            ->where('qt_id', $bill->ref_qt_id)
+            ->firstOrFail();
     }
 
     private function billForToken(string $token): BillingRecord

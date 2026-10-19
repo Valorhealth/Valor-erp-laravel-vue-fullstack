@@ -4,6 +4,8 @@ namespace App\Services\Documents;
 
 use App\Models\BillingRecord;
 use App\Models\DocumentSignature;
+use App\Models\QuotationDocumentVersion;
+use App\Models\QuotationPowerOfAttorneyVersion;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -11,7 +13,9 @@ use Illuminate\Validation\ValidationException;
 
 final class ElectronicSignatureService
 {
-    public const APPROVAL_INTENT = 'ข้าพเจ้าได้ตรวจสอบใบเสนอราคา Revision นี้และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว';
+    public const APPROVAL_INTENT = 'ข้าพเจ้าได้ตรวจสอบใบเสนอราคาและชุดเอกสารประกอบ Revision นี้ และอนุมัติให้ดำเนินการตามข้อมูลดังกล่าว';
+
+    public const LEGACY_APPROVAL_INTENT = 'ข้าพเจ้าได้ตรวจสอบใบเสนอราคา Revision นี้และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว';
 
     public const PO_DIRECT_APPROVAL_INTENT = 'ข้าพเจ้าได้ตรวจสอบใบสั่งซื้อของลูกค้าและข้อมูลเปิดบิลรายการนี้แล้ว และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว';
 
@@ -36,13 +40,6 @@ final class ElectronicSignatureService
         if (! Hash::check($password, (string) $user->password_hash)) {
             throw ValidationException::withMessages(['password' => 'รหัสผ่านสำหรับยืนยันลายมือชื่อไม่ถูกต้อง']);
         }
-        $expectedIntent = $bill->workflow_type === 'customer_po_direct'
-            ? self::PO_DIRECT_APPROVAL_INTENT
-            : self::APPROVAL_INTENT;
-        if (! hash_equals($expectedIntent, trim($intent))) {
-            throw ValidationException::withMessages(['intent' => 'ข้อความแสดงเจตนาอนุมัติไม่ตรงกับข้อความที่ระบบกำหนด']);
-        }
-
         $bill->loadMissing('items');
         $documents = DB::table('billing_documents')
             ->where('bill_id', $bill->bill_id)
@@ -51,6 +48,30 @@ final class ElectronicSignatureService
             ->get(['document_type', 'file_name', 'version_no', 'sha256'])
             ->map(fn (object $document): array => (array) $document)
             ->all();
+        $quotationDocument = null;
+        $powerOfAttorney = null;
+        if ($bill->workflow_type !== 'customer_po_direct' && $bill->ref_qt_id) {
+            $quotationDocument = QuotationDocumentVersion::query()
+                ->where('document_version_id', $bill->quotation_document_version_id)
+                ->where('bill_id', $bill->bill_id)
+                ->where('qt_id', $bill->ref_qt_id)
+                ->first();
+            if (! $quotationDocument) {
+                throw ValidationException::withMessages([
+                    'quotation_document' => 'ไม่พบ PDF ใบเสนอราคาฉบับที่ Sale ยืนยัน จึงยังอนุมัติไม่ได้',
+                ]);
+            }
+            $powerOfAttorney = QuotationPowerOfAttorneyVersion::query()
+                ->where('document_version_id', $quotationDocument->document_version_id)
+                ->where('bill_id', $bill->bill_id)
+                ->first();
+        }
+        $expectedIntent = $bill->workflow_type === 'customer_po_direct'
+            ? self::PO_DIRECT_APPROVAL_INTENT
+            : ($powerOfAttorney ? self::APPROVAL_INTENT : self::LEGACY_APPROVAL_INTENT);
+        if (! hash_equals($expectedIntent, trim($intent))) {
+            throw ValidationException::withMessages(['intent' => 'ข้อความแสดงเจตนาอนุมัติไม่ตรงกับข้อความที่ระบบกำหนด']);
+        }
         $snapshot = $this->canonicalize([
             'bill' => $bill->only([
                 'bill_id', 'ref_qt_id', 'revision_no', 'bill_date', 'buyer_name', 'tax_id', 'address_note',
@@ -63,6 +84,19 @@ final class ElectronicSignatureService
                 'quantity', 'unit_price', 'sale_discount_unit', 'line_total_before_discount', 'line_total',
             ]))->values()->all(),
             'evidence_documents' => $documents,
+            'quotation_document' => $quotationDocument ? [
+                'document_version_id' => (int) $quotationDocument->document_version_id,
+                'template_id' => (string) $quotationDocument->template_id,
+                'document_mode' => (string) $quotationDocument->document_mode,
+                'revision_no' => (int) $quotationDocument->revision_no,
+                'filename' => (string) $quotationDocument->filename,
+                'pdf_sha256' => (string) $quotationDocument->pdf_sha256,
+            ] : null,
+            'power_of_attorney' => $powerOfAttorney ? [
+                'authorization_version_id' => (int) $powerOfAttorney->authorization_version_id,
+                'document_version_id' => (int) $powerOfAttorney->document_version_id,
+                'draft_pdf_sha256' => (string) $powerOfAttorney->draft_pdf_sha256,
+            ] : null,
             'intent' => $expectedIntent,
             'visual_signature' => [
                 'signature_asset_id' => (int) $signatureAsset->signature_asset_id,

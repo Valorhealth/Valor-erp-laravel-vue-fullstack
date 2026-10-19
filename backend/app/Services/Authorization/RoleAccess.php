@@ -22,6 +22,7 @@ final class RoleAccess
             ['key' => 'create_bill', 'label' => 'สร้างใบเสนอราคา/เปิดบิลใหม่', 'path' => '/bills/new', 'icon' => '🌼'],
             ['key' => 'edit_bill', 'label' => 'แก้ไขบิล/Draft(ใบเสนอราคา)', 'path' => '/bills/edit', 'icon' => '🖊️'],
             ['key' => 'sales_documents', 'label' => 'ศูนย์จัดการเอกสาร', 'path' => '/sales-documents', 'icon' => '🧾'],
+            ['key' => 'my_document_preparation_status', 'label' => 'ติดตามสถานะเอกสาร', 'path' => '/my-document-preparation-status', 'icon' => '🔎'],
             ['key' => 'my_billing_history', 'label' => 'ประวัติการเปิดบิลของฉัน', 'path' => '/billing-records/my', 'icon' => '◷'],
             ['key' => 'credit_request_status', 'label' => 'ติดตามอนุมัติวงเงิน', 'path' => '/credit-requests', 'icon' => '💵'],
             ['key' => 'sales_call_entry', 'label' => 'บันทึก Call Sale', 'path' => '/sales-call-entry', 'icon' => '☎️'],
@@ -46,6 +47,7 @@ final class RoleAccess
             ['key' => 'credit_profiles', 'label' => 'จัดการเครดิตลูกค้า', 'path' => '/credit-profiles', 'icon' => '💼'],
             ['key' => 'user_management', 'label' => 'จัดการผู้ใช้งาน', 'path' => '/users', 'icon' => '🤵'],
             ['key' => 'document_center', 'label' => 'ศูนย์จัดการเอกสาร', 'path' => '/document-center', 'icon' => '🧾'],
+            ['key' => 'document_preparation_queue', 'label' => 'คิวงานจัดเตรียมเอกสาร', 'path' => '/document-preparation-queue', 'icon' => '☑️'],
             ['key' => 'all_bills', 'label' => 'รายการบิลทั้งหมด', 'path' => '/billing-records/all', 'icon' => '▤'],
             ['key' => 'calendar', 'label' => 'ตารางงาน', 'path' => '/calendar', 'icon' => '📆'],
             ['key' => 'equipment_booking', 'label' => 'ตารางจองเครื่อง FibroScan', 'path' => '/fibroscan-bookings', 'icon' => '🩺'],
@@ -67,6 +69,7 @@ final class RoleAccess
             'role_group' => $group,
             'abilities' => array_values(array_unique([
                 'notice_board',
+                'user_settings',
                 ...array_column($menu, 'key'),
             ])),
             'menu' => $menu,
@@ -193,15 +196,14 @@ final class RoleAccess
         $approve = self::MENUS[self::GROUP_APPROVE];
 
         return [
-            ...array_slice($sale, 0, 5),
-            $sale[5],
+            ...array_slice($sale, 0, 7),
             $approve[5],
-            ...array_slice($admin, 0, 5),
+            ...array_slice($admin, 0, 6),
             ...array_slice($approve, 0, 5),
             ['key' => 'audit_logs', 'label' => 'บันทึกกิจกรรมระบบ', 'path' => '/audit-logs', 'icon' => '▤'],
             $approve[8],
-            $admin[6],
             $admin[7],
+            $admin[8],
         ];
     }
 

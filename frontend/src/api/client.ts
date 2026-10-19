@@ -22,7 +22,7 @@ function responseFilename(contentDisposition?: string): string | null {
   return contentDisposition.match(/filename="?([^";]+)"?/i)?.[1] ?? null
 }
 
-export async function downloadFile(url: string, filename?: string, method: 'get' | 'post' = 'get', data?: unknown): Promise<void> {
+export async function downloadFile(url: string, filename?: string, method: 'get' | 'post' = 'get', data?: unknown, throwOnError = false): Promise<void> {
   try {
     const response = await api.request<Blob>({ url, method, data, responseType: 'blob' })
     const objectUrl = URL.createObjectURL(response.data)
@@ -44,6 +44,7 @@ export async function downloadFile(url: string, filename?: string, method: 'get'
         message = payload.message || message
       } catch { /* response ไม่ใช่ JSON */ }
     }
+    if (throwOnError) throw new Error(message)
     window.alert(`ดาวน์โหลดเอกสารไม่สำเร็จ\n${message}`)
   }
 }

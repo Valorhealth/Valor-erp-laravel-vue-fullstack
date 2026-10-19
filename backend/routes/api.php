@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\CreditProfileController;
 use App\Http\Controllers\Api\CreditRequestController;
 use App\Http\Controllers\Api\CustomerAcceptanceController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\DocumentPreparationController;
 use App\Http\Controllers\Api\FibroscanBookingController;
 use App\Http\Controllers\Api\FibroscanMachineController;
 use App\Http\Controllers\Api\HealthController;
@@ -26,6 +27,8 @@ use App\Http\Controllers\Api\SalesCallController;
 use App\Http\Controllers\Api\SalesCallLookupOptionController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\UserManagementController;
+use App\Http\Controllers\Api\UserNotificationController;
+use App\Http\Controllers\Api\UserSettingsController;
 use App\Http\Controllers\Api\UserSignatureController;
 use Illuminate\Support\Facades\Route;
 
@@ -47,27 +50,37 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
     Route::middleware(['auth:sanctum', 'password.current', 'audit'])->group(function (): void {
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
+        Route::get('/settings', [UserSettingsController::class, 'show']);
+        Route::put('/settings', [UserSettingsController::class, 'update']);
+        Route::put('/settings/phone', [UserSettingsController::class, 'updatePhone']);
+        Route::put('/settings/profile', [UserSettingsController::class, 'updateProfile'])->middleware('throttle:10,1');
+        Route::put('/settings/password', [UserSettingsController::class, 'updatePassword'])->middleware('throttle:5,1');
+        Route::get('/settings/signature', [UserSignatureController::class, 'showMine']);
+        Route::post('/settings/signature', [UserSignatureController::class, 'storeMine'])->middleware('throttle:5,1');
+        Route::get('/notifications', [UserNotificationController::class, 'index']);
+        Route::patch('/notifications/read-all', [UserNotificationController::class, 'readAll']);
+        Route::patch('/notifications/{notification}/read', [UserNotificationController::class, 'read']);
         Route::get('/dashboard', DashboardController::class)->middleware('ability:dashboard_stats');
-        Route::post('/dashboard/report', [DashboardController::class, 'report'])->middleware('ability:dashboard_stats');
+        Route::post('/dashboard/report', [DashboardController::class, 'report'])->middleware(['ability:dashboard_stats', 'throttle:5,1']);
         Route::get('/audit-logs', [AuditLogController::class, 'index'])->middleware('ability:audit_logs');
         Route::get('/budget/models', [BudgetAnalysisController::class, 'models'])->middleware('ability:budget_analysis');
-        Route::post('/budget/analyze', [BudgetAnalysisController::class, 'analyze'])->middleware('ability:budget_analysis');
+        Route::post('/budget/analyze', [BudgetAnalysisController::class, 'analyze'])->middleware(['ability:budget_analysis', 'throttle:3,1']);
         Route::get('/budget/{analysisId}/status', [BudgetAnalysisController::class, 'status'])->middleware('ability:budget_analysis');
-        Route::get('/budget/{analysisId}/preview', [BudgetAnalysisController::class, 'preview'])->middleware('ability:budget_analysis');
-        Route::get('/budget/{analysisId}/download', [BudgetAnalysisController::class, 'download'])->middleware('ability:budget_analysis');
+        Route::get('/budget/{analysisId}/preview', [BudgetAnalysisController::class, 'preview'])->middleware(['ability:budget_analysis', 'throttle:30,1']);
+        Route::get('/budget/{analysisId}/download', [BudgetAnalysisController::class, 'download'])->middleware(['ability:budget_analysis', 'throttle:10,1']);
         Route::delete('/budget', [BudgetAnalysisController::class, 'clear'])->middleware('ability:budget_analysis');
         Route::get('/sales-calls', [SalesCallController::class, 'index'])->middleware('ability:sales_call_report');
         Route::get('/sales-calls/dashboard', [SalesCallController::class, 'dashboard'])->middleware('ability:sales_call_report');
-        Route::get('/sales-calls/export.xlsx', [SalesCallController::class, 'exportExcel'])->middleware('ability:sales_call_report');
-        Route::get('/sales-calls/dashboard.pdf', [SalesCallController::class, 'exportDashboard'])->middleware('ability:sales_call_report');
+        Route::get('/sales-calls/export.xlsx', [SalesCallController::class, 'exportExcel'])->middleware(['ability:sales_call_report', 'throttle:10,1']);
+        Route::get('/sales-calls/dashboard.pdf', [SalesCallController::class, 'exportDashboard'])->middleware(['ability:sales_call_report', 'throttle:10,1']);
         Route::get('/sales-calls/history', [SalesCallController::class, 'history'])->middleware('ability:sales_call_entry');
         Route::delete('/sales-calls/history', [SalesCallController::class, 'deleteHistory'])->middleware('ability:sales_call_entry');
         Route::get('/sales-calls/period', [SalesCallController::class, 'period'])->middleware('ability:sales_call_entry');
         Route::put('/sales-calls/period', [SalesCallController::class, 'savePeriod'])->middleware('ability:sales_call_entry');
         Route::get('/sales-calls/day', [SalesCallController::class, 'day'])->middleware('ability:sales_call_entry');
         Route::put('/sales-calls/day', [SalesCallController::class, 'saveDay'])->middleware('ability:sales_call_entry');
-        Route::post('/sales-calls/import/preview', [SalesCallController::class, 'importPreview'])->middleware('ability:sales_call_entry');
-        Route::post('/sales-calls/import', [SalesCallController::class, 'import'])->middleware('ability:sales_call_entry');
+        Route::post('/sales-calls/import/preview', [SalesCallController::class, 'importPreview'])->middleware(['ability:sales_call_entry', 'throttle:5,1']);
+        Route::post('/sales-calls/import', [SalesCallController::class, 'import'])->middleware(['ability:sales_call_entry', 'throttle:5,1']);
         Route::get('/sales-calls/submissions', [SalesCallController::class, 'submissions'])->middleware('ability:sales_call_report');
         Route::delete('/sales-calls/months', [SalesCallController::class, 'deleteMonths'])->middleware('ability:sales_call_report');
         Route::get('/sales-calls/imports/{batch}/download', [SalesCallController::class, 'downloadImport'])->middleware('ability:sales_call_report');
@@ -84,8 +97,8 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
             ->middleware('ability:create_bill,edit_bill,system_admin,master_data,credit_profiles,approve_bills');
         Route::get('/reference-data/locations', [ReferenceDataController::class, 'locations'])
             ->middleware('ability:create_bill,edit_bill');
-        Route::post('/receipt-ocr', ReceiptOcrController::class)->middleware('ability:create_bill');
-        Route::post('/purchase-orders/scan', PurchaseOrderScanController::class)->middleware('ability:create_bill');
+        Route::post('/receipt-ocr', ReceiptOcrController::class)->middleware(['ability:create_bill', 'throttle:10,1']);
+        Route::post('/purchase-orders/scan', PurchaseOrderScanController::class)->middleware(['ability:create_bill', 'throttle:10,1']);
 
         Route::get('/notices', [NoticeController::class, 'index']);
         Route::post('/notices', [NoticeController::class, 'store'])->middleware('ability:approve_bills,system_admin');
@@ -120,17 +133,35 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
 
         Route::get('/quotations', [QuotationController::class, 'index'])->middleware('ability:create_bill,sales_documents,document_center');
         Route::post('/quotations', [QuotationController::class, 'store'])->middleware('ability:create_bill');
+        Route::get('/quotation-templates', [QuotationController::class, 'templates'])->middleware('ability:sales_documents,document_center,approve_bills,system_admin');
+        Route::get('/quotation-document-help-requests', [QuotationController::class, 'helpRequests'])->middleware('ability:system_admin');
         Route::get('/quotations/{quotation}', [QuotationController::class, 'show'])->middleware('ability:create_bill,sales_documents,document_center');
         Route::get('/quotations/{quotation}/revisions', [QuotationController::class, 'revisions'])->middleware('ability:create_bill,sales_documents,document_center');
+        Route::get('/quotations/{quotation}/document-editor', [QuotationController::class, 'editor'])->middleware('ability:sales_documents,document_center,approve_bills,system_admin');
+        Route::put('/quotations/{quotation}/document-editor/draft', [QuotationController::class, 'saveEditorDraft'])->middleware('ability:sales_documents,document_center,system_admin');
+        Route::post('/quotations/{quotation}/document-editor/help-request', [QuotationController::class, 'requestEditorHelp'])->middleware('ability:sales_documents,document_center');
+        Route::patch('/quotations/{quotation}/document-editor/help-request/{helpRequest}', [QuotationController::class, 'updateEditorHelp'])->middleware('ability:sales_documents,document_center,system_admin');
+        Route::post('/quotations/{quotation}/document-editor/preview', [QuotationController::class, 'previewEditor'])->middleware(['ability:sales_documents,document_center,approve_bills,system_admin', 'throttle:30,1']);
+        Route::post('/quotations/{quotation}/document-editor/preview.html', [QuotationController::class, 'previewEditorHtml'])->middleware('ability:sales_documents,document_center,approve_bills,system_admin');
+        Route::post('/quotations/{quotation}/document-editor/power-of-attorney/preview', [QuotationController::class, 'previewPowerOfAttorney'])->middleware('ability:sales_documents,document_center,approve_bills,system_admin');
+        Route::post('/quotations/{quotation}/document-editor/power-of-attorney/preview.html', [QuotationController::class, 'previewPowerOfAttorneyHtml'])->middleware('ability:sales_documents,document_center,approve_bills,system_admin');
+        Route::post('/quotations/{quotation}/document-editor/confirm', [QuotationController::class, 'confirmEditor'])->middleware('ability:sales_documents,document_center,system_admin');
+        Route::get('/quotations/{quotation}/document-versions/{version}/pdf', [QuotationController::class, 'editorVersionPdf'])->middleware('ability:sales_documents,document_center,approve_bills,system_admin');
         Route::get('/quotations/{quotation}/pdf', [QuotationController::class, 'pdf'])->middleware('ability:sales_documents,document_center,approve_bills');
-        Route::post('/quotations/{quotation}/custom-name-pdf', [QuotationController::class, 'customNamePdf'])->middleware('ability:sales_documents,document_center');
         Route::post('/quotations/{quotation}/create-bill', [BillingWorkflowController::class, 'createFromQuotation'])->middleware('ability:create_bill');
         Route::post('/purchase-orders/create-bill', [BillingWorkflowController::class, 'createFromPurchaseOrder'])->middleware('ability:create_bill');
 
         Route::get('/bills/pending-approval', [BillingWorkflowController::class, 'pendingApproval'])->middleware('ability:approve_bills');
+        Route::get('/bills/{bill}/approval-quotation', [BillingWorkflowController::class, 'approvalQuotation'])->middleware('ability:approve_bills,system_admin');
+        Route::get('/bills/{bill}/approval-power-of-attorney', [BillingWorkflowController::class, 'approvalPowerOfAttorney'])->middleware('ability:approve_bills,system_admin');
         Route::get('/bills/ready-export', [BillingWorkflowController::class, 'readyForExport'])->middleware('ability:system_admin');
+        Route::get('/document-preparation-queue', [DocumentPreparationController::class, 'index'])->middleware('ability:document_preparation_queue');
+        Route::patch('/document-preparation-queue/{preparationItem}', [DocumentPreparationController::class, 'update'])->middleware('ability:document_preparation_queue');
+        Route::get('/my-document-preparation-status', [DocumentPreparationController::class, 'mine'])->middleware('ability:my_document_preparation_status');
         Route::post('/bills/export', [BillingWorkflowController::class, 'export'])->middleware('ability:system_admin');
         Route::post('/bills/export-quotations.pdf', [BillingWorkflowController::class, 'exportQuotationsPdf'])->middleware('ability:system_admin');
+        Route::post('/bills/{bill}/quotation-from-po', [QuotationController::class, 'fromPurchaseOrder'])
+            ->middleware('ability:sales_documents,document_center,approve_bills');
         Route::post('/bills/complete-all', [BillingWorkflowController::class, 'completeAll'])->middleware('ability:system_admin');
         Route::get('/bills/{bill}', [BillingWorkflowController::class, 'show'])
             ->middleware('ability:edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
@@ -144,6 +175,10 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
             ->middleware('ability:create_bill,edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
         Route::post('/bills/{bill}/approve', [BillingWorkflowController::class, 'approve'])->middleware('ability:approve_bills');
         Route::get('/bills/{bill}/approval-certificate', [BillingWorkflowController::class, 'approvalCertificate'])
+            ->middleware('ability:edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
+        Route::get('/bills/{bill}/power-of-attorney', [BillingWorkflowController::class, 'powerOfAttorney'])
+            ->middleware('ability:edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
+        Route::get('/bills/{bill}/power-of-attorney-preview', [BillingWorkflowController::class, 'powerOfAttorneyPreview'])
             ->middleware('ability:edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
         Route::post('/bills/{bill}/reject', [BillingWorkflowController::class, 'reject'])->middleware('ability:approve_bills');
         Route::post('/bills/{bill}/decline', [BillingWorkflowController::class, 'decline'])->middleware('ability:approve_bills');
@@ -160,9 +195,14 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::post('/master-data/salesmen', [MasterDataController::class, 'storeSalesman'])->middleware('ability:master_data');
         Route::delete('/master-data/salesmen/{salesman}', [MasterDataController::class, 'destroySalesman'])->middleware('ability:master_data');
         Route::post('/master-data/products', [MasterDataController::class, 'storeProduct'])->middleware('ability:master_data');
+        Route::put('/master-data/products/{product}', [MasterDataController::class, 'updateProduct'])->middleware('ability:master_data');
+        Route::get('/master-data/units', [MasterDataController::class, 'units'])->middleware('ability:master_data');
+        Route::post('/master-data/units', [MasterDataController::class, 'storeUnit'])->middleware('ability:master_data');
+        Route::delete('/master-data/units/{unit}', [MasterDataController::class, 'destroyUnit'])->middleware('ability:master_data');
 
         Route::get('/users', [UserManagementController::class, 'index'])->middleware('ability:user_management');
         Route::get('/users/permission-catalog', [UserManagementController::class, 'permissionCatalog'])->middleware('ability:user_management');
+        Route::get('/users/salesmen', [UserManagementController::class, 'salesmen'])->middleware('ability:user_management');
         Route::post('/users', [UserManagementController::class, 'store'])->middleware('ability:user_management');
         Route::put('/users/{user}', [UserManagementController::class, 'update'])->middleware('ability:user_management');
         Route::post('/users/{user}/signature', [UserSignatureController::class, 'store'])->middleware('ability:user_management');

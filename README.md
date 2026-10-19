@@ -50,7 +50,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify-project.ps1
 
 ก่อน deploy รุ่นตารางจองเครื่อง FibroScan ให้รัน [`database/schema/fibroscan_booking.sql`](database/schema/fibroscan_booking.sql) หนึ่งครั้ง ไฟล์นี้สร้างทะเบียนเครื่อง ตารางจอง และ PostgreSQL Exclusion Constraint สำหรับป้องกันการจองเครื่องเดียวกันในช่วงเวลาซ้อนกัน
 
-การเชื่อม Supabase ผ่าน Session Pooler พอร์ต `5432` ต้องตั้ง `DB_PERSISTENT=false` ทั้ง Local และ Render เพื่อไม่ให้ PHP-FPM ยึด connection ค้างจน pgAdmin เข้าไม่ได้ โดยระบบเลขใบเสนอราคายังคงใช้ PostgreSQL Advisory Lock ตามเดิม
+ก่อน deploy รุ่น Quotation Inline Editor ให้รัน [`database/schema/quotation_document_editor.sql`](database/schema/quotation_document_editor.sql) หนึ่งครั้ง ไฟล์นี้เพิ่ม Draft แบบ Autosave และเอกสาร PDF Revision ที่เก็บ Snapshot พร้อม SHA-256 โดยไม่เปลี่ยนข้อมูลใบเสนอราคาเดิม
+
+Local หรือ Supabase Session Pooler พอร์ต `5432` ให้ใช้ `DB_PERSISTENT=false` ตามเดิม ส่วน Render ที่เชื่อมผ่าน Transaction Pooler พอร์ต `6543` ตั้ง `DB_PERSISTENT=true` เพื่อให้ PHP-FPM นำ client connection กลับมาใช้ซ้ำ โดย `pm.max_children=5` จำกัดจำนวน connection ค้างไว้ไม่เกิน 5 รายการ หากเปลี่ยน `DB_URL` กลับไปใช้พอร์ต `5432` ต้องเปลี่ยนค่านี้กลับเป็น `false`
 
 หากติดตั้ง Python ใหม่สำหรับเครื่อง Local ให้ใช้ `pip install -r backend/requirements-budget-local-ai.txt` ส่วน Docker/Render ใช้ชุดประหยัด RAM จาก `backend/requirements-budget.txt`
 

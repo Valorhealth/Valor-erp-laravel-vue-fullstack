@@ -460,7 +460,9 @@ final class SalesCallImportService
         if ($text === null) {
             return null;
         }
-        if (! preg_match('/^(\d{1,4})[\/\-.](\d{1,2})[\/\-.](\d{1,4})$/u', $text, $matches)) {
+        // PhpSpreadsheet may return a date-only Excel cell as
+        // "YYYY-MM-DD 00:00:00" even when read-data-only mode is enabled.
+        if (! preg_match('/^(\d{1,4})[\/\-.](\d{1,2})[\/\-.](\d{1,4})(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/u', $text, $matches)) {
             return null;
         }
 

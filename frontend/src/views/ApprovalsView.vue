@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import StatusPill from '../components/StatusPill.vue'
 import { auth } from '../stores/auth'
 import type { BillingRecord, CreditRequest, Paginated } from '../types/api'
 import { apiError, money, shortDate } from '../utils/format'
+import { preferredRowsPerPage } from '../utils/preferences'
 
 const bills = ref<BillingRecord[]>([])
+const quotationReview = ref<{ bill: BillingRecord; quotationUrl: string; authorizationUrl: string } | null>(null)
+const quotationReviewLoading = ref<number | null>(null)
 const credits = ref<CreditRequest[]>([])
 const creditPage = ref<Paginated<CreditRequest> | null>(null)
 const loading = ref(true)
@@ -17,10 +20,20 @@ const rejectBillReasons = reactive<Record<number, string>>({})
 const rejectCreditReasons = reactive<Record<number, string>>({})
 const approvalPasswords = reactive<Record<number, string>>({})
 const approvalConsents = reactive<Record<number, boolean>>({})
-const quotationApprovalIntent = 'ข้าพเจ้าได้ตรวจสอบใบเสนอราคา Revision นี้และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว'
+const quotationApprovalIntent = 'ข้าพเจ้าได้ตรวจสอบใบเสนอราคาและชุดเอกสารประกอบ Revision นี้ และอนุมัติให้ดำเนินการตามข้อมูลดังกล่าว'
+const legacyQuotationApprovalIntent = 'ข้าพเจ้าได้ตรวจสอบใบเสนอราคา Revision นี้และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว'
 const poDirectApprovalIntent = 'ข้าพเจ้าได้ตรวจสอบใบสั่งซื้อของลูกค้าและข้อมูลเปิดบิลรายการนี้แล้ว และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว'
-const approvalIntent = (bill: BillingRecord) => bill.workflow_type === 'customer_po_direct' ? poDirectApprovalIntent : quotationApprovalIntent
+const requiresSubmissionDocument = (bill: BillingRecord, document: string) =>
+  (bill.submission_document_requirements || []).includes(document)
+const approvalIntent = (bill: BillingRecord) => bill.workflow_type === 'customer_po_direct'
+  ? poDirectApprovalIntent
+  : ((bill.submission_document_requirements || []).length ? quotationApprovalIntent : legacyQuotationApprovalIntent)
 const canSignQuotation = () => Boolean(auth.user.value?.quotation_signing_authorized)
+const submissionDocumentLabels: Record<string, string> = {
+  quotation: 'ใบเสนอราคา', power_of_attorney: 'Draft หนังสือมอบอำนาจ', company_affidavit: 'หนังสือรับรองบริษัท',
+  vat_registration: 'ภ.พ.20', grantor_id_copies: 'สำเนาบัตรผู้มอบอำนาจ', representative_id_copy: 'สำเนาบัตรผู้แทน',
+  product_documents: 'เอกสารสินค้า/ใบอนุญาต', other: 'เอกสารอื่นตามข้อกำหนด',
+}
 
 async function load(creditPageNumber = creditPage.value?.current_page || 1) {
   loading.value = true
@@ -29,7 +42,7 @@ async function load(creditPageNumber = creditPage.value?.current_page || 1) {
     const [billResponse, creditResponse] = await Promise.all([
       api.get<{ data: BillingRecord[] }>('/api/v1/bills/pending-approval'),
       api.get<Paginated<CreditRequest>>('/api/v1/credit-requests', {
-        params: { status: 'รออนุมัติวงเงิน', page: creditPageNumber, per_page: 20 },
+        params: { status: 'รออนุมัติวงเงิน', page: creditPageNumber, per_page: preferredRowsPerPage(20) },
       }),
     ])
     bills.value = billResponse.data.data
@@ -62,6 +75,39 @@ async function approveBill(bill: BillingRecord) {
   )
   approvalPasswords[bill.bill_id] = ''
   approvalConsents[bill.bill_id] = false
+}
+
+async function openQuotationReview(bill: BillingRecord) {
+  if (!bill.quotation_document_version_id) {
+    error.value = 'รายการนี้ยังไม่มีใบเสนอราคา PDF ฉบับที่ Sale ยืนยัน กรุณาตีกลับให้ Sale เลือก Template และยืนยันเอกสารก่อน'
+    return
+  }
+  quotationReviewLoading.value = bill.bill_id
+  error.value = ''
+  try {
+    const [quotation, authorization] = await Promise.all([
+      api.get<Blob>(`/api/v1/bills/${bill.bill_id}/approval-quotation`, { responseType: 'blob' }),
+      requiresSubmissionDocument(bill, 'power_of_attorney')
+        ? api.get<Blob>(`/api/v1/bills/${bill.bill_id}/approval-power-of-attorney`, { responseType: 'blob' })
+        : Promise.resolve(null),
+    ])
+    closeQuotationReview()
+    quotationReview.value = {
+      bill,
+      quotationUrl: URL.createObjectURL(quotation.data),
+      authorizationUrl: authorization ? URL.createObjectURL(authorization.data) : '',
+    }
+  } catch (cause) {
+    error.value = apiError(cause, 'เปิดชุดเอกสารใบเสนอราคาและหนังสือมอบอำนาจไม่สำเร็จ')
+  } finally {
+    quotationReviewLoading.value = null
+  }
+}
+
+function closeQuotationReview() {
+  if (quotationReview.value?.quotationUrl) URL.revokeObjectURL(quotationReview.value.quotationUrl)
+  if (quotationReview.value?.authorizationUrl) URL.revokeObjectURL(quotationReview.value.authorizationUrl)
+  quotationReview.value = null
 }
 
 async function declineBill(bill: BillingRecord) {
@@ -107,6 +153,7 @@ function totalDiscount(bill: BillingRecord): number {
 }
 
 onMounted(load)
+onBeforeUnmount(closeQuotationReview)
 </script>
 
 <template>
@@ -333,14 +380,20 @@ onMounted(load)
             </section>
 
             <div class="approval-actions approval-actions--bill">
+              <div class="approval-document-checklist">
+                <strong>เอกสารที่ Sale ระบุว่าต้องใช้ยื่นเสนอราคา</strong>
+                <span v-for="document in (bill.submission_document_requirements || ['quotation'])" :key="document">✓ {{ submissionDocumentLabels[document] || document }}</span>
+              </div>
               <button
                 v-if="bill.ref_qt_id"
                 class="secondary-button"
                 type="button"
-                @click="downloadFile(`/api/v1/quotations/${bill.ref_qt_id}/pdf`)"
+                :disabled="quotationReviewLoading === bill.bill_id || !bill.quotation_document_version_id"
+                @click="openQuotationReview(bill)"
               >
-                ตรวจใบเสนอราคา Revision นี้
+                {{ quotationReviewLoading === bill.bill_id ? 'กำลังเปิด…' : 'ตรวจใบเสนอราคา + หนังสือมอบอำนาจ' }}
               </button>
+              <p v-if="bill.ref_qt_id && !bill.quotation_document_version_id" class="form-error">ยังไม่มี PDF Template ที่ Sale ยืนยัน — ต้องตีกลับให้จัดทำเอกสารก่อนอนุมัติ</p>
               <div class="approval-signature-confirmation">
                 <strong>ยืนยันลายมือชื่ออิเล็กทรอนิกส์ทั่วไป</strong>
                 <p v-if="!canSignQuotation()" class="form-error">บัญชีนี้ยังไม่ได้รับการกำหนดสิทธิ์ลงนาม โปรดให้ Super Admin ตรวจหนังสือมอบอำนาจและเปิดสิทธิ์ในเมนูจัดการผู้ใช้งาน</p>
@@ -362,7 +415,7 @@ onMounted(load)
               </div>
               <button
                 class="primary-button"
-                :disabled="!canSignQuotation() || !approvalConsents[bill.bill_id] || !approvalPasswords[bill.bill_id]"
+                :disabled="!canSignQuotation() || (bill.workflow_type !== 'customer_po_direct' && !bill.quotation_document_version_id) || !approvalConsents[bill.bill_id] || !approvalPasswords[bill.bill_id]"
                 @click="approveBill(bill)"
               >
                 ยืนยันและอนุมัติบิลนี้
@@ -397,5 +450,25 @@ onMounted(load)
         </div>
       </section>
     </template>
+    <Teleport to="body">
+      <div v-if="quotationReview" class="approval-document-overlay" @click.self="closeQuotationReview">
+        <section class="approval-document-dialog" role="dialog" aria-modal="true" aria-label="เอกสารคู่ที่ Sale ยืนยัน">
+          <header><div><p class="eyebrow">SALE CONFIRMED DOCUMENTS</p><h2>เอกสารคู่สำหรับพิจารณาอนุมัติ</h2><small>Template {{ quotationReview.bill.quotation_document_version?.template_id }} · Revision {{ quotationReview.bill.quotation_document_version?.revision_no }} · หนังสือมอบอำนาจ {{ quotationReview.bill.quotation_document_version?.power_of_attorney?.authorization_no }}</small></div><button class="secondary-button" type="button" aria-label="ปิด" @click="closeQuotationReview">×</button></header>
+          <div class="approval-document-grid" :class="{ 'approval-document-grid--single': !quotationReview.authorizationUrl }"><div><h3>ใบเสนอราคา</h3><iframe :src="quotationReview.quotationUrl" title="ใบเสนอราคาที่ Sale ยืนยัน"></iframe></div><div v-if="quotationReview.authorizationUrl"><h3>Draft หนังสือมอบอำนาจ</h3><iframe :src="quotationReview.authorizationUrl" title="Draft หนังสือมอบอำนาจ"></iframe></div></div>
+          <footer><span>{{ quotationReview.authorizationUrl ? 'หนังสือมอบอำนาจเป็น Draft สำหรับตรวจเนื้อหาเท่านั้น ไม่มีลายเซ็นอิเล็กทรอนิกส์' : 'รายการนี้ไม่ได้เลือกใช้หนังสือมอบอำนาจ' }}</span><div><button class="secondary-button" type="button" @click="downloadFile(`/api/v1/bills/${quotationReview.bill.bill_id}/approval-quotation`, quotationReview.bill.quotation_document_version?.filename)">ดาวน์โหลดใบเสนอราคา</button><button v-if="quotationReview.authorizationUrl" class="secondary-button" type="button" @click="downloadFile(`/api/v1/bills/${quotationReview.bill.bill_id}/approval-power-of-attorney`, quotationReview.bill.quotation_document_version?.power_of_attorney?.filename)">ดาวน์โหลด Draft หนังสือมอบอำนาจ</button></div></footer>
+        </section>
+      </div>
+    </Teleport>
   </AppShell>
 </template>
+
+<style scoped>
+.approval-document-overlay{position:fixed;inset:0;z-index:2200;display:grid;place-items:center;padding:18px;background:rgba(15,23,42,.72)}
+.approval-document-dialog{display:grid;grid-template-rows:auto minmax(0,1fr) auto;width:min(1500px,98vw);height:min(94vh,1080px);overflow:hidden;border-radius:16px;background:#fff;box-shadow:0 28px 90px rgba(0,0,0,.35)}
+.approval-document-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0;padding:12px}.approval-document-grid>div{display:grid;grid-template-rows:auto minmax(0,1fr);min-width:0;min-height:0}.approval-document-grid h3{margin:0 0 8px;font-size:15px}.approval-document-dialog footer>div{display:flex;flex-wrap:wrap;gap:8px}
+.approval-document-grid--single{grid-template-columns:1fr}
+.approval-document-checklist{display:flex;flex-wrap:wrap;align-items:center;gap:7px;width:100%;padding:10px 12px;border:1px solid #dbe3ec;border-radius:10px;background:#f8fafc}.approval-document-checklist strong{width:100%;font-size:.78rem}.approval-document-checklist span{padding:4px 8px;border-radius:999px;background:#ecfdf5;color:#047857;font-size:.72rem}
+.approval-document-dialog header,.approval-document-dialog footer{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px}.approval-document-dialog header{border-bottom:1px solid var(--line)}.approval-document-dialog footer{border-top:1px solid var(--line)}.approval-document-dialog h2{margin:2px 0}.approval-document-dialog small{display:block;max-width:820px;overflow-wrap:anywhere;color:#64748b}.approval-document-dialog iframe{width:100%;height:100%;border:0;background:#e5e7eb}
+@media(max-width:640px){.approval-document-overlay{padding:0}.approval-document-dialog{width:100vw;height:100dvh;border-radius:0}.approval-document-dialog header,.approval-document-dialog footer{align-items:flex-start;flex-direction:column}.approval-document-dialog footer button{width:100%}}
+@media(max-width:900px){.approval-document-grid{grid-template-columns:1fr;overflow-y:auto}.approval-document-grid>div{height:65vh}}
+</style>

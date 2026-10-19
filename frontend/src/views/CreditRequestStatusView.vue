@@ -5,6 +5,7 @@ import AppShell from '../components/AppShell.vue'
 import StatusPill from '../components/StatusPill.vue'
 import type { CreditRequest, Paginated } from '../types/api'
 import { apiError, money, shortDate } from '../utils/format'
+import { preferredRowsPerPage } from '../utils/preferences'
 
 interface CreditRequestPage extends Paginated<CreditRequest> { status_summary: Record<string, number> }
 const requests = ref<CreditRequestPage | null>(null)
@@ -14,7 +15,7 @@ const count = (status: string) => requests.value?.status_summary?.[status] || 0
 async function load(page = 1) {
   error.value = ''
   try {
-    const response = await api.get<CreditRequestPage>('/api/v1/credit-requests', { params: { page, per_page: 20 } })
+    const response = await api.get<CreditRequestPage>('/api/v1/credit-requests', { params: { page, per_page: preferredRowsPerPage(20) } })
     requests.value = response.data
   } catch (cause) { error.value = apiError(cause) }
 }

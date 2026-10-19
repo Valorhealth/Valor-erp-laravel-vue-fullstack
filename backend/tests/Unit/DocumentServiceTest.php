@@ -8,6 +8,7 @@ use App\Models\Quotation;
 use App\Models\QuotationItem;
 use App\Models\User;
 use App\Services\Documents\DocumentService;
+use App\Services\Documents\QuotationTemplateCatalog;
 use App\Services\Documents\ThaiBahtText;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
@@ -45,6 +46,155 @@ class DocumentServiceTest extends TestCase
         $customPdf = $documents->quotationPdf($quotation, itemNameOverrides: [10 => 'ชื่อสินค้าตามโรงพยาบาล']);
         $this->assertStringStartsWith('%PDF-', $customPdf);
         $this->assertSame('สินค้าทดสอบ', $quotation->items->first()->sub_category);
+    }
+
+    #[Test]
+    public function it_renders_each_hospital_quotation_with_its_own_columns_and_terms(): void
+    {
+        $quotation = new Quotation([
+            'qt_no' => 'AV-TEST-2026', 'qt_date' => '2026-10-14', 'buyer_name' => 'โรงพยาบาลทดสอบ',
+            'created_by' => 'P\'Test Sale', 'bill_note' => 'เงื่อนไขจากรายการขาย', 'total_amount' => 1070,
+            'sale_discount_total' => 0,
+        ]);
+        $quotation->qt_id = 100;
+        $quotation->setRelation('creator', new User([
+            'department' => 'VH002', 'first_name' => 'Anurak', 'last_name' => 'Sale', 'phone' => '084-679-6542',
+        ]));
+        $quotation->setRelation('items', collect([
+            new QuotationItem([
+                'qt_item_id' => 1, 'main_category' => 'SKU-01', 'sub_category' => 'สินค้าทดสอบ',
+                'unit_type' => 'ชิ้น', 'quantity' => 2, 'unit_price' => 535,
+                'line_total_before_discount' => 1070, 'line_total' => 1070,
+            ]),
+        ]));
+        $documents = new DocumentService(new ThaiBahtText);
+        $expectations = [
+            QuotationTemplateCatalog::SIRIRAJ => ['คณะแพทยศาสตร์ศิริราชพยาบาล', 'รหัสเวชภัณฑ์', 'จำนวนและขนาดบรรจุ'],
+            QuotationTemplateCatalog::LUANGPHO_THAWEESAK => ['โรงพยาบาลหลวงพ่อทวีศักดิ์', 'Pcode', 'Gross Amount', 'Value Added Tax 7%'],
+            QuotationTemplateCatalog::POLICE_GENERAL => ['โรงพยาบาลตำรวจ', 'ขอเสนอราคาวัสดุอุปกรณ์ทางการแพทย์', 'ผลิตภัณฑ์ AVANOS ประเทศสหรัฐอเมริกา'],
+            QuotationTemplateCatalog::CHAROENKRUNG_PRACHARAK => ['โรงพยาบาลเจริญกรุงประชารักษ์', 'กำหนดยืนราคา 360 วัน', '101-242025-0'],
+            QuotationTemplateCatalog::RAMATHIBODI => ['โรงพยาบาลรามาธิบดี', 'ลักษณะนาม', 'ผู้ใช้งานรับทราบการเปลี่ยนแปลงชื่อเวชภัณฑ์', '(ผู้แทนขาย Anurak Sale)', 'โทร. 084-679-6542'],
+            QuotationTemplateCatalog::SIRIRAJ_PIYAMAHARAJKARUN => ['โรงพยาบาลศิริราช ปิยมหาราชการุณย์', 'รหัส SAP', 'ยอดขั้นต่ำในการเปิดบิล 1,000 บาท'],
+        ];
+
+        foreach ($expectations as $template => $needles) {
+            $html = $documents->quotationPdf($quotation, htmlOnly: true, template: $template);
+            $this->assertStringContainsString('SKU-01', $html);
+            $this->assertStringContainsString('สินค้าทดสอบ', $html);
+            foreach ($needles as $needle) {
+                $this->assertStringContainsString($needle, $html, $template);
+            }
+            $pdf = $documents->quotationPdf($quotation, template: $template);
+            $this->assertStringStartsWith('%PDF-', $pdf, $template);
+            $this->assertGreaterThan(5000, strlen($pdf), $template);
+        }
+    }
+
+    #[Test]
+    public function it_renders_an_editor_snapshot_with_inline_overrides_and_without_an_automatic_signature_image(): void
+    {
+        $payload = [
+            'template' => QuotationTemplateCatalog::POLICE_GENERAL,
+            'mode' => 'revised',
+            'document' => [
+                'number' => 'AV-CUSTOM-001/R2',
+                'date' => '2026-10-14',
+                'subject' => 'หัวข้อที่แก้ไขจากหน้าเอกสาร',
+                'recipient' => 'ผู้อำนวยการโรงพยาบาลตัวอย่าง',
+                'intro' => 'ข้อความเกริ่นนำฉบับแก้ไข',
+                'salesperson' => 'P\'Editor Sale',
+                'signature_role' => 'ผู้เสนอราคา',
+                'contact' => 'ติดต่อ 02-000-0000',
+            ],
+            'items' => [[
+                'row_key' => '1', 'sku' => 'SKU-EDIT', 'description' => 'ชื่อสินค้าฉบับโรงพยาบาล',
+                'quantity' => 2, 'unit' => 'กล่อง', 'pack' => '10 ชิ้น/กล่อง', 'unit_price' => 535,
+                'discount' => 0, 'remark' => 'หมายเหตุรายการ',
+            ]],
+            'bill_discount' => 0,
+            'terms' => ['เงื่อนไขที่ Sale แก้ไขเอง'],
+        ];
+        $documents = new DocumentService(new ThaiBahtText);
+        $html = $documents->quotationEditorPdf($payload, true);
+        $editorHtml = $documents->quotationEditorHtml($payload);
+        $pdf = $documents->quotationEditorPdf($payload);
+
+        $this->assertStringContainsString('หัวข้อที่แก้ไขจากหน้าเอกสาร', $html);
+        $this->assertStringContainsString('ผู้อำนวยการโรงพยาบาลตัวอย่าง', $html);
+        $this->assertStringContainsString('เงื่อนไขที่ Sale แก้ไขเอง', $html);
+        $this->assertStringContainsString('SKU-EDIT', $html);
+        $this->assertStringNotContainsString('data:image/png;base64', $html);
+        $this->assertStringContainsString('data-edit-path="document.subject"', $editorHtml);
+        $this->assertStringContainsString('data-edit-path="items.0.description"', $editorHtml);
+        $this->assertStringContainsString('data-edit-path="terms.0"', $editorHtml);
+        $this->assertStringContainsString('contenteditable="true"', $editorHtml);
+        $this->assertStringContainsString('<body class="editor-mode">', $editorHtml);
+        $this->assertStringContainsString('.editor-mode .footer{position:static', $editorHtml);
+        $this->assertStringContainsString('bottom:-62px', $html);
+        $this->assertStringStartsWith('%PDF-', $pdf);
+        $this->assertGreaterThan(5000, strlen($pdf));
+    }
+
+    #[Test]
+    public function it_restores_mandatory_hospital_wording_when_an_older_payload_is_incomplete(): void
+    {
+        $basePayload = [
+            'mode' => 'original',
+            'document' => [
+                'number' => 'AV-TEST', 'date' => '2026-10-15', 'salesperson' => 'ณัฐริณีย์ เกตุคลองเขิน',
+                'contact' => 'ชื่อผู้แทน และ Client ณัฐริณีย์ เกตุคลองเขิน เบอร์ติดต่อ 092-820 7224',
+            ],
+            'items' => [[
+                'row_key' => '1', 'sku' => '0112-20', 'description' => 'GASTRO TUBE', 'quantity' => 1,
+                'unit' => 'EA', 'pack' => '1 EA', 'unit_price' => 100, 'discount' => 0, 'origin_details' => '',
+            ]],
+            'terms' => [],
+        ];
+        $documents = new DocumentService(new ThaiBahtText);
+
+        foreach ([QuotationTemplateCatalog::LUANGPHO_THAWEESAK, QuotationTemplateCatalog::CHAROENKRUNG_PRACHARAK] as $template) {
+            $html = $documents->quotationEditorPdf([...$basePayload, 'template' => $template], true);
+            $this->assertStringContainsString('ชื่อผู้ผลิต AVENT S.DE.R.L. DE C.V.', $html);
+            $this->assertStringContainsString('ประเทศที่ผลิต United Mexican states.', $html);
+            $this->assertStringContainsString('ไม่มีผลิตในประเทศไทย', $html);
+            $this->assertStringContainsString('ไม่มี มอก. บริษัทเป็นผู้แทนจำหน่ายแต่เพียงผู้เดียว', $html);
+        }
+
+        $rama = $documents->quotationEditorPdf([...$basePayload, 'template' => QuotationTemplateCatalog::RAMATHIBODI], true);
+        $this->assertStringContainsString('ผลิตภัณฑ์จากประเทศ USA', $rama);
+
+        $sirirajPiya = $documents->quotationEditorPdf([...$basePayload, 'template' => QuotationTemplateCatalog::SIRIRAJ_PIYAMAHARAJKARUN], true);
+        $this->assertStringContainsString('โรงพยาบาลศิริราช ปิยมหาราชการุณย์ตรวจพบว่ามีราคาต่างกัน', $sirirajPiya);
+        $this->assertStringContainsString('เงื่อนไขในการแลกเปลี่ยนสินค้าก่อนหมดอายุ.....1....ปี', $sirirajPiya);
+        $this->assertStringContainsString('ยอดขั้นต่ำในการเปิดบิล 1,000 บาท', $sirirajPiya);
+        $this->assertStringContainsString('ชื่อผู้แทน และ Client ณัฐริณีย์ เกตุคลองเขิน เบอร์ติดต่อ 092-820 7224', $sirirajPiya);
+    }
+
+    #[Test]
+    public function it_places_product_origin_in_the_description_and_only_signs_an_approved_copy(): void
+    {
+        $payload = [
+            'template' => QuotationTemplateCatalog::LUANGPHO_THAWEESAK,
+            'mode' => 'original',
+            'document' => ['number' => 'AV-1', 'date' => '2026-10-14', 'recipient' => 'โรงพยาบาลทดสอบ', 'salesperson' => 'ฝ่ายขาย', 'contact' => 'คุณฝ่ายขาย โทร.0812345678'],
+            'items' => [[
+                'sku' => '0112-20', 'description' => 'GASTRO TUBE', 'origin_details' => "ชื่อผู้ผลิต AVENT\nประเทศที่ผลิต United Mexican states.",
+                'quantity' => 1, 'unit' => 'EA', 'pack' => '1 EA', 'unit_price' => 100, 'discount' => 0,
+            ]],
+            'terms' => [],
+        ];
+        $documents = new DocumentService(new ThaiBahtText);
+        $draft = $documents->quotationEditorPdf($payload, true);
+        $signed = $documents->quotationEditorPdf($payload, true, ['name' => 'ผู้อนุมัติ ทดสอบ', 'signature_image' => 'iVBORw0KGgo=']);
+
+        $this->assertStringContainsString('ประเทศที่ผลิต United Mexican states.', $draft);
+        $this->assertStringContainsString('คุณฝ่ายขาย โทร.0812345678', $draft);
+        $this->assertStringNotContainsString('ผู้อนุมัติ ทดสอบ', $draft);
+        $this->assertStringContainsString('ผู้อนุมัติ ทดสอบ', $signed);
+        $this->assertStringContainsString('ผู้มีอำนาจอนุมัติของบริษัท', $signed);
+        $this->assertStringContainsString('data:image/png;base64,iVBORw0KGgo=', $signed);
+        $this->assertLessThan(strpos($signed, 'data:image/png;base64,iVBORw0KGgo='), strpos($signed, 'ขอแสดงความนับถือ'));
+        $this->assertLessThan(strpos($signed, 'ผู้อนุมัติ ทดสอบ'), strpos($signed, 'data:image/png;base64,iVBORw0KGgo='));
     }
 
     #[Test]
@@ -196,6 +346,7 @@ class DocumentServiceTest extends TestCase
             $this->assertSame('AVANOS', $sheet->getCell('G2')->getValue());
             $this->assertSame('AVANOS', $sheet->getCell('H2')->getValue());
             $this->assertSame('AVANOS', $sheet->getCell('I2')->getValue());
+            $this->assertSame('S001', $sheet->getCell('J2')->getValue());
             $this->assertEquals(7, $sheet->getCell('P2')->getValue());
             $this->assertNull($sheet->getCell('Q2')->getValue());
             $this->assertNull($sheet->getCell('R2')->getValue());

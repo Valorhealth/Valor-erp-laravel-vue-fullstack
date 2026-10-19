@@ -24,6 +24,7 @@ class BillingRecordController extends Controller
             'has_po' => ['nullable', 'boolean'],
         ]);
         $search = trim((string) $request->query('search', ''));
+        $recordId = preg_match('/^#?(\d+)$/', $search, $matches) ? (int) $matches[1] : null;
         $status = trim((string) $request->query('status', ''));
         $statusGroup = $filters['status_group'] ?? null;
         $perPage = min(max((int) $request->query('per_page', 20), 5), 100);
@@ -46,6 +47,8 @@ class BillingRecordController extends Controller
                     ->orWhere('tax_id', 'ilike', "%{$search}%")
                     ->orWhere('created_by', 'ilike', "%{$search}%")
                     ->orWhere('customer_po_no', 'ilike', "%{$search}%")
+                    ->orWhereHas('quotation', fn ($quotation) => $quotation->where('qt_no', 'ilike', "%{$search}%"))
+                    ->when($recordId !== null, fn ($lookup) => $lookup->orWhere('bill_id', $recordId))
             ));
 
         $summary = (clone $query)
@@ -65,7 +68,10 @@ class BillingRecordController extends Controller
                 'submitted_at', 'issued_at',
                 'customer_po_no', 'ref_qt_id', 'revision_no',
             ])
-            ->with(['items:item_id,bill_id,main_category,sub_category,customer_product_name,unit_type,quantity,unit_price,sale_discount_unit,line_total_before_discount,line_total'])
+            ->with([
+                'items:item_id,bill_id,main_category,sub_category,customer_product_name,unit_type,quantity,unit_price,sale_discount_unit,line_total_before_discount,line_total',
+                'quotation:qt_id,qt_no',
+            ])
             ->when($request->boolean('has_po'), fn ($query) => $query->with(['documents' => fn ($documents) => $documents
                 ->where('document_type', 'customer_po')
                 ->select(['doc_id', 'bill_id', 'document_type', 'file_name', 'version_no', 'uploaded_at', 'is_current'])]))

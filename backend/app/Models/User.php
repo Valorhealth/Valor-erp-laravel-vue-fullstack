@@ -5,12 +5,13 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Casts\Attribute;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['username', 'password_hash', 'password_changed_at', 'first_name', 'last_name', 'email', 'department', 'role', 'quotation_signing_authorized', 'permission_overrides'])]
+#[Fillable(['username', 'password_hash', 'password_changed_at', 'first_name', 'last_name', 'email', 'phone', 'job_title', 'representative_address', 'national_id', 'national_id_issued_at', 'national_id_expires_at', 'department', 'role', 'salesman_id', 'quotation_signing_authorized', 'permission_overrides', 'preferences'])]
 #[Hidden(['password_hash'])]
 class User extends Authenticatable
 {
@@ -33,6 +34,11 @@ class User extends Authenticatable
             'created_at' => 'datetime',
             'password_changed_at' => 'datetime',
             'quotation_signing_authorized' => 'boolean',
+            'preferences' => 'array',
+            'representative_address' => 'encrypted',
+            'national_id' => 'encrypted',
+            'national_id_issued_at' => 'date:Y-m-d',
+            'national_id_expires_at' => 'date:Y-m-d',
         ];
     }
 
@@ -47,5 +53,15 @@ class User extends Authenticatable
     public function signatureAssets(): HasMany
     {
         return $this->hasMany(UserSignatureAsset::class, 'user_id', 'id');
+    }
+
+    public function salesman(): BelongsTo
+    {
+        return $this->belongsTo(Salesman::class, 'salesman_id', 'id');
+    }
+
+    public function workflowNotifications(): HasMany
+    {
+        return $this->hasMany(UserNotification::class, 'user_id', 'id');
     }
 }

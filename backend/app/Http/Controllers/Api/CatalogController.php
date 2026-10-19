@@ -36,6 +36,7 @@ class CatalogController extends Controller
 
         $products = MasterProduct::query()
             ->select(['sku_code', 'sku_name', 'sku_e_name'])
+            ->with('units:unit_id,unit_name')
             ->when($search !== '', fn ($query) => $query->where(
                 fn ($nested) => $nested
                     ->where('sku_code', 'ilike', "%{$search}%")

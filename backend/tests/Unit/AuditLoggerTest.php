@@ -18,7 +18,13 @@ class AuditLoggerTest extends TestCase
             'password' => 'top-secret',
             'password_confirmation' => 'top-secret',
             'buyer_name' => 'Example Hospital',
-            'nested' => ['token' => 'secret-token', 'quantity' => 3],
+            'national_id' => '1100000000000',
+            'representative_address' => 'Private home address',
+            'nested' => [
+                'oauth_refresh_token' => 'secret-token',
+                'signature_image_sha256' => 'sensitive-signature-fingerprint',
+                'quantity' => 3,
+            ],
         ]);
 
         $payload = app(AuditLogger::class)->sanitizedRequestData($request);
@@ -26,7 +32,10 @@ class AuditLoggerTest extends TestCase
         $this->assertSame('sale01', $payload['username']);
         $this->assertSame('[REDACTED]', $payload['password']);
         $this->assertSame('[REDACTED]', $payload['password_confirmation']);
-        $this->assertSame('[REDACTED]', $payload['nested']['token']);
+        $this->assertSame('[REDACTED]', $payload['national_id']);
+        $this->assertSame('[REDACTED]', $payload['representative_address']);
+        $this->assertSame('[REDACTED]', $payload['nested']['oauth_refresh_token']);
+        $this->assertSame('[REDACTED]', $payload['nested']['signature_image_sha256']);
         $this->assertSame(3, $payload['nested']['quantity']);
         $this->assertSame('Example Hospital', $payload['buyer_name']);
     }

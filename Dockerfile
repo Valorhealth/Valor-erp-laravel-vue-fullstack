@@ -15,8 +15,9 @@ RUN composer install \
     --no-progress \
     --no-scripts \
     --prefer-dist \
-    --optimize-autoloader \
-    --ignore-platform-reqs
+    --classmap-authoritative \
+    --ignore-platform-req=ext-gd \
+    --ignore-platform-req=ext-zip
 
 FROM php:8.4-fpm-bookworm
 
@@ -51,6 +52,7 @@ COPY --from=frontend-build /build/frontend/dist /app/frontend/dist
 COPY docker/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY docker/supervisord.conf /etc/supervisor/conf.d/valor.conf
 COPY docker/php-uploads.ini /usr/local/etc/php/conf.d/valor-uploads.ini
+COPY docker/php-opcache.ini /usr/local/etc/php/conf.d/valor-opcache.ini
 COPY docker/php-fpm-pool.conf /usr/local/etc/php-fpm.d/zz-valor-pool.conf
 COPY docker/entrypoint.sh /usr/local/bin/valor-entrypoint
 

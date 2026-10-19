@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\Authorization\RoleAccess;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Schema;
@@ -22,6 +23,8 @@ final class SalesCallReportService
 {
     /** @var array<string, array<int, string>>|null */
     private ?array $activeLookupCache = null;
+
+    private ?string $reportDataVersion = null;
 
     public const SPECIALTIES = [
         'Internal Medicine', 'Surgery', 'Pediatric', 'Anesthesiologist', 'Radiologist/X-ray',
@@ -77,8 +80,10 @@ final class SalesCallReportService
         }
 
         return $query
-            ->when($filters['date_from'] ?? null, fn (Builder $q, string $date) => $q->whereDate('activity_date', '>=', $date))
-            ->when($filters['date_to'] ?? null, fn (Builder $q, string $date) => $q->whereDate('activity_date', '<=', $date))
+            // activity_date is already a DATE column. Avoid casting it with
+            // whereDate() so PostgreSQL can use the existing btree indexes.
+            ->when($filters['date_from'] ?? null, fn (Builder $q, string $date) => $q->where('activity_date', '>=', $date))
+            ->when($filters['date_to'] ?? null, fn (Builder $q, string $date) => $q->where('activity_date', '<=', $date))
             ->when($filters['statuses'] ?? [], fn (Builder $q, array $statuses) => $q->whereIn('status', $statuses));
     }
 
@@ -117,20 +122,40 @@ final class SalesCallReportService
     /** @param array<string, mixed> $filters @return array<string, mixed> */
     public function dashboard(User $actor, array $filters): array
     {
+        $cacheKey = 'sales-call-dashboard:'.hash('sha256', json_encode([
+            'version' => $this->dataVersion(),
+            'access' => $this->accessSignature($actor),
+            'filters' => $this->normalizedFilters($filters),
+        ], JSON_THROW_ON_ERROR));
+
+        $cached = Cache::get($cacheKey);
+        if (is_string($cached)) {
+            $decoded = json_decode($cached, false, flags: JSON_THROW_ON_ERROR);
+            $result = (array) $decoded;
+            $result['summary'] = (array) $decoded->summary;
+
+            return $result;
+        }
+
+        $dashboard = $this->buildDashboard($actor, $filters);
+        Cache::put($cacheKey, json_encode($dashboard, JSON_THROW_ON_ERROR), now()->addMinutes(5));
+
+        return $dashboard;
+    }
+
+    /** @param array<string, mixed> $filters @return array<string, mixed> */
+    private function buildDashboard(User $actor, array $filters): array
+    {
         $base = $this->filteredQuery($actor, $filters)->without('seller');
         $callBase = (clone $base)->where('outcome', '<>', 'No Call');
         $activityBase = $this->applyReportDimensionFilters(
             $this->filteredActivityQuery($actor, $filters),
             $filters,
         )->without('seller');
-        $workingDayPairs = (clone $activityBase)
-            ->where('status', 'ทำงาน')
-            ->select(['seller_user_id', 'activity_date'])
-            ->distinct();
-        $workingDays = (int) DB::query()->fromSub($workingDayPairs, 'working_day_pairs')->count();
         $workingDaysBySeller = (clone $activityBase)->where('status', 'ทำงาน')
             ->selectRaw('seller_user_id, COUNT(DISTINCT activity_date) AS total')
             ->groupBy('seller_user_id')->pluck('total', 'seller_user_id');
+        $workingDays = (int) $workingDaysBySeller->sum();
         $workingDaysByDepartment = (clone $activityBase)
             ->leftJoin('users as activity_sellers', 'activity_sellers.id', '=', 'sales_call_activities.seller_user_id')
             ->where('sales_call_activities.status', 'ทำงาน')
@@ -148,44 +173,52 @@ final class SalesCallReportService
             $row->working_days = $days;
             $row->calls_per_working_day = $days > 0 ? round((int) $row->total / $days, 2) : 0;
         });
-        $bySeller = (clone $base)->selectRaw("seller_user_id, seller_username, SUM(CASE WHEN outcome <> 'No Call' THEN 1 ELSE 0 END) AS total, SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END) AS success_calls, SUM(CASE WHEN outcome = 'Failure' THEN 1 ELSE 0 END) AS failure_calls, SUM(CASE WHEN outcome = 'No Call' THEN 1 ELSE 0 END) AS no_calls, ROUND(CASE WHEN SUM(CASE WHEN outcome <> 'No Call' THEN 1 ELSE 0 END) > 0 THEN SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END)::numeric * 100 / SUM(CASE WHEN outcome <> 'No Call' THEN 1 ELSE 0 END) ELSE 0 END, 2) AS success_rate, COUNT(DISTINCT CASE WHEN outcome <> 'No Call' THEN NULLIF(LOWER(BTRIM(customer_name)), '') END) AS active_customers, SUM(CASE WHEN outcome <> 'No Call' AND next_follow_up_date IS NOT NULL THEN 1 ELSE 0 END) AS follow_ups, COALESCE(SUM(CASE WHEN outcome <> 'No Call' THEN duration_minutes ELSE 0 END), 0) AS duration_minutes, COALESCE(SUM(CASE WHEN outcome <> 'No Call' THEN estimated_value ELSE 0 END), 0) AS pipeline_value, COALESCE(SUM(CASE WHEN outcome <> 'No Call' THEN actual_value ELSE 0 END), 0) AS actual_value")->groupBy('seller_user_id', 'seller_username')->orderByDesc('total')->get();
-        $sellerNames = User::query()
-            ->whereIn('id', $bySeller->pluck('seller_user_id'))
-            ->get(['id', 'username', 'first_name', 'last_name'])
-            ->mapWithKeys(fn (User $seller): array => [
-                $seller->id => trim($seller->first_name.' '.$seller->last_name) ?: $seller->username,
-            ]);
-        $bySeller->each(function ($row) use ($workingDaysBySeller, $sellerNames): void {
+        $bySeller = (clone $base)
+            ->leftJoin('users as seller_profiles', 'seller_profiles.id', '=', 'sales_call_activities.seller_user_id')
+            ->selectRaw("seller_user_id, seller_username, COALESCE(NULLIF(BTRIM(CONCAT(COALESCE(MAX(seller_profiles.first_name), ''), ' ', COALESCE(MAX(seller_profiles.last_name), ''))), ''), seller_username) AS seller_name, SUM(CASE WHEN outcome <> 'No Call' THEN 1 ELSE 0 END) AS total, SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END) AS success_calls, SUM(CASE WHEN outcome = 'Failure' THEN 1 ELSE 0 END) AS failure_calls, SUM(CASE WHEN outcome = 'No Call' THEN 1 ELSE 0 END) AS no_calls, ROUND(CASE WHEN SUM(CASE WHEN outcome <> 'No Call' THEN 1 ELSE 0 END) > 0 THEN SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END)::numeric * 100 / SUM(CASE WHEN outcome <> 'No Call' THEN 1 ELSE 0 END) ELSE 0 END, 2) AS success_rate, COUNT(DISTINCT CASE WHEN outcome <> 'No Call' THEN NULLIF(LOWER(BTRIM(customer_name)), '') END) AS active_customers, SUM(CASE WHEN outcome <> 'No Call' AND next_follow_up_date IS NOT NULL THEN 1 ELSE 0 END) AS follow_ups, COALESCE(SUM(CASE WHEN outcome <> 'No Call' THEN duration_minutes ELSE 0 END), 0) AS duration_minutes, COALESCE(SUM(CASE WHEN outcome <> 'No Call' THEN estimated_value ELSE 0 END), 0) AS pipeline_value, COALESCE(SUM(CASE WHEN outcome <> 'No Call' THEN actual_value ELSE 0 END), 0) AS actual_value")
+            ->groupBy('seller_user_id', 'seller_username')
+            ->orderByDesc('total')
+            ->get();
+        $bySeller->each(function ($row) use ($workingDaysBySeller): void {
             $days = (int) ($workingDaysBySeller[$row->seller_user_id] ?? 0);
-            $row->seller_name = $sellerNames[$row->seller_user_id] ?? $row->seller_username;
             $row->working_days = $days;
             $row->calls_per_working_day = $days > 0 ? round((int) $row->total / $days, 2) : 0;
         });
-        $total = (clone $callBase)->count();
-        $completed = (clone $callBase)->where('status', 'ทำงาน')->count();
-        $won = (clone $callBase)->where('opportunity_stage', 'ชนะการขาย')->count();
-        $success = (clone $callBase)->where('outcome', 'Success')->count();
-        $failure = (clone $callBase)->where('outcome', 'Failure')->count();
-        $noCall = (clone $base)->where('outcome', 'No Call')->count();
         $today = now()->toDateString();
+        $summary = (clone $base)->selectRaw(
+            "SUM(CASE WHEN outcome <> 'No Call' THEN 1 ELSE 0 END) AS total,
+             SUM(CASE WHEN outcome <> 'No Call' AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS completed,
+             SUM(CASE WHEN outcome <> 'No Call' AND opportunity_stage = 'ชนะการขาย' THEN 1 ELSE 0 END) AS won,
+             SUM(CASE WHEN outcome = 'Success' THEN 1 ELSE 0 END) AS success,
+             SUM(CASE WHEN outcome = 'Failure' THEN 1 ELSE 0 END) AS failure,
+             SUM(CASE WHEN outcome = 'No Call' THEN 1 ELSE 0 END) AS no_call,
+             COUNT(DISTINCT CASE WHEN outcome <> 'No Call' THEN NULLIF(LOWER(BTRIM(customer_name)), '') END) AS active_customers,
+             COALESCE(SUM(CASE WHEN outcome <> 'No Call' THEN duration_minutes ELSE 0 END), 0) AS duration_minutes,
+             COALESCE(SUM(CASE WHEN outcome <> 'No Call' AND opportunity_stage NOT IN ('ชนะการขาย', 'แพ้การขาย') THEN estimated_value ELSE 0 END), 0) AS pipeline_value,
+             COALESCE(SUM(CASE WHEN outcome <> 'No Call' AND opportunity_stage = 'ชนะการขาย' THEN actual_value ELSE 0 END), 0) AS won_value,
+             SUM(CASE WHEN outcome <> 'No Call' AND next_follow_up_date IS NOT NULL AND next_follow_up_date <= ? AND status = 'ทำงาน' THEN 1 ELSE 0 END) AS follow_ups_due",
+            [$today],
+        )->first();
+        $total = (int) ($summary?->total ?? 0);
+        $success = (int) ($summary?->success ?? 0);
         $hospitalExpression = "COALESCE(NULLIF(BTRIM(place_of_work), ''), NULLIF(BTRIM(customer_name), ''))";
 
         return [
             'summary' => [
                 'total_activities' => $total,
-                'completed_activities' => $completed,
-                'active_customers' => (int) ((clone $callBase)->selectRaw('COUNT(DISTINCT LOWER(BTRIM(customer_name))) AS total')->first()?->total ?? 0),
-                'duration_minutes' => (int) (clone $callBase)->sum('duration_minutes'),
-                'pipeline_value' => round((float) (clone $callBase)->whereNotIn('opportunity_stage', ['ชนะการขาย', 'แพ้การขาย'])->sum('estimated_value'), 2),
-                'won_value' => round((float) (clone $callBase)->where('opportunity_stage', 'ชนะการขาย')->sum('actual_value'), 2),
-                'won_activities' => $won,
+                'completed_activities' => (int) ($summary?->completed ?? 0),
+                'active_customers' => (int) ($summary?->active_customers ?? 0),
+                'duration_minutes' => (int) ($summary?->duration_minutes ?? 0),
+                'pipeline_value' => round((float) ($summary?->pipeline_value ?? 0), 2),
+                'won_value' => round((float) ($summary?->won_value ?? 0), 2),
+                'won_activities' => (int) ($summary?->won ?? 0),
                 'success_calls' => $success,
-                'failure_calls' => $failure,
-                'no_calls' => $noCall,
+                'failure_calls' => (int) ($summary?->failure ?? 0),
+                'no_calls' => (int) ($summary?->no_call ?? 0),
                 'working_days' => $workingDays,
                 'calls_per_working_day' => $workingDays > 0 ? round($total / $workingDays, 2) : 0,
                 'conversion_rate' => $total > 0 ? round($success * 100 / $total, 2) : 0,
-                'follow_ups_due' => (clone $callBase)->whereNotNull('next_follow_up_date')->whereDate('next_follow_up_date', '<=', $today)->where('status', 'ทำงาน')->count(),
+                'follow_ups_due' => (int) ($summary?->follow_ups_due ?? 0),
             ],
             'by_seller' => $bySeller,
             'by_seller_department' => $bySellerDepartment,
@@ -219,6 +252,25 @@ final class SalesCallReportService
     /** @return array<string, mixed> */
     public function options(User $actor): array
     {
+        $cacheKey = 'sales-call-options:'.hash('sha256', json_encode([
+            'version' => $this->dataVersion(),
+            'access' => $this->accessSignature($actor),
+        ], JSON_THROW_ON_ERROR));
+
+        $cached = Cache::get($cacheKey);
+        if (is_string($cached)) {
+            return json_decode($cached, true, flags: JSON_THROW_ON_ERROR);
+        }
+
+        $options = $this->buildOptions($actor);
+        Cache::put($cacheKey, json_encode($options, JSON_THROW_ON_ERROR), now()->addMinutes(5));
+
+        return $options;
+    }
+
+    /** @return array<string, mixed> */
+    private function buildOptions(User $actor): array
+    {
         $sellerQuery = User::query()->select(['id', 'username', 'first_name', 'last_name', 'department', 'role'])->orderBy('username');
         $sellers = $sellerQuery->get()->filter(fn (User $user) => RoleAccess::groupForRole($user->role) === RoleAccess::GROUP_SALE);
         $manager = $this->canViewTeam($actor);
@@ -235,18 +287,19 @@ final class SalesCallReportService
         $objectives = $this->allowedOptions('objective');
         $outcomes = $this->allowedOptions('outcome');
         $statuses = $this->allowedOptions('status');
+        $savedByCategory = $manager ? $this->savedDimensionOptions($savedOptions) : collect();
 
         return [
             'sellers' => $sellers->values(),
             'seller_departments' => $sellers->pluck('department')->filter()->unique()->sort()->values(),
-            'specialties' => $manager ? $this->mergeSavedOptions($savedOptions, 'specialty', $specialties) : $specialties,
-            'departments' => $manager ? $this->mergeSavedOptions($savedOptions, 'department', $departments) : $departments,
-            'groups' => $manager ? $this->mergeSavedOptions($savedOptions, 'customer_group', $groups) : $groups,
-            'products' => $manager ? $this->mergeSavedOptions($savedOptions, 'product_1', $products) : $products,
-            'objectives' => $manager ? $this->mergeSavedOptions($savedOptions, 'objective', $objectives) : $objectives,
-            'outcomes' => $manager ? $this->mergeSavedOptions($savedOptions, 'outcome', $outcomes) : $outcomes,
+            'specialties' => $manager ? $this->mergeSavedOptions($savedByCategory, 'specialty', $specialties) : $specialties,
+            'departments' => $manager ? $this->mergeSavedOptions($savedByCategory, 'department', $departments) : $departments,
+            'groups' => $manager ? $this->mergeSavedOptions($savedByCategory, 'group', $groups) : $groups,
+            'products' => $manager ? $this->mergeSavedOptions($savedByCategory, 'product', $products) : $products,
+            'objectives' => $manager ? $this->mergeSavedOptions($savedByCategory, 'objective', $objectives) : $objectives,
+            'outcomes' => $manager ? $this->mergeSavedOptions($savedByCategory, 'outcome', $outcomes) : $outcomes,
             'stages' => self::STAGES,
-            'statuses' => $manager ? $this->mergeSavedOptions($savedOptions, 'status', $statuses) : $statuses,
+            'statuses' => $manager ? $this->mergeSavedOptions($savedByCategory, 'status', $statuses) : $statuses,
         ];
     }
 
@@ -283,15 +336,48 @@ final class SalesCallReportService
         return $this->activeLookupCache[$category] ?? [];
     }
 
-    /** @param Builder<SalesCallActivity> $query @param array<int, string> $defaults @return array<int, string> */
-    private function mergeSavedOptions(Builder $query, string $column, array $defaults): array
+    /** @return Collection<string, Collection<int, object{category: string, value: string}>> */
+    private function savedDimensionOptions(Builder $query): Collection
     {
-        $saved = (clone $query)
-            ->whereNotNull($column)
-            ->whereRaw("BTRIM({$column}) <> ''")
+        $dimensions = [
+            'specialty' => 'specialty',
+            'department' => 'department',
+            'group' => 'customer_group',
+            'product' => 'product_1',
+            'objective' => 'objective',
+            'outcome' => 'outcome',
+            'status' => 'status',
+        ];
+        $union = null;
+        foreach ($dimensions as $category => $column) {
+            $dimensionQuery = (clone $query)
+                ->reorder()
+                ->selectRaw('? AS category, BTRIM('.$column.') AS value', [$category])
+                ->whereNotNull($column)
+                ->whereRaw('BTRIM('.$column.") <> ''")
+                ->distinct()
+                ->toBase();
+            $union = $union === null ? $dimensionQuery : $union->unionAll($dimensionQuery);
+        }
+
+        if ($union === null) {
+            return collect();
+        }
+
+        return DB::query()
+            ->fromSub($union, 'saved_sales_call_options')
+            ->select(['category', 'value'])
             ->distinct()
-            ->orderBy($column)
-            ->pluck($column);
+            ->orderBy('category')
+            ->orderBy('value')
+            ->get()
+            ->groupBy('category');
+    }
+
+    /** @param Collection<string, Collection<int, object{category: string, value: string}>> $savedByCategory @param array<int, string> $defaults @return array<int, string> */
+    private function mergeSavedOptions(Collection $savedByCategory, string $category, array $defaults): array
+    {
+        $saved = ($savedByCategory->get($category) ?? collect())->pluck('value');
 
         return collect($defaults)
             ->merge($saved)
@@ -305,6 +391,58 @@ final class SalesCallReportService
     public function canViewTeam(User $user): bool
     {
         return RoleAccess::canUser($user, 'sales_call_report');
+    }
+
+    private function dataVersion(): string
+    {
+        if ($this->reportDataVersion !== null) {
+            return $this->reportDataVersion;
+        }
+
+        // A versioned key avoids stale dashboards without flushing the whole
+        // cache. Inserts, updates, deletes, dropdown changes and user changes
+        // all produce a new key on the next request.
+        $version = DB::selectOne(<<<'SQL'
+            SELECT
+                COUNT(*) AS row_count,
+                COALESCE(MAX(call_id), 0) AS max_call_id,
+                COALESCE(MAX(updated_at)::text, '') AS latest_call_update,
+                COALESCE((SELECT MAX(updated_at)::text FROM sales_call_lookup_options), '') AS latest_option_update,
+                COALESCE((
+                    SELECT MD5(STRING_AGG(
+                        CONCAT_WS('|', id, username, first_name, last_name, department, role, permission_overrides::text),
+                        '||' ORDER BY id
+                    ))
+                    FROM users
+                ), '') AS users_digest
+            FROM sales_call_activities
+            SQL);
+
+        return $this->reportDataVersion = hash('sha256', json_encode($version, JSON_THROW_ON_ERROR));
+    }
+
+    /** @param array<string, mixed> $filters @return array<string, mixed> */
+    private function normalizedFilters(array $filters): array
+    {
+        unset($filters['per_page']);
+        ksort($filters);
+        foreach ($filters as &$value) {
+            if (is_array($value)) {
+                sort($value);
+            }
+        }
+        unset($value);
+
+        return $filters;
+    }
+
+    private function accessSignature(User $actor): string
+    {
+        return hash('sha256', json_encode([
+            'id' => $actor->id,
+            'role' => $actor->role,
+            'permissions' => $actor->permission_overrides,
+        ], JSON_THROW_ON_ERROR));
     }
 
     /** @param Collection<int, SalesCallActivity> $activities @param array<string, mixed> $dashboard */

@@ -5,6 +5,7 @@ import AppShell from '../components/AppShell.vue'
 import StatusPill from '../components/StatusPill.vue'
 import type { BillingRecord, Paginated } from '../types/api'
 import { money, shortDate } from '../utils/format'
+import { preferredRowsPerPage } from '../utils/preferences'
 
 const props = withDefaults(defineProps<{ pageTitle?: string; initialStatus?: string; statusGroup?: 'approved' | 'rejected' | ''; ownerOnly?: boolean }>(), {
   pageTitle: 'รายการบิล',
@@ -15,7 +16,7 @@ const props = withDefaults(defineProps<{ pageTitle?: string; initialStatus?: str
 const records = ref<Paginated<BillingRecord> | null>(null)
 const search = ref('')
 const status = ref(props.initialStatus)
-const perPage = ref(25)
+const perPage = ref(preferredRowsPerPage(25))
 const expandedBillId = ref<number | null>(null)
 const loading = ref(false)
 const error = ref('')

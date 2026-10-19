@@ -1,27 +1,34 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { auth } from '../stores/auth'
-import BillingRecordsView from '../views/BillingRecordsView.vue'
-import BudgetAnalysisView from '../views/BudgetAnalysisView.vue'
-import ApprovalsView from '../views/ApprovalsView.vue'
-import AuditLogsView from '../views/AuditLogsView.vue'
-import CalendarView from '../views/CalendarView.vue'
-import CatalogView from '../views/CatalogView.vue'
-import CreditProfilesView from '../views/CreditProfilesView.vue'
-import CreditRequestStatusView from '../views/CreditRequestStatusView.vue'
-import DashboardView from '../views/DashboardView.vue'
-import DocumentCenterView from '../views/DocumentCenterView.vue'
-import EditBillView from '../views/EditBillView.vue'
-import FibroscanBookingView from '../views/FibroscanBookingView.vue'
-import LoginView from '../views/LoginView.vue'
-import ResetPasswordView from '../views/ResetPasswordView.vue'
-import MasterDataView from '../views/MasterDataView.vue'
-import NoticeBoardView from '../views/NoticeBoardView.vue'
-import PublicTaxView from '../views/PublicTaxView.vue'
-import CustomerQuotationAcceptanceView from '../views/CustomerQuotationAcceptanceView.vue'
-import SaleOrderView from '../views/SaleOrderView.vue'
-import SalesCallReportView from '../views/SalesCallReportView.vue'
-import SystemAdminView from '../views/SystemAdminView.vue'
-import UserManagementView from '../views/UserManagementView.vue'
+
+// Split each screen into its own chunk. Users download only the page they open
+// instead of every ERP module during login and the first page load.
+const BillingRecordsView = () => import('../views/BillingRecordsView.vue')
+const BudgetAnalysisView = () => import('../views/BudgetAnalysisView.vue')
+const ApprovalsView = () => import('../views/ApprovalsView.vue')
+const AuditLogsView = () => import('../views/AuditLogsView.vue')
+const CalendarView = () => import('../views/CalendarView.vue')
+const CatalogView = () => import('../views/CatalogView.vue')
+const CreditProfilesView = () => import('../views/CreditProfilesView.vue')
+const CreditRequestStatusView = () => import('../views/CreditRequestStatusView.vue')
+const DashboardView = () => import('../views/DashboardView.vue')
+const DocumentCenterView = () => import('../views/DocumentCenterView.vue')
+const DocumentPreparationQueueView = () => import('../views/DocumentPreparationQueueView.vue')
+const MyDocumentPreparationStatusView = () => import('../views/MyDocumentPreparationStatusView.vue')
+const EditBillView = () => import('../views/EditBillView.vue')
+const FibroscanBookingView = () => import('../views/FibroscanBookingView.vue')
+const LoginView = () => import('../views/LoginView.vue')
+const ResetPasswordView = () => import('../views/ResetPasswordView.vue')
+const MasterDataView = () => import('../views/MasterDataView.vue')
+const NoticeBoardView = () => import('../views/NoticeBoardView.vue')
+const PublicTaxView = () => import('../views/PublicTaxView.vue')
+const CustomerQuotationAcceptanceView = () => import('../views/CustomerQuotationAcceptanceView.vue')
+const SaleOrderView = () => import('../views/SaleOrderView.vue')
+const SalesCallReportView = () => import('../views/SalesCallReportView.vue')
+const SystemAdminView = () => import('../views/SystemAdminView.vue')
+const UserManagementView = () => import('../views/UserManagementView.vue')
+const SettingsView = () => import('../views/SettingsView.vue')
+const QuotationEditorView = () => import('../views/QuotationEditorView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -35,6 +42,8 @@ const router = createRouter({
     { path: '/bills/new', name: 'create-bill', component: SaleOrderView, meta: { requiresAuth: true, ability: 'create_bill' } },
     { path: '/bills/edit', name: 'edit-bill', component: EditBillView, meta: { requiresAuth: true, ability: 'edit_bill' } },
     { path: '/sales-documents', name: 'sales-documents', component: DocumentCenterView, meta: { requiresAuth: true, ability: 'sales_documents' } },
+    { path: '/my-document-preparation-status', name: 'my-document-preparation-status', component: MyDocumentPreparationStatusView, meta: { requiresAuth: true, ability: 'my_document_preparation_status' } },
+    { path: '/quotations/:quotationId/editor', name: 'quotation-editor', component: QuotationEditorView, meta: { requiresAuth: true } },
     { path: '/billing-records/my', name: 'my-billing-records', component: BillingRecordsView, props: { pageTitle: 'ประวัติการเปิดบิลของฉัน', ownerOnly: true }, meta: { requiresAuth: true, ability: 'my_billing_history' } },
     { path: '/credit-requests', name: 'credit-requests', component: CreditRequestStatusView, meta: { requiresAuth: true, ability: 'credit_request_status' } },
     { path: '/calendar', name: 'calendar', component: CalendarView, meta: { requiresAuth: true, ability: 'calendar' } },
@@ -55,6 +64,8 @@ const router = createRouter({
     { path: '/credit-profiles', name: 'credit-profiles', component: CreditProfilesView, meta: { requiresAuth: true, ability: 'credit_profiles' } },
     { path: '/users', name: 'user-management', component: UserManagementView, meta: { requiresAuth: true, ability: 'user_management' } },
     { path: '/document-center', name: 'document-center', component: DocumentCenterView, meta: { requiresAuth: true, ability: 'document_center' } },
+    { path: '/document-preparation-queue', name: 'document-preparation-queue', component: DocumentPreparationQueueView, meta: { requiresAuth: true, ability: 'document_preparation_queue' } },
+    { path: '/settings', name: 'settings', component: SettingsView, meta: { requiresAuth: true, ability: 'user_settings' } },
     { path: '/:pathMatch(.*)*', redirect: '/notice-board' },
   ],
 })

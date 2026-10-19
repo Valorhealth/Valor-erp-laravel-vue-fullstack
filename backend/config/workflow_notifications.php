@@ -11,11 +11,8 @@ return [
         'sender' => env('GMAIL_SENDER', 'sukirin.valorhealth@gmail.com'),
     ],
 
-    // เพิ่ม 'super_admin' ในกลุ่มที่ต้องการ หากต้องการให้ Super Admin รับแจ้งเตือนด้วย
     'recipient_groups' => [
-        'approve' => ['approve'],
-        'admin' => ['admin'],
-        // 'approve' => ['approve', 'super_admin'],
-        // 'admin' => ['admin', 'super_admin'],
+        'approve' => ['approve', 'super_admin'],
+        'admin' => ['admin', 'super_admin'],
     ],
 ];

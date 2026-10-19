@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import type { Customer, Paginated, Product } from '../types/api'
+import { preferredRowsPerPage } from '../utils/preferences'
 
 const props = defineProps<{ catalog: 'customers' | 'products' }>()
 const results = ref<Paginated<Customer | Product> | null>(null)
@@ -20,7 +21,7 @@ async function load(page = 1) {
   error.value = ''
   try {
     const response = await api.get<Paginated<Customer | Product>>(`/api/v1/catalog/${props.catalog}`, {
-      params: { page, search: search.value || undefined, per_page: 20 },
+      params: { page, search: search.value || undefined, per_page: preferredRowsPerPage(20) },
     })
     results.value = response.data
   } catch {

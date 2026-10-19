@@ -7,6 +7,7 @@ use App\Models\FibroscanBooking;
 use App\Models\FibroscanBookingChange;
 use App\Models\FibroscanMachine;
 use App\Services\Authorization\RoleAccess;
+use App\Services\Notifications\WorkflowEmailNotifier;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,7 +19,9 @@ use Illuminate\Validation\ValidationException;
 class FibroscanBookingController extends Controller
 {
     private const ACTIVE_STATUSES = ['จองแล้ว', 'กำลังใช้งาน'];
+
     private const APPROVAL_STATUSES = ['รออนุมัติ', 'อนุมัติแล้ว', 'ไม่อนุมัติ'];
+
     private const TRACKED_FIELDS = [
         'machine_id', 'hospital_name', 'purpose', 'reserved_from', 'reserved_until',
         'contact_name', 'contact_phone', 'note', 'approval_status', 'review_note', 'status',
@@ -77,15 +80,16 @@ class FibroscanBookingController extends Controller
         return response()->json(['data' => $conflicts]);
     }
 
-    public function store(Request $request): JsonResponse
+    public function store(Request $request, WorkflowEmailNotifier $notifier): JsonResponse
     {
         $booking = $this->saveBooking($request, $this->validatedBooking($request));
         $this->recordChange($request, $booking, 'ส่งคำขอจอง', [], $booking->only(self::TRACKED_FIELDS));
+        $notifier->bookingRequested($booking, $request->user());
 
         return response()->json(['data' => $this->present($request, $this->loadRelations($booking))], 201);
     }
 
-    public function update(Request $request, FibroscanBooking $booking): JsonResponse
+    public function update(Request $request, FibroscanBooking $booking, WorkflowEmailNotifier $notifier): JsonResponse
     {
         $this->authorizeChange($request, $booking);
         abort_if(
@@ -96,12 +100,15 @@ class FibroscanBookingController extends Controller
 
         $before = $booking->only(self::TRACKED_FIELDS);
         $updated = $this->saveBooking($request, $this->validatedBooking($request), $booking);
-        $this->recordChange($request, $updated, 'แก้ไขคำขอ/การจอง', $before, $updated->only(self::TRACKED_FIELDS));
+        $changed = $this->recordChange($request, $updated, 'แก้ไขคำขอ/การจอง', $before, $updated->only(self::TRACKED_FIELDS));
+        if ($changed) {
+            $notifier->bookingChanged($updated, $request->user(), 'แก้ไขข้อมูลการจอง');
+        }
 
         return response()->json(['data' => $this->present($request, $this->loadRelations($updated))]);
     }
 
-    public function review(Request $request, FibroscanBooking $booking): JsonResponse
+    public function review(Request $request, FibroscanBooking $booking, WorkflowEmailNotifier $notifier): JsonResponse
     {
         abort_unless($this->canManageAllBookings($request), 403, 'เฉพาะ Admin หรือ Approver เท่านั้นที่พิจารณาคำขอได้');
         $data = $request->validate([
@@ -142,11 +149,12 @@ class FibroscanBookingController extends Controller
 
         $action = $data['approval_status'] === 'อนุมัติแล้ว' ? 'อนุมัติคำขอ' : 'ไม่อนุมัติคำขอ';
         $this->recordChange($request, $updated, $action, $before, $updated->only(self::TRACKED_FIELDS));
+        $notifier->bookingChanged($updated, $request->user(), $action);
 
         return response()->json(['data' => $this->present($request, $this->loadRelations($updated))]);
     }
 
-    public function updateStatus(Request $request, FibroscanBooking $booking): JsonResponse
+    public function updateStatus(Request $request, FibroscanBooking $booking, WorkflowEmailNotifier $notifier): JsonResponse
     {
         abort_unless($this->canManageAllBookings($request), 403, 'เฉพาะ Admin หรือ Approver เท่านั้นที่เปลี่ยนสถานะการใช้งานได้');
         abort_unless($booking->approval_status === 'อนุมัติแล้ว', 422, 'ต้องอนุมัติคำขอก่อนเปลี่ยนสถานะการใช้งาน');
@@ -175,6 +183,9 @@ class FibroscanBookingController extends Controller
 
         $updated = $booking->fresh();
         $this->recordChange($request, $updated, 'เปลี่ยนสถานะการใช้งาน', $before, $updated->only(self::TRACKED_FIELDS));
+        if ($before['status'] !== $updated->status) {
+            $notifier->bookingChanged($updated, $request->user(), 'เปลี่ยนสถานะเป็น '.$updated->status);
+        }
 
         return response()->json(['data' => $this->present($request, $this->loadRelations($updated))]);
     }
@@ -290,7 +301,7 @@ class FibroscanBookingController extends Controller
     }
 
     /** @param array<string, mixed> $before @param array<string, mixed> $after */
-    private function recordChange(Request $request, FibroscanBooking $booking, string $action, array $before, array $after): void
+    private function recordChange(Request $request, FibroscanBooking $booking, string $action, array $before, array $after): bool
     {
         $changes = [];
         foreach (self::TRACKED_FIELDS as $field) {
@@ -309,6 +320,8 @@ class FibroscanBookingController extends Controller
             'changes' => $changes,
             'created_at' => now(),
         ]);
+
+        return $changes !== [];
     }
 
     private function historyValue(mixed $value): mixed

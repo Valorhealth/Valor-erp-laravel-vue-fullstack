@@ -11,6 +11,8 @@ services:
         value: production
       - key: APP_DEBUG
         value: "false"
+      - key: LOG_LEVEL
+        value: warning
       - key: APP_KEY
         sync: false
       - key: APP_URL
@@ -24,7 +26,10 @@ services:
       - key: DB_EMULATE_PREPARES
         value: "true"
       - key: DB_PERSISTENT
-        value: "false"
+        # Render uses the Supabase transaction pooler (port 6543). Reusing one
+        # client connection per FPM worker removes a TLS handshake per request;
+        # php-fpm-pool.conf caps the total at five connections.
+        value: "true"
       - key: CACHE_STORE
         value: file
       - key: SESSION_DRIVER

@@ -5,13 +5,19 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\BillingRecord;
 use App\Models\Quotation;
+use App\Models\QuotationDocumentVersion;
+use App\Models\QuotationPowerOfAttorneyVersion;
 use App\Services\Authorization\RoleAccess;
-use App\Services\Billing\BillingWorkflow;
 use App\Services\Billing\BillingCancellationService;
+use App\Services\Billing\BillingWorkflow;
 use App\Services\Credit\CustomerCreditResolver;
+use App\Services\Documents\DocumentDownloadAudit;
 use App\Services\Documents\DocumentService;
 use App\Services\Documents\ElectronicSignatureService;
+use App\Services\Documents\PowerOfAttorneyService;
+use App\Services\Documents\QuotationTemplateCatalog;
 use App\Services\Notifications\WorkflowEmailNotifier;
+use App\Services\Products\ProductUnitValidator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -30,6 +36,8 @@ class BillingWorkflowController extends Controller
             'shipping_text' => ['nullable', 'string', 'max:2000'],
             'bill_note' => ['nullable', 'string', 'max:5000'],
             'save_as_draft' => ['nullable', 'boolean'],
+            'submission_documents' => ['required_unless:save_as_draft,true', 'array', 'min:1', 'max:8'],
+            'submission_documents.*' => ['string', Rule::in(BillingWorkflow::SUBMISSION_DOCUMENT_TYPES)],
         ]);
         $bill = $workflow->createFromQuotation($request->user(), $quotation, $data);
         if ($bill->status !== BillingWorkflow::DRAFT_STATUS) {
@@ -39,7 +47,7 @@ class BillingWorkflowController extends Controller
         return response()->json(['data' => $bill], 201);
     }
 
-    public function createFromPurchaseOrder(Request $request, BillingWorkflow $workflow, WorkflowEmailNotifier $notifier): JsonResponse
+    public function createFromPurchaseOrder(Request $request, BillingWorkflow $workflow, WorkflowEmailNotifier $notifier, ProductUnitValidator $productUnits): JsonResponse
     {
         $data = $request->validate([
             'bill_date' => ['required', 'date'],
@@ -66,7 +74,7 @@ class BillingWorkflowController extends Controller
             'delivery_terms' => ['nullable', 'string', 'max:5000'],
             'purchase_order' => ['required', 'file', 'max:10240', 'mimes:pdf,png,jpg,jpeg,xlsx'],
             'items' => ['required', 'array', 'min:1', 'max:100'],
-            'items.*.main_category' => ['required', 'string', 'max:255'],
+            'items.*.main_category' => ['required', 'string', 'max:255', Rule::exists('master_products', 'sku_code')],
             'items.*.sub_category' => ['required', 'string', 'max:2000'],
             'items.*.customer_product_name' => ['nullable', 'string', 'max:2000'],
             'items.*.unit_type' => ['required', 'string', 'max:255'],
@@ -74,6 +82,7 @@ class BillingWorkflowController extends Controller
             'items.*.unit_price' => ['required', 'numeric', 'min:0'],
             'items.*.sale_discount_unit' => ['nullable', 'numeric', 'min:0'],
         ]);
+        $productUnits->validate($data['items']);
         $bill = $workflow->createFromPurchaseOrder($request->user(), $data, $data['purchase_order']);
         $notifier->billSubmitted($bill, $request->user());
 
@@ -87,7 +96,7 @@ class BillingWorkflowController extends Controller
         return response()->json(['data' => $bill->load(['items', 'documents'])]);
     }
 
-    public function updateBySale(Request $request, BillingRecord $bill, BillingWorkflow $workflow): JsonResponse
+    public function updateBySale(Request $request, BillingRecord $bill, BillingWorkflow $workflow, ProductUnitValidator $productUnits): JsonResponse
     {
         $data = $request->validate([
             'bill_date' => ['required', 'date'],
@@ -114,7 +123,7 @@ class BillingWorkflowController extends Controller
             'delivery_terms' => ['nullable', 'string', 'max:5000'],
             'items' => ['required', 'array', 'min:1'],
             'items.*.item_id' => ['nullable', 'integer'],
-            'items.*.main_category' => ['required', 'string'],
+            'items.*.main_category' => ['required', 'string', Rule::exists('master_products', 'sku_code')],
             'items.*.sub_category' => ['required', 'string'],
             'items.*.customer_product_name' => ['nullable', 'string', 'max:2000'],
             'items.*.unit_type' => ['required', 'string'],
@@ -124,6 +133,7 @@ class BillingWorkflowController extends Controller
             'items.*.line_total_before_discount' => ['required', 'numeric', 'min:0'],
             'items.*.line_total' => ['required', 'numeric', 'min:0'],
         ]);
+        $productUnits->validate($data['items']);
         $bill = $workflow->updateBySale($request->user(), $bill, $data);
 
         return response()->json(['data' => $bill]);
@@ -131,7 +141,11 @@ class BillingWorkflowController extends Controller
 
     public function submitDraft(Request $request, BillingRecord $bill, BillingWorkflow $workflow, WorkflowEmailNotifier $notifier): JsonResponse
     {
-        $bill = $workflow->submitDraft($request->user(), $bill);
+        $data = $request->validate([
+            'submission_documents' => ['required', 'array', 'min:1', 'max:8'],
+            'submission_documents.*' => ['string', Rule::in(BillingWorkflow::SUBMISSION_DOCUMENT_TYPES)],
+        ]);
+        $bill = $workflow->submitDraft($request->user(), $bill, $data['submission_documents']);
         $notifier->billSubmitted($bill, $request->user());
 
         return response()->json(['data' => $bill]);
@@ -139,10 +153,110 @@ class BillingWorkflowController extends Controller
 
     public function pendingApproval(CustomerCreditResolver $creditResolver): JsonResponse
     {
-        $bills = BillingRecord::query()->with(['items', 'documents'])->where('status', 'รอหัวหน้าอนุมัติ')->orderBy('created_at')->get();
+        $bills = BillingRecord::query()
+            ->with(['items', 'documents', 'quotationDocumentVersion' => fn ($query) => $query
+                ->select(['document_version_id', 'template_id', 'revision_no', 'filename', 'pdf_sha256', 'confirmed_by', 'created_at'])
+                ->with('powerOfAttorney:authorization_version_id,document_version_id,authorization_no,filename,draft_pdf_sha256,created_at')])
+            ->where('status', 'รอหัวหน้าอนุมัติ')
+            ->orderBy('created_at')
+            ->get();
         $this->applyCurrentCreditProfiles($bills, $creditResolver);
 
         return response()->json(['data' => $bills]);
+    }
+
+    public function approvalQuotation(Request $request, BillingRecord $bill, DocumentService $documents): mixed
+    {
+        $this->authorizeBillRead($request, $bill);
+        abort_if($bill->workflow_type === 'customer_po_direct' || ! $bill->ref_qt_id, 404, 'รายการนี้ไม่มีใบเสนอราคา');
+        $version = QuotationDocumentVersion::query()
+            ->where('document_version_id', $bill->quotation_document_version_id)
+            ->where('bill_id', $bill->bill_id)
+            ->where('qt_id', $bill->ref_qt_id)
+            ->firstOrFail();
+        $bytes = $documents->confirmedQuotationVersionPdf($version, $bill);
+        DocumentDownloadAudit::capture($request, 'quotation_approval_snapshot', bill: $bill, extra: [
+            'document_version_id' => $version->document_version_id,
+            'template_id' => $version->template_id,
+            'pdf_sha256' => $version->pdf_sha256,
+        ]);
+
+        return response($bytes, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="quotation-approval-snapshot.pdf"',
+            'Cache-Control' => 'no-store, private',
+            'X-Document-SHA256' => hash('sha256', $bytes),
+        ]);
+    }
+
+    public function approvalPowerOfAttorney(Request $request, BillingRecord $bill, PowerOfAttorneyService $authorizations): mixed
+    {
+        $this->authorizeBillRead($request, $bill);
+        abort_unless(
+            in_array('power_of_attorney', (array) $bill->submission_document_requirements, true),
+            404,
+            'รายการนี้ไม่ได้เลือก Draft หนังสือมอบอำนาจสำหรับการอนุมัติ'
+        );
+        $authorization = $this->currentPowerOfAttorney($bill);
+        $bytes = $authorizations->pdf($authorization, $bill);
+        DocumentDownloadAudit::capture($request, 'power_of_attorney_approval_preview', bill: $bill, extra: [
+            'authorization_version_id' => $authorization->authorization_version_id,
+            'document_version_id' => $authorization->document_version_id,
+            'draft_pdf_sha256' => $authorization->draft_pdf_sha256,
+        ]);
+
+        return response($bytes, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="power-of-attorney-approval-preview.pdf"',
+            'Cache-Control' => 'no-store, private',
+            'X-Document-SHA256' => hash('sha256', $bytes),
+        ]);
+    }
+
+    public function powerOfAttorneyPreview(Request $request, BillingRecord $bill, PowerOfAttorneyService $authorizations): mixed
+    {
+        $this->authorizeBillRead($request, $bill);
+        $authorization = $this->currentPowerOfAttorney($bill);
+        $bytes = $authorizations->pdf($authorization, $bill);
+        DocumentDownloadAudit::capture($request, 'power_of_attorney_preview', bill: $bill, extra: [
+            'authorization_version_id' => $authorization->authorization_version_id,
+            'document_version_id' => $authorization->document_version_id,
+        ]);
+
+        return response($bytes, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="power-of-attorney-preview.pdf"',
+            'Cache-Control' => 'no-store, private',
+            'X-Document-SHA256' => hash('sha256', $bytes),
+        ]);
+    }
+
+    public function powerOfAttorney(Request $request, BillingRecord $bill, PowerOfAttorneyService $authorizations, DocumentService $documents): mixed
+    {
+        $this->authorizeBillRead($request, $bill);
+        $authorization = $this->currentPowerOfAttorney($bill);
+        $bytes = $authorizations->pdf($authorization, $bill);
+        DocumentDownloadAudit::capture($request, 'power_of_attorney', bill: $bill, extra: [
+            'authorization_version_id' => $authorization->authorization_version_id,
+            'document_version_id' => $authorization->document_version_id,
+        ]);
+
+        return response($bytes, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => $documents->attachmentDisposition((string) $authorization->filename),
+            'Cache-Control' => 'no-store, private',
+            'X-Document-SHA256' => hash('sha256', $bytes),
+        ]);
+    }
+
+    private function currentPowerOfAttorney(BillingRecord $bill): QuotationPowerOfAttorneyVersion
+    {
+        abort_if(! $bill->quotation_document_version_id, 404, 'รายการนี้ยังไม่มีใบเสนอราคาฉบับยืนยัน');
+
+        return QuotationPowerOfAttorneyVersion::query()
+            ->where('bill_id', $bill->bill_id)
+            ->where('document_version_id', $bill->quotation_document_version_id)
+            ->firstOrFail();
     }
 
     public function approve(Request $request, BillingRecord $bill, BillingWorkflow $workflow, WorkflowEmailNotifier $notifier): JsonResponse
@@ -151,6 +265,7 @@ class BillingWorkflowController extends Controller
             'password' => ['required', 'string', 'max:255'],
             'intent' => ['required', 'string', Rule::in([
                 ElectronicSignatureService::APPROVAL_INTENT,
+                ElectronicSignatureService::LEGACY_APPROVAL_INTENT,
                 ElectronicSignatureService::PO_DIRECT_APPROVAL_INTENT,
             ])],
         ]);
@@ -180,7 +295,7 @@ class BillingWorkflowController extends Controller
             ->latest('signed_at')
             ->firstOrFail();
         $bytes = $documents->approvalCertificatePdf($bill, $signature);
-        \App\Services\Documents\DocumentDownloadAudit::capture($request, 'approval_certificate', bill: $bill, extra: ['revision_no' => $signature->revision_no]);
+        DocumentDownloadAudit::capture($request, 'approval_certificate', bill: $bill, extra: ['revision_no' => $signature->revision_no]);
 
         return response($bytes, 200, [
             'Content-Type' => 'application/pdf',
@@ -211,7 +326,7 @@ class BillingWorkflowController extends Controller
     public function readyForExport(): JsonResponse
     {
         return response()->json(['data' => BillingRecord::query()
-            ->with(['items', 'creator:id,username,department'])
+            ->with(['items', 'creator:id,username,first_name,last_name,phone,department'])
             ->whereIn('status', self::EXPORTABLE_STATUSES)
             ->orderBy('bill_id')
             ->get()]);
@@ -236,7 +351,7 @@ class BillingWorkflowController extends Controller
     {
         $ids = $request->validate(['bill_ids' => ['nullable', 'array'], 'bill_ids.*' => ['integer']])['bill_ids'] ?? [];
         $bills = BillingRecord::query()
-            ->with(['items', 'creator:id,username,department'])
+            ->with(['items', 'creator:id,username,first_name,last_name,phone,department'])
             ->whereIn('status', self::EXPORTABLE_STATUSES)
             ->when($ids !== [], fn ($query) => $query->whereIn('bill_id', $ids))->orderBy('bill_id')->get();
         abort_if($bills->isEmpty(), 422, 'ไม่มีบิลที่พร้อม Export');
@@ -253,16 +368,19 @@ class BillingWorkflowController extends Controller
         ]);
     }
 
-    public function exportQuotationsPdf(Request $request, DocumentService $documents): mixed
+    public function exportQuotationsPdf(Request $request, DocumentService $documents, QuotationTemplateCatalog $templates): mixed
     {
-        $ids = $request->validate([
+        $data = $request->validate([
             'bill_ids' => ['required', 'array', 'min:1', 'max:100'],
             'bill_ids.*' => ['required', 'integer', 'distinct'],
-        ])['bill_ids'];
+            'template' => ['nullable', 'string', 'max:64'],
+        ]);
+        $ids = $data['bill_ids'];
+        $template = $templates->requireAvailable($data['template'] ?? null);
         $bills = BillingRecord::query()
             ->with([
                 'items', 'signatures', 'documents', 'customerAcceptanceSignatures',
-                'quotation.items', 'quotation.creator:id,username,department',
+                'quotation.items', 'quotation.creator:id,username,first_name,last_name,phone,department',
             ])
             ->whereIn('status', self::EXPORTABLE_STATUSES)
             ->whereIn('bill_id', $ids)
@@ -272,7 +390,7 @@ class BillingWorkflowController extends Controller
         $withoutQuotation = $bills->filter(fn (BillingRecord $bill): bool => $bill->quotation === null)->pluck('bill_id');
         abort_if($withoutQuotation->isNotEmpty(), 422, 'Bill #'.$withoutQuotation->implode(', #').' เปิดจาก PO โดยตรง จึงไม่มีใบเสนอราคาให้ Export');
 
-        $bytes = $documents->quotationBatchPdf($bills);
+        $bytes = $documents->quotationBatchPdf($bills, template: $template);
         $request->attributes->set('document_audit', ['type' => 'quotation_batch', 'documents' => $bills->map(fn ($bill) => ['bill_id' => $bill->bill_id, 'quotation_id' => $bill->ref_qt_id, 'quotation_no' => $bill->quotation->qt_no, 'revision_no' => $bill->revision_no])->all()]);
         Quotation::query()->whereIn('qt_id', $bills->pluck('ref_qt_id'))->update([
             'quotation_printed_at' => now(),
@@ -305,7 +423,7 @@ class BillingWorkflowController extends Controller
         $bytes = $documents->billPdf($bill, $copy, $canceled);
         $bill->forceFill(['document_printed_at' => now(), 'document_printed_by' => $request->user()->username])->save();
         $filename = $documents->billDownloadName($bill, $copy, $canceled);
-        \App\Services\Documents\DocumentDownloadAudit::capture($request, $canceled ? 'bill_canceled' : ($copy ? 'bill_copy' : 'bill_original'), bill: $bill, extra: ['tax_invoice_no' => $bill->tax_invoice_no]);
+        DocumentDownloadAudit::capture($request, $canceled ? 'bill_canceled' : ($copy ? 'bill_copy' : 'bill_original'), bill: $bill, extra: ['tax_invoice_no' => $bill->tax_invoice_no]);
 
         return response($bytes, 200, [
             'Content-Type' => 'application/pdf',

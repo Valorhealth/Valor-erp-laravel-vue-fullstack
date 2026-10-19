@@ -8,11 +8,29 @@ use App\Models\UserSignatureAsset;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
 
 final class UserSignatureController extends Controller
 {
     public function store(Request $request, User $user): JsonResponse
     {
+        return $this->saveSignature($request, $user);
+    }
+
+    public function storeMine(Request $request): JsonResponse
+    {
+        return $this->saveSignature($request, $request->user(), true);
+    }
+
+    private function saveSignature(Request $request, User $user, bool $verifyPassword = false): JsonResponse
+    {
+        if ($verifyPassword) {
+            $data = $request->validate(['current_password' => ['required', 'string', 'max:255']]);
+            if (! Hash::check($data['current_password'], (string) $user->password_hash)) {
+                throw ValidationException::withMessages(['current_password' => 'รหัสผ่านปัจจุบันไม่ถูกต้อง']);
+            }
+        }
         $file = $request->validate([
             'file' => ['required', 'file', 'max:1024', 'mimes:png', 'dimensions:max_width=2000,max_height=1000'],
         ])['file'];
@@ -69,5 +87,10 @@ final class UserSignatureController extends Controller
             'Cache-Control' => 'private, no-store',
             'Content-Disposition' => 'inline; filename*=UTF-8\'\''.rawurlencode($asset->file_name),
         ]);
+    }
+
+    public function showMine(Request $request): mixed
+    {
+        return $this->show($request->user());
     }
 }

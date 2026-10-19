@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
 import { auth } from '../stores/auth'
+import { i18n } from '../stores/i18n'
 import type { SalesTask, User } from '../types/api'
 import { apiError, shortDate, todayIso } from '../utils/format'
 
@@ -17,7 +18,10 @@ const progressNote = ref('')
 const savingProgress = ref(false)
 const canManage = computed(() => auth.can('approve_bills') || auth.can('system_admin'))
 const month = ref(todayIso().slice(0, 7))
-const calendarMode = ref<'month' | 'week' | 'day' | 'list'>('month')
+const calendarMode = ref<'month' | 'week' | 'day' | 'list'>(window.matchMedia('(max-width: 640px)').matches ? 'list' : 'month')
+const taskDetailRef = ref<HTMLElement | null>(null)
+const assigneeSearch = ref('')
+const filteredAssignableUsers = computed(() => assignableUsers.value.filter(user => assigneeLabel(user).toLocaleLowerCase().includes(assigneeSearch.value.toLocaleLowerCase())))
 const selectedDate = ref(todayIso())
 const form = reactive({ title: '', description: '', assigned_to: [] as string[], start_date: todayIso(), end_date: todayIso(), start_time: '09:00', end_time: '12:00', all_day: true, priority: 'ปกติ' })
 const monthTasks = computed(() => {
@@ -74,12 +78,22 @@ const taskCalendarWeeks = computed(() => Array.from({ length: 6 }, (_, weekIndex
 }))
 const selectedDateTasks = computed(() => tasks.value.filter((task) => task.start_date <= selectedDate.value && task.end_date >= selectedDate.value))
 const weekDays = computed(() => { const current = new Date(`${selectedDate.value}T00:00:00`); const offset=(current.getDay()+6)%7; current.setDate(current.getDate()-offset); return Array.from({length:7},(_,index)=>{const date=new Date(current);date.setDate(current.getDate()+index);const iso=localIso(date);return {iso,day:date.getDate(),tasks:tasks.value.filter((task)=>task.start_date<=iso&&task.end_date>=iso)}}) })
-function selectDate(iso: string) { selectedDate.value=iso; form.start_date=iso; form.end_date=iso }
+function selectDate(iso: string) {
+  selectedDate.value=iso; form.start_date=iso; form.end_date=iso
+  if (window.matchMedia('(max-width: 640px)').matches) calendarMode.value = 'day'
+}
 function shiftMonth(delta: number) { const [year,mon]=month.value.split('-').map(Number); const date=new Date(year,mon-1+delta,1); month.value=localIso(date).slice(0,7); selectedDate.value=`${month.value}-01` }
 function goToday() { month.value=todayIso().slice(0,7); selectedDate.value=todayIso() }
 function progressTime(value: string) { return new Intl.DateTimeFormat('th-TH', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) }
 function taskTimelineStyle(segment: { start: number; end: number; track: number }) { return { gridColumn: `${segment.start + 1} / ${segment.end + 2}`, gridRow: segment.track + 1 } }
-function openTask(task: SalesTask) { selected.value = task; selectedDate.value = task.start_date }
+async function openTask(task: SalesTask) {
+  selected.value = task
+  selectedDate.value = task.start_date
+  if (window.matchMedia('(max-width: 640px)').matches) {
+    await nextTick()
+    taskDetailRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
 function assigneeLabel(user: User): string {
   const name = [user.first_name, user.last_name].filter(Boolean).join(' ')
   return `${user.username}${name ? ` · ${name}` : ''} · ${user.role || 'ไม่ระบุ Role'} · ${user.department || 'ไม่ระบุแผนก'}`
@@ -97,6 +111,7 @@ async function load() {
   } catch (cause) { error.value = apiError(cause, 'โหลดตารางงานไม่สำเร็จ') }
 }
 async function createTask() {
+  if (!form.assigned_to.length) { error.value = 'กรุณาเลือกผู้รับงานอย่างน้อยหนึ่งคน'; return }
   try { await api.post('/api/v1/tasks', form); Object.assign(form, { title: '', description: '', assigned_to: [], start_date: todayIso(), end_date: todayIso(), start_time: '09:00', end_time: '12:00', all_day: true, priority: 'ปกติ' }); await load() }
   catch (cause) { error.value = apiError(cause) }
 }
@@ -130,7 +145,7 @@ onMounted(load)
           <div class="task-calendar-weeks">
             <section v-for="(week, weekIndex) in taskCalendarWeeks" :key="weekIndex" class="task-calendar-week" :style="{ minHeight: `${Math.max(118, 40 + week.trackCount * 30)}px` }">
               <div class="task-week-days">
-                <article v-for="day in week.days" :key="day.iso" type="button" class="task-calendar-day" :class="{ muted: !day.current, today: day.today, selected: day.iso === selectedDate }" @click="selectDate(day.iso)">
+                <article v-for="day in week.days" :key="day.iso" class="task-calendar-day" :class="{ muted: !day.current, today: day.today, selected: day.iso === selectedDate }" role="button" tabindex="0" :aria-label="`ดูงานวันที่ ${shortDate(day.iso)}`" @click="selectDate(day.iso)" @keydown.enter="selectDate(day.iso)" @keydown.space.prevent="selectDate(day.iso)">
                   <header><b>{{ day.day }}</b><small v-if="day.tasks.length">{{ day.tasks.length }} งาน</small></header>
                 </article>
               </div>
@@ -152,12 +167,12 @@ onMounted(load)
             </section>
           </div>
         </template>
-        <template v-else-if="calendarMode==='week'"><div class="week-grid"><section v-for="day in weekDays" :key="day.iso" :class="{today:day.iso===todayIso()}" @click="selectDate(day.iso)"><header>{{ shortDate(day.iso) }}</header><button v-for="task in day.tasks" :key="task.task_id" :class="`calendar-event event--${task.status}`" @click.stop="selected=task">{{ task.title }}<small>{{ task.assigned_to }} · โดย {{ task.assigned_by }}</small></button></section></div></template>
-        <div v-else class="calendar-list"><div class="section-heading"><h2>{{ calendarMode==='day' ? `งานวันที่ ${shortDate(selectedDate)}` : 'รายการงานประจำเดือน' }}</h2><CompatDateTimeInput v-if="calendarMode==='day'" v-model="selectedDate" mode="date" aria-label="เลือกวันที่" /></div><button v-for="task in (calendarMode==='day'?selectedDateTasks:monthTasks)" :key="task.task_id" class="task-card" :class="`task-card--${task.status}`" @click="selected=task"><span>{{ shortDate(task.start_date) }}{{task.end_date!==task.start_date?` – ${shortDate(task.end_date)}`:''}}</span><strong>{{task.title}}</strong><small>{{task.assigned_to}} · มอบหมายโดย {{ task.assigned_by }} · {{task.priority}} · {{task.all_day?'ทั้งวัน':`${task.start_time?.slice(0,5)}–${task.end_time?.slice(0,5)}`}}</small></button><p v-if="!(calendarMode==='day'?selectedDateTasks:monthTasks).length" class="empty-state">ไม่มีงานในช่วงนี้</p></div>
+        <template v-else-if="calendarMode==='week'"><div class="week-grid"><section v-for="day in weekDays" :key="day.iso" :class="{today:day.iso===todayIso()}" @click="selectDate(day.iso)"><header>{{ shortDate(day.iso) }}</header><button v-for="task in day.tasks" :key="task.task_id" :class="`calendar-event event--${task.status}`" @click.stop="openTask(task)">{{ task.title }}<small>{{ task.assigned_to }} · โดย {{ task.assigned_by }}</small></button></section></div></template>
+        <div v-else class="calendar-list"><div class="section-heading"><h2>{{ calendarMode==='day' ? `งานวันที่ ${shortDate(selectedDate)}` : 'รายการงานประจำเดือน' }}</h2><CompatDateTimeInput v-if="calendarMode==='day'" v-model="selectedDate" mode="date" aria-label="เลือกวันที่" /></div><button v-for="task in (calendarMode==='day'?selectedDateTasks:monthTasks)" :key="task.task_id" class="task-card" :class="`task-card--${task.status}`" @click="openTask(task)"><span>{{ shortDate(task.start_date) }}{{task.end_date!==task.start_date?` – ${shortDate(task.end_date)}`:''}}</span><strong>{{task.title}}</strong><small>{{task.assigned_to}} · มอบหมายโดย {{ task.assigned_by }} · {{task.priority}} · {{task.all_day?'ทั้งวัน':`${task.start_time?.slice(0,5)}–${task.end_time?.slice(0,5)}`}}</small></button><p v-if="!(calendarMode==='day'?selectedDateTasks:monthTasks).length" class="empty-state">ไม่มีงานในช่วงนี้</p></div>
       </section>
       <aside class="content-card calendar-aside">
         <h2>งานวันนี้</h2><article v-for="task in todayTasks" :key="task.task_id" class="mini-task"><strong>{{ task.title }}</strong><small>{{ task.assigned_to }} · มอบหมายโดย {{ task.assigned_by }}</small><StatusPill :status="task.status" /></article>
-        <hr><template v-if="selected"><div class="section-heading"><h2>{{ selected.title }}</h2><StatusPill :status="selected.status" /></div><p>{{ selected.description || '-' }}</p><p class="muted">มอบหมายให้ {{ selected.assigned_to }} โดย <strong>{{ selected.assigned_by }}</strong></p><label><span>สถานะล่าสุด</span><select v-model="progressStatus"><option>รอดำเนินการ</option><option>กำลังดำเนินการ</option><option>สำเร็จ</option><option>ยกเลิก</option></select></label><label><span>รายละเอียดความคืบหน้า *</span><textarea v-model="progressNote" rows="3" placeholder="ตัวอย่าง: ติดต่อโรงพยาบาลแล้ว กำลังรอเอกสารยืนยัน"></textarea></label><button class="primary-button" :disabled="savingProgress || !progressNote.trim()" @click="updateStatus(selected)">{{ savingProgress ? 'กำลังบันทึก…' : 'บันทึกความคืบหน้า' }}</button><div class="task-progress-list section-gap-sm"><h3>ลำดับความคืบหน้า</h3><article v-for="update in [...(selected.progress_updates || [])].reverse()" :key="update.update_id"><div><StatusPill :status="update.status" /><small>{{ progressTime(update.created_at) }}</small></div><p>{{ update.progress_note }}</p><small>อัปเดตโดย {{ update.updated_by }}</small></article><p v-if="!selected.progress_updates?.length" class="muted">ยังไม่มีประวัติความคืบหน้า</p></div><button v-if="canManage" class="danger-button" @click="removeTask(selected)">ลบงานนี้</button></template><p v-else class="muted">เลือกงานเพื่อดูรายละเอียด</p>
+        <hr><div v-if="selected" ref="taskDetailRef"><div class="section-heading"><h2>{{ selected.title }}</h2><StatusPill :status="selected.status" /></div><p>{{ selected.description || '-' }}</p><p class="muted">มอบหมายให้ {{ selected.assigned_to }} โดย <strong>{{ selected.assigned_by }}</strong></p><label><span>สถานะล่าสุด</span><select v-model="progressStatus"><option>รอดำเนินการ</option><option>กำลังดำเนินการ</option><option>สำเร็จ</option><option>ยกเลิก</option></select></label><label><span>รายละเอียดความคืบหน้า *</span><textarea v-model="progressNote" rows="3" placeholder="ตัวอย่าง: ติดต่อโรงพยาบาลแล้ว กำลังรอเอกสารยืนยัน"></textarea></label><button class="primary-button" :disabled="savingProgress || !progressNote.trim()" @click="updateStatus(selected)">{{ savingProgress ? 'กำลังบันทึก…' : 'บันทึกความคืบหน้า' }}</button><div class="task-progress-list section-gap-sm"><h3>ลำดับความคืบหน้า</h3><article v-for="update in [...(selected.progress_updates || [])].reverse()" :key="update.update_id"><div><StatusPill :status="update.status" /><small>{{ progressTime(update.created_at) }}</small></div><p>{{ update.progress_note }}</p><small>อัปเดตโดย {{ update.updated_by }}</small></article><p v-if="!selected.progress_updates?.length" class="muted">ยังไม่มีประวัติความคืบหน้า</p></div><button v-if="canManage" class="danger-button" @click="removeTask(selected)">ลบงานนี้</button></div><p v-else class="muted">เลือกงานเพื่อดูรายละเอียด</p>
       </aside>
     </div>
     <form v-if="canManage" class="content-card form-grid section-gap" @submit.prevent="createTask">
@@ -165,7 +180,8 @@ onMounted(load)
       <label><span>หัวข้องาน *</span><input v-model="form.title" required></label>
       <label><span>ความสำคัญ</span><select v-model="form.priority"><option>ปกติ</option><option>ด่วน</option><option>สำคัญมาก</option></select></label>
       <label class="span-2"><span>รายละเอียด</span><textarea v-model="form.description" rows="3"></textarea></label>
-      <label class="span-2"><span>มอบหมายให้ (เลือกได้ทุก Role) *</span><select v-model="form.assigned_to" multiple required><option v-for="person in assignableUsers" :key="person.id" :value="person.username">{{ assigneeLabel(person) }}</option></select><small>เลือกได้หลายบัญชี ระบบจะสร้างงานแยกให้แต่ละคน และบันทึกผู้มอบหมายเป็น {{ auth.user.value?.username }}</small></label>
+      <label class="span-2 task-assignee-desktop"><span>มอบหมายให้ (เลือกได้ทุก Role) *</span><select v-model="form.assigned_to" multiple><option v-for="person in assignableUsers" :key="person.id" :value="person.username">{{ assigneeLabel(person) }}</option></select><small>{{ i18n.isEnglish.value ? `You can select multiple accounts. A separate task will be created for each account and ${auth.user.value?.username} will be recorded as the assigner.` : `เลือกได้หลายบัญชี ระบบจะสร้างงานแยกให้แต่ละคน และบันทึกผู้มอบหมายเป็น ${auth.user.value?.username}` }}</small></label>
+      <div class="span-2 task-assignee-mobile"><label><span>มอบหมายให้ *</span><input v-model.trim="assigneeSearch" type="search" placeholder="ค้นหาชื่อ / Role / แผนก"></label><div class="task-assignee-list"><label v-for="person in filteredAssignableUsers" :key="person.id"><input v-model="form.assigned_to" type="checkbox" :value="person.username"><span>{{ assigneeLabel(person) }}</span></label><p v-if="!filteredAssignableUsers.length">ไม่พบบัญชีตามคำค้นหา</p></div><small>เลือกได้หลายบัญชี ระบบสร้างงานแยกให้แต่ละคน</small></div>
       <label><span>วันที่เริ่ม</span><CompatDateTimeInput v-model="form.start_date" mode="date" required /></label><label><span>วันที่สิ้นสุด</span><CompatDateTimeInput v-model="form.end_date" mode="date" required /></label>
       <label class="check-field"><input v-model="form.all_day" type="checkbox"> ทั้งวัน</label><div></div>
       <label v-if="!form.all_day"><span>เวลาเริ่ม</span><CompatDateTimeInput v-model="form.start_time" mode="time" /></label><label v-if="!form.all_day"><span>เวลาสิ้นสุด</span><CompatDateTimeInput v-model="form.end_time" mode="time" /></label>

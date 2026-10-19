@@ -128,7 +128,7 @@ class CreditRequestController extends Controller
         return response()->json(['data' => $creditRequest]);
     }
 
-    public function open(Request $request, CreditRequest $creditRequest): JsonResponse
+    public function open(Request $request, CreditRequest $creditRequest, WorkflowEmailNotifier $notifier): JsonResponse
     {
         $data = $request->validate([
             'ar_code' => ['required', 'string', 'max:100'],
@@ -158,6 +158,7 @@ class CreditRequestController extends Controller
 
             return $creditRequest;
         });
+        $notifier->creditOpened($creditRequest, $request->user());
 
         return response()->json(['data' => $creditRequest]);
     }

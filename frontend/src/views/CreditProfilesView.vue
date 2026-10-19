@@ -4,6 +4,7 @@ import { api } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import type { CreditProfile, Paginated } from '../types/api'
 import { apiError, money } from '../utils/format'
+import { preferredRowsPerPage } from '../utils/preferences'
 
 interface CreditProfileResponse {
   data: {
@@ -24,7 +25,7 @@ const form = reactive({ ar_code: '', ar_name: '', credit_limit: 0, credit_outsta
 async function load(page = 1) {
   error.value = ''
   try {
-    const response = await api.get<CreditProfileResponse>('/api/v1/credit-profiles', { params: { page, search: search.value, per_page: 25 } })
+    const response = await api.get<CreditProfileResponse>('/api/v1/credit-profiles', { params: { page, search: search.value, per_page: preferredRowsPerPage(25) } })
     profilePage.value = response.data.data.profiles
     profiles.value = profilePage.value.data
     summary.value = response.data.data.summary

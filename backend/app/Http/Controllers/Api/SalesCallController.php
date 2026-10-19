@@ -5,11 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\SalesCallActivity;
 use App\Models\SalesCallImportBatch;
+use App\Models\SalesCallMonthlySubmission;
 use App\Models\User;
 use App\Services\Authorization\RoleAccess;
+use App\Services\Notifications\WorkflowEmailNotifier;
 use App\Services\SalesCalls\SalesCallImportService;
 use App\Services\SalesCalls\SalesCallImportStorage;
 use App\Services\SalesCalls\SalesCallReportService;
+use App\Services\SalesCalls\SalesCallSubmissionTracker;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -39,7 +42,7 @@ class SalesCallController extends Controller
         ]);
     }
 
-    public function savePeriod(Request $request, SalesCallReportService $reports): JsonResponse
+    public function savePeriod(Request $request, SalesCallReportService $reports, SalesCallSubmissionTracker $submissionTracker, WorkflowEmailNotifier $notifier): JsonResponse
     {
         $this->authorizeSale($request, $reports);
         $range = $this->validatedPeriod($request);
@@ -107,6 +110,11 @@ class SalesCallController extends Controller
                 });
             })->sortBy([['activity_date', 'asc'], ['call_no', 'asc']])->values();
         });
+        if ($rows->isNotEmpty()) {
+            foreach ($submissionTracker->markWebsite($request->user()->id, [$range['date_from']]) as $month) {
+                $notifier->salesCallWebsiteStarted($request->user(), $month);
+            }
+        }
 
         return response()->json(['data' => [...$range, 'rows' => $rows], 'message' => 'บันทึก Call Sale ช่วงครึ่งเดือนเรียบร้อยแล้ว']);
     }
@@ -132,7 +140,7 @@ class SalesCallController extends Controller
         ]]);
     }
 
-    public function import(Request $request, SalesCallReportService $reports, SalesCallImportService $imports, SalesCallImportStorage $storage): JsonResponse
+    public function import(Request $request, SalesCallReportService $reports, SalesCallImportService $imports, SalesCallImportStorage $storage, SalesCallSubmissionTracker $submissionTracker, WorkflowEmailNotifier $notifier): JsonResponse
     {
         $this->authorizeSale($request, $reports);
         $file = $request->validate([
@@ -154,11 +162,11 @@ class SalesCallController extends Controller
         $storedPath = $storage->store($file, $request->user()->id, $reportMonth);
 
         try {
-            [$result, $batch, $previousFiles] = DB::transaction(function () use ($request, $file, $parsed, $imports, $storage, $storedPath, $reportMonth, $dateFrom, $dateTo): array {
+            [$result, $batch, $previousFiles] = DB::transaction(function () use ($request, $file, $parsed, $imports, $storage, $storedPath, $reportMonth, $dateFrom, $dateTo, $submissionTracker): array {
                 $result = $imports->replaceUserDates($request->user(), $parsed['rows']);
                 $previousBatches = SalesCallImportBatch::query()
                     ->where('seller_user_id', $request->user()->id)
-                    ->whereDate('report_month', $reportMonth)
+                    ->where('report_month', $reportMonth)
                     ->lockForUpdate()
                     ->get();
                 $batch = SalesCallImportBatch::query()->create([
@@ -182,6 +190,7 @@ class SalesCallController extends Controller
                 if ($previousBatches->isNotEmpty()) {
                     SalesCallImportBatch::query()->whereIn('id', $previousBatches->pluck('id'))->delete();
                 }
+                $submissionTracker->markExcel($request->user()->id, $reportMonth);
 
                 return [$result, $batch, $previousFiles];
             });
@@ -197,6 +206,7 @@ class SalesCallController extends Controller
                 report($exception);
             }
         }
+        $notifier->salesCallImported($request->user(), $reportMonth, (int) $result['imported_rows']);
 
         return response()->json([
             'data' => [...$result, 'import_batch_id' => $batch->id],
@@ -218,14 +228,18 @@ class SalesCallController extends Controller
         $counts = SalesCallActivity::query()
             ->whereIn('seller_user_id', $sellerIds)
             ->whereBetween('activity_date', [$from->toDateString(), $to->toDateString()])
-            ->selectRaw("seller_user_id, COUNT(*) AS activity_total, SUM(CASE WHEN specialty IS NOT NULL AND BTRIM(specialty) <> '' AND outcome <> 'No Call' THEN 1 ELSE 0 END) AS call_total")
+            ->selectRaw("seller_user_id, COUNT(*) AS activity_total, SUM(CASE WHEN specialty IS NOT NULL AND BTRIM(specialty) <> '' AND outcome <> 'No Call' THEN 1 ELSE 0 END) AS call_total, MIN(created_at) AS first_activity_at, MAX(updated_at) AS last_activity_at")
             ->groupBy('seller_user_id')->get()->keyBy('seller_user_id');
         $batches = SalesCallImportBatch::query()
             ->whereIn('seller_user_id', $sellerIds)
-            ->whereDate('report_month', $from->toDateString())
+            ->where('report_month', $from->toDateString())
             ->orderByDesc('created_at')->get()->groupBy('seller_user_id');
+        $submissionMetadata = SalesCallMonthlySubmission::query()
+            ->whereIn('seller_user_id', $sellerIds)
+            ->where('report_month', $from->toDateString())
+            ->get()->keyBy('seller_user_id');
 
-        $rows = $sellers->map(function (User $seller) use ($counts, $batches): array {
+        $rows = $sellers->map(function (User $seller) use ($counts, $batches, $submissionMetadata): array {
             $files = ($batches->get($seller->id) ?? collect())->map(fn (SalesCallImportBatch $batch): array => [
                 'id' => $batch->id,
                 'original_filename' => $batch->original_filename,
@@ -237,6 +251,26 @@ class SalesCallController extends Controller
             ])->values();
             $activityCount = (int) ($counts->get($seller->id)?->activity_total ?? 0);
             $callCount = (int) ($counts->get($seller->id)?->call_total ?? 0);
+            $count = $counts->get($seller->id);
+            $metadata = $submissionMetadata->get($seller->id);
+            $hasActiveImport = $files->contains(fn (array $file): bool => $file['data_deleted_at'] === null);
+            $usedExcel = $activityCount > 0 && ($metadata?->used_excel ?? $hasActiveImport);
+            $usedWebsite = $activityCount > 0 && ($metadata?->used_website ?? ! $hasActiveImport);
+            $submissionMethod = match (true) {
+                $usedExcel && $usedWebsite => 'excel_import_and_website',
+                $usedExcel => 'excel_import',
+                $usedWebsite => 'website',
+                default => null,
+            };
+            $fileFirstAt = $files->whereNull('data_deleted_at')->pluck('created_at')->filter()->min();
+            $fileLastAt = $files->whereNull('data_deleted_at')->pluck('created_at')->filter()->max();
+            $firstSubmittedAt = $metadata?->first_submitted_at?->toIso8601String()
+                ?? collect([$count?->first_activity_at, $fileFirstAt])->filter()->min();
+            $lastEditedAt = collect([
+                $metadata?->last_edited_at?->toIso8601String(),
+                $count?->last_activity_at,
+                $fileLastAt,
+            ])->filter()->max();
             $archivedOnly = $activityCount === 0
                 && $files->isNotEmpty()
                 && $files->every(fn (array $file): bool => $file['data_deleted_at'] !== null);
@@ -250,6 +284,9 @@ class SalesCallController extends Controller
                 'archived_only' => $archivedOnly,
                 'activity_count' => $activityCount,
                 'call_count' => $callCount,
+                'submission_method' => $submissionMethod,
+                'first_submitted_at' => $activityCount > 0 ? $firstSubmittedAt : null,
+                'last_edited_at' => $activityCount > 0 ? $lastEditedAt : null,
                 'files' => $files,
             ];
         });
@@ -275,7 +312,7 @@ class SalesCallController extends Controller
         }, $batch->original_filename, ['Content-Type' => $batch->mime_type ?: 'application/octet-stream']);
     }
 
-    public function deleteMonths(Request $request, SalesCallReportService $reports): JsonResponse
+    public function deleteMonths(Request $request, SalesCallReportService $reports, SalesCallSubmissionTracker $submissionTracker): JsonResponse
     {
         $this->authorizeManager($request, $reports);
         $data = $request->validate([
@@ -284,7 +321,7 @@ class SalesCallController extends Controller
             'items.*.month' => ['required', 'date_format:Y-m'],
         ]);
 
-        $deleted = DB::transaction(function () use ($request, $data): int {
+        $deleted = DB::transaction(function () use ($request, $data, $submissionTracker): int {
             DB::select('SELECT pg_advisory_xact_lock(hashtext(?))', ['sales-call-manager-month-delete']);
             $total = 0;
             foreach ($data['items'] as $item) {
@@ -293,8 +330,9 @@ class SalesCallController extends Controller
                 $total += SalesCallActivity::query()->where('seller_user_id', $item['seller_user_id'])
                     ->whereBetween('activity_date', [$from->toDateString(), $to->toDateString()])->delete();
                 SalesCallImportBatch::query()->where('seller_user_id', $item['seller_user_id'])
-                    ->whereDate('report_month', $from->toDateString())
+                    ->where('report_month', $from->toDateString())
                     ->update(['data_deleted_at' => now(), 'deleted_by_user_id' => $request->user()->id]);
+                $submissionTracker->forget((int) $item['seller_user_id'], $from);
             }
 
             return $total;
@@ -303,7 +341,7 @@ class SalesCallController extends Controller
         return response()->json(['message' => "ลบข้อมูล Call Sale รายเดือน {$deleted} รายการแล้ว โดยยังเก็บไฟล์ Excel ต้นฉบับไว้เป็นหลักฐาน"]);
     }
 
-    public function updateManagedActivity(Request $request, SalesCallActivity $salesCall, SalesCallReportService $reports): JsonResponse
+    public function updateManagedActivity(Request $request, SalesCallActivity $salesCall, SalesCallReportService $reports, WorkflowEmailNotifier $notifier): JsonResponse
     {
         $this->authorizeManager($request, $reports);
         $allowed = fn (string $category, string $current): array => collect($reports->allowedOptions($category))->push($current)->filter()->unique()->values()->all();
@@ -323,12 +361,16 @@ class SalesCallController extends Controller
             'sm_comment' => ['nullable', 'string', 'max:10000'],
             'status' => ['required', Rule::in($allowed('status', $salesCall->status))],
         ]);
+        $previousComment = trim((string) $salesCall->sm_comment);
         $salesCall->forceFill([
             ...$data,
             'product_interest' => $data['product_1'],
             'next_action' => $this->nullableText($data['call_detail_outcome'] ?? null),
             'opportunity_stage' => $this->stageFor($data['objective'], $data['outcome']),
         ])->save();
+        if (trim((string) $salesCall->sm_comment) !== '' && trim((string) $salesCall->sm_comment) !== $previousComment) {
+            $notifier->salesCallCommented($salesCall, $request->user());
+        }
 
         return response()->json(['data' => $salesCall->fresh(), 'message' => 'แก้ไขข้อมูล Call Sale เรียบร้อยแล้ว']);
     }
@@ -339,7 +381,7 @@ class SalesCallController extends Controller
         $data = $request->validate(['date' => ['required', 'date']]);
         $rows = SalesCallActivity::query()
             ->where('seller_user_id', $request->user()->id)
-            ->whereDate('activity_date', $data['date'])
+            ->where('activity_date', $data['date'])
             ->orderBy('call_no')
             ->get();
 
@@ -349,13 +391,13 @@ class SalesCallController extends Controller
         ]);
     }
 
-    public function saveDay(Request $request, SalesCallReportService $reports): JsonResponse
+    public function saveDay(Request $request, SalesCallReportService $reports, SalesCallSubmissionTracker $submissionTracker, WorkflowEmailNotifier $notifier): JsonResponse
     {
         $this->authorizeSale($request, $reports);
         $date = $request->validate(['date' => ['required', 'date']])['date'];
         $existingDayRows = SalesCallActivity::query()
             ->where('seller_user_id', $request->user()->id)
-            ->whereDate('activity_date', $date)
+            ->where('activity_date', $date)
             ->get();
         $allowed = fn (string $category, string $column): array => collect($reports->allowedOptions($category))
             ->merge($existingDayRows->pluck($column))
@@ -404,7 +446,7 @@ class SalesCallController extends Controller
             DB::select('SELECT pg_advisory_xact_lock(hashtext(?))', ['sales-call-day-'.$request->user()->id.'-'.$data['date']]);
             $existing = SalesCallActivity::query()
                 ->where('seller_user_id', $request->user()->id)
-                ->whereDate('activity_date', $data['date'])
+                ->where('activity_date', $data['date'])
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('call_id');
@@ -424,6 +466,11 @@ class SalesCallController extends Controller
                 return $activity->fresh();
             });
         });
+        if ($rows->isNotEmpty()) {
+            foreach ($submissionTracker->markWebsite($request->user()->id, [$data['date']]) as $month) {
+                $notifier->salesCallWebsiteStarted($request->user(), $month);
+            }
+        }
 
         return response()->json(['data' => ['date' => $data['date'], 'rows' => $rows], 'message' => 'บันทึก Call Sale ประจำวันเรียบร้อยแล้ว']);
     }
@@ -436,7 +483,15 @@ class SalesCallController extends Controller
             ->orderByDesc('activity_date')->orderBy('call_no')->orderByDesc('call_id')
             ->paginate($filters['per_page'] ?? 25)->withQueryString();
 
-        return response()->json(['data' => $page, 'options' => $reports->options($request->user())]);
+        $response = ['data' => $page];
+        // The report screen already receives these options from /dashboard.
+        // Keep the default for backwards compatibility while allowing that
+        // screen to avoid repeating the expensive option queries.
+        if ($request->boolean('include_options', true)) {
+            $response['options'] = $reports->options($request->user());
+        }
+
+        return response()->json($response);
     }
 
     public function history(Request $request, SalesCallReportService $reports): JsonResponse
@@ -454,7 +509,7 @@ class SalesCallController extends Controller
         return response()->json(['data' => $page]);
     }
 
-    public function deleteHistory(Request $request, SalesCallReportService $reports): JsonResponse
+    public function deleteHistory(Request $request, SalesCallReportService $reports, SalesCallSubmissionTracker $submissionTracker): JsonResponse
     {
         $this->authorizeSale($request, $reports);
         $data = $request->validate([
@@ -462,7 +517,7 @@ class SalesCallController extends Controller
             'call_ids.*' => ['required', 'integer', 'distinct'],
         ]);
 
-        $deleted = DB::transaction(function () use ($request, $data): int {
+        $deleted = DB::transaction(function () use ($request, $data, $submissionTracker): int {
             DB::select('SELECT pg_advisory_xact_lock(hashtext(?))', ['sales-call-history-'.$request->user()->id]);
             $rows = SalesCallActivity::query()
                 ->where('seller_user_id', $request->user()->id)
@@ -476,7 +531,7 @@ class SalesCallController extends Controller
             foreach ($dates as $date) {
                 $remaining = SalesCallActivity::query()
                     ->where('seller_user_id', $request->user()->id)
-                    ->whereDate('activity_date', $date)
+                    ->where('activity_date', $date)
                     ->orderBy('call_no')
                     ->lockForUpdate()
                     ->get();
@@ -487,6 +542,7 @@ class SalesCallController extends Controller
                     }
                 }
             }
+            $submissionTracker->markWebsite($request->user()->id, $dates);
 
             return $rows->count();
         });

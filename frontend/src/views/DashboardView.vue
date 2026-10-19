@@ -6,6 +6,7 @@ import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
 import type { DashboardData } from '../types/api'
 import { apiError, money, shortDate, todayIso } from '../utils/format'
+import { i18n } from '../stores/i18n'
 
 const data = ref<DashboardData | null>(null)
 const selectedSales = ref<string[]>([])
@@ -152,7 +153,7 @@ onMounted(loadDashboard)
         </article>
         <article class="metric-card">
           <span>จำนวนสินค้ารวมในทุกบิล</span>
-          <strong>{{ data.summary.items_sold.toLocaleString() }}</strong>
+          <strong>{{ i18n.formatNumber(data.summary.items_sold) }}</strong>
           <small>{{ data.summary.active_customers }} ลูกค้า</small>
         </article>
         <article class="metric-card">
@@ -263,7 +264,7 @@ onMounted(loadDashboard)
               <tbody>
                 <tr v-for="row in data.top_products" :key="row.sku">
                   <td><strong>{{ row.sku || '-' }}</strong><br><small>{{ row.product_name || '-' }}</small></td>
-                  <td>{{ Number(row.quantity).toLocaleString() }}</td>
+                  <td>{{ i18n.formatNumber(row.quantity) }}</td>
                   <td>{{ money(row.discount_amount) }}</td>
                   <td>{{ money(row.net_amount) }}</td>
                 </tr>
