@@ -15,7 +15,7 @@ RUN composer install \
     --no-progress \
     --no-scripts \
     --prefer-dist \
-    --classmap-authoritative \
+    --optimize-autoloader \
     --ignore-platform-req=ext-gd \
     --ignore-platform-req=ext-zip
 
