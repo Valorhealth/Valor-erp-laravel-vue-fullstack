@@ -22,9 +22,17 @@ type EditorItem = {
 type EditorPayload = {
   template: string
   mode: 'original' | 'copy' | 'revised'
+  price_vat_mode: 'in_vat' | 'ex_vat'
   document: {
     number: string
     date: string
+    title: string
+    english_title: string
+    company_name: string
+    company_address: string
+    company_contact: string
+    company_tax_id: string
+    branch: string
     subject: string
     recipient: string
     intro: string
@@ -33,6 +41,15 @@ type EditorPayload = {
     contact: string
     confirmation_terms: string
     document_note: string
+  }
+  customer: {
+    code: string
+    address: string
+    billing_address: string
+    delivery_address: string
+    show_billing_address: boolean
+    show_delivery_address: boolean
+    tax_id: string
   }
   items: EditorItem[]
   bill_discount: number
@@ -101,6 +118,7 @@ const authorizationPreviewUrl = ref('')
 const authorizationExactHtml = ref('')
 const authorizationFrame = ref<HTMLIFrameElement | null>(null)
 const authorizationPreviewing = ref(false)
+const authorizationSaving = ref(false)
 const mobilePane = ref<'edit' | 'preview'>('edit')
 const products = ref<{ sku_code: string; sku_name: string }[]>([])
 const productToAdd = ref('')
@@ -113,6 +131,7 @@ const helpNote = ref('')
 const helpActionNote = ref('')
 const helpSaving = ref(false)
 const activeHelpRequest = computed(() => helpRequest.value && ['pending', 'in_progress'].includes(helpRequest.value.status) ? helpRequest.value : null)
+const canManagePowerOfAttorney = computed(() => auth.can('document_preparation_queue') || auth.can('system_admin'))
 let saveTimer: number | null = null
 let previewTimer: number | null = null
 let historyTimer: number | null = null
@@ -236,7 +255,7 @@ async function refreshExactEditor() {
   }
 }
 async function refreshAuthorizationPreview() {
-  if (!payload.value || locked.value || mode !== 'original' || !payload.value.power_of_attorney.enabled) return
+  if (!canManagePowerOfAttorney.value || !payload.value || mode !== 'original' || !payload.value.power_of_attorney.enabled) return
   const sequence = ++authorizationRequestSequence
   authorizationPreviewing.value = true
   try {
@@ -252,7 +271,7 @@ async function refreshAuthorizationPreview() {
   }
 }
 async function refreshAuthorizationEditor() {
-  if (!payload.value || locked.value || mode !== 'original' || !payload.value.power_of_attorney.enabled) return
+  if (!canManagePowerOfAttorney.value || !payload.value || mode !== 'original' || !payload.value.power_of_attorney.enabled) return
   const sequence = ++authorizationHtmlRequestSequence
   try {
     const response = await api.post<string>(`/api/v1/quotations/${quotationId}/document-editor/power-of-attorney/preview.html`, { template, mode, payload: payload.value }, { responseType: 'text' })
@@ -263,6 +282,16 @@ async function refreshAuthorizationEditor() {
 }
 async function refreshAuthorizationWorkspace() {
   await Promise.all([refreshAuthorizationEditor(), refreshAuthorizationPreview()])
+}
+async function saveAuthorizationDraft() {
+  if (!payload.value || !canManagePowerOfAttorney.value) return
+  authorizationSaving.value = true; error.value = ''
+  try {
+    await api.put(`/api/v1/quotations/${quotationId}/document-editor/power-of-attorney`, { template, mode, payload: payload.value })
+    saveMessage.value = 'บันทึก Draft หนังสือมอบอำนาจแล้ว'
+    await refreshAuthorizationWorkspace()
+  } catch (cause) { error.value = apiError(cause, 'บันทึกหนังสือมอบอำนาจไม่สำเร็จ') }
+  finally { authorizationSaving.value = false }
 }
 async function toggleAuthorization() {
   if (!payload.value) return
@@ -280,6 +309,10 @@ function updateFromExactPath(path: string, rawValue: string) {
   const parts = path.split('.')
   if (parts[0] === 'document' && parts[1] && parts[1] in payload.value.document) {
     ;(payload.value.document as unknown as Record<string, string>)[parts[1]] = rawValue.trim()
+    return
+  }
+  if (parts[0] === 'customer' && parts[1] && ['code', 'billing_address', 'delivery_address', 'tax_id'].includes(parts[1])) {
+    ;(payload.value.customer as unknown as Record<string, string>)[parts[1]] = rawValue.trim()
     return
   }
   if (parts[0] === 'terms' && /^\d+$/.test(parts[1] || '')) {
@@ -394,10 +427,10 @@ async function load() {
       ? `สถานะ ${documentStatus.value} · ${approvedVersionId.value ? 'แสดงฉบับที่ยืนยัน' : 'ไม่พบฉบับที่ยืนยันสำหรับรูปแบบนี้'}`
       : response.data.data.saved_at ? `Draft ล่าสุด ${new Date(response.data.data.saved_at).toLocaleString('th-TH')}` : 'เอกสารใหม่ ยังไม่มี Draft'
     await nextTick(); ignoreChanges = false
-    if (locked.value) { exactHtml.value = ''; await refreshPreview() }
+    if (locked.value) { exactHtml.value = ''; await refreshPreview(); if (canManagePowerOfAttorney.value && payload.value.power_of_attorney.enabled) await refreshAuthorizationWorkspace() }
     else await Promise.all([
       refreshPreview(), refreshExactEditor(),
-      ...(payload.value.power_of_attorney.enabled ? [refreshAuthorizationPreview(), refreshAuthorizationEditor()] : []),
+      ...(canManagePowerOfAttorney.value && payload.value.power_of_attorney.enabled ? [refreshAuthorizationPreview(), refreshAuthorizationEditor()] : []),
     ])
   } catch (cause) { error.value = apiError(cause, 'เปิดตัวแก้ไขใบเสนอราคาไม่สำเร็จ') }
   finally { ignoreChanges = false; loading.value = false }
@@ -428,14 +461,14 @@ onBeforeRouteLeave(async () => {
   <AppShell :title="locked ? 'ใบเสนอราคาที่ส่งอนุมัติแล้ว' : 'แก้ไขใบเสนอราคา'" :subtitle="locked ? `${templateNames[template] || template} · แสดง PDF ฉบับที่ยืนยันตามสถานะ ${documentStatus}` : `${templateNames[template] || template} · คลิกข้อความหรือตัวเลขบนเอกสารเพื่อแก้ไขได้ทันที`">
     <section class="editor-toolbar">
       <div class="toolbar-group"><button class="secondary-button" type="button" @click="back">← กลับ</button><span class="save-state" :class="{ saving }"><i></i>{{ saveMessage }}</span></div>
-      <div class="toolbar-group"><template v-if="locked"><button class="secondary-button" type="button" :disabled="previewing || !approvedVersionId" @click="refreshPreview">{{ previewing ? 'กำลังโหลด…' : 'รีเฟรชฉบับที่ยืนยัน' }}</button><button class="primary-button" type="button" :disabled="!approvedVersionId" @click="downloadCurrentVersion">ดาวน์โหลดฉบับที่ยืนยัน</button></template><template v-else><button class="secondary-button" type="button" :disabled="undoStack.length < 2" @click="undo">↶ Undo</button><button class="secondary-button" type="button" :disabled="!redoStack.length" @click="redo">↷ Redo</button><button class="secondary-button" type="button" :disabled="previewing" @click="refreshPreview">{{ previewing ? 'กำลังสร้าง…' : 'รีเฟรช PDF' }}</button><button class="primary-button" type="button" :disabled="confirming || loading" @click="confirmDocument">{{ confirming ? 'กำลังยืนยัน…' : 'ยืนยันและดาวน์โหลด' }}</button><small v-if="mode === 'original' && payload" class="muted">{{ payload.power_of_attorney.enabled ? 'ยืนยันแล้วกด “← กลับ” จากนั้นกด “สร้างและส่งอนุมัติ” เพื่อเลือก Checklist เอกสาร (ระบบจะสร้าง Draft หนังสือมอบอำนาจคู่กัน)' : 'ยืนยันแล้วกด “← กลับ” จากนั้นกด “สร้างและส่งอนุมัติ” เพื่อเลือก Checklist เอกสาร' }}</small></template></div>
+      <div class="toolbar-group"><template v-if="locked"><button class="secondary-button" type="button" :disabled="previewing || !approvedVersionId" @click="refreshPreview">{{ previewing ? 'กำลังโหลด…' : 'รีเฟรชฉบับที่ยืนยัน' }}</button><button class="primary-button" type="button" :disabled="!approvedVersionId" @click="downloadCurrentVersion">ดาวน์โหลดฉบับที่ยืนยัน</button></template><template v-else><button class="secondary-button" type="button" :disabled="undoStack.length < 2" @click="undo">↶ Undo</button><button class="secondary-button" type="button" :disabled="!redoStack.length" @click="redo">↷ Redo</button><button class="secondary-button" type="button" :disabled="previewing" @click="refreshPreview">{{ previewing ? 'กำลังสร้าง…' : 'รีเฟรช PDF' }}</button><button class="primary-button" type="button" :disabled="confirming || loading" @click="confirmDocument">{{ confirming ? 'กำลังยืนยัน…' : 'ยืนยันและดาวน์โหลด' }}</button><small v-if="mode === 'original' && payload" class="muted">ยืนยันแล้วกด “← กลับ” จากนั้นกด “สร้างและส่งอนุมัติ” เพื่อเลือก Checklist เอกสาร</small></template></div>
     </section>
     <p v-if="error" class="form-error editor-error">{{ error }}</p>
-    <section v-if="payload && !locked && mode === 'original'" class="authorization-opt-in">
+    <section v-if="canManagePowerOfAttorney && payload && mode === 'original'" class="authorization-opt-in">
       <div><strong>ต้องการหนังสือมอบอำนาจ</strong><small>เปิดไว้ ระบบจะสร้างหนังสือมอบอำนาจคู่กับใบเสนอราคา ปิดไว้จะไม่แสดง Preview และไม่สร้างเอกสาร</small></div>
       <label class="switch-control"><input v-model="payload.power_of_attorney.enabled" type="checkbox" @change="toggleAuthorization"><span aria-hidden="true"></span><b>{{ payload.power_of_attorney.enabled ? 'เปิด' : 'ปิด' }}</b></label>
     </section>
-    <section v-if="payload && !locked && mode === 'original' && payload.power_of_attorney.enabled" class="authorization-settings">
+    <section v-if="canManagePowerOfAttorney && payload && mode === 'original' && payload.power_of_attorney.enabled" class="authorization-settings">
       <div><strong>รูปแบบหนังสือมอบอำนาจ</strong><small>เอกสารนี้จะถูกสร้างและตรึงกับ Revision เดียวกับใบเสนอราคา</small></div>
       <label><span>Template</span><select v-model="payload.power_of_attorney.template_id" @change="refreshAuthorizationWorkspace"><option value="general-company">แบบทั่วไปบริษัท</option><option value="anandamahidol">โรงพยาบาลอานันทมหิดล</option><option value="egp">ยื่น e-GP</option><option value="grantee-company-form">แบบระบุชื่อผู้รับมอบอำนาจ</option><option value="anandamahidol-ebidding">รพ.อานันทมหิดล (e-bidding)</option></select></label>
       <label><span>วันที่ออกหนังสือ</span><input v-model="payload.power_of_attorney.issue_date" type="date" @change="refreshAuthorizationWorkspace"></label>
@@ -471,8 +504,8 @@ onBeforeRouteLeave(async () => {
       </aside>
     </div>
 
-    <section v-if="payload && !locked && mode === 'original' && payload.power_of_attorney.enabled" class="authorization-workspace">
-      <header><div><b>หนังสือมอบอำนาจ</b><small>แก้ไขข้อความบนเอกสารด้านซ้าย และตรวจ PDF จริงด้านขวา</small></div><button class="secondary-button" type="button" :disabled="authorizationPreviewing" @click="refreshAuthorizationWorkspace">{{ authorizationPreviewing ? 'กำลังสร้าง…' : 'รีเฟรชหนังสือมอบอำนาจ' }}</button></header>
+    <section v-if="canManagePowerOfAttorney && payload && mode === 'original' && payload.power_of_attorney.enabled" class="authorization-workspace">
+      <header><div><b>หนังสือมอบอำนาจ</b><small>แก้ไขข้อความบนเอกสารด้านซ้าย และตรวจ PDF จริงด้านขวา</small></div><div class="toolbar-group"><button class="secondary-button" type="button" :disabled="authorizationPreviewing" @click="refreshAuthorizationWorkspace">{{ authorizationPreviewing ? 'กำลังสร้าง…' : 'รีเฟรชหนังสือมอบอำนาจ' }}</button><button class="primary-button" type="button" :disabled="authorizationSaving" @click="saveAuthorizationDraft">{{ authorizationSaving ? 'กำลังบันทึก…' : 'บันทึก Draft หนังสือมอบอำนาจ' }}</button></div></header>
       <div class="quotation-editor-grid">
         <section class="canvas-scroll">
           <div v-if="authorizationExactHtml" class="exact-editor"><div class="exact-editor-controls"><label>เลขที่หนังสือ<input v-model="payload.power_of_attorney.authorization_no" @change="refreshAuthorizationEditor"></label><label>วันที่ออกหนังสือ<input v-model="payload.power_of_attorney.issue_date" type="date" @change="refreshAuthorizationEditor"></label><small>คลิกข้อความที่มีกรอบสีฟ้าบนหนังสือมอบอำนาจเพื่อแก้ไขตรงตำแหน่งจริง</small></div><iframe ref="authorizationFrame" :srcdoc="authorizationExactHtml" title="หนังสือมอบอำนาจแบบแก้ไขตรง Template" sandbox="allow-same-origin" @load="bindAuthorizationEditor"></iframe></div>

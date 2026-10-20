@@ -83,6 +83,7 @@ export interface BillingRecord {
   bill_date: string | null
   buyer_name: string | null
   tax_id?: string | null
+  price_vat_mode?: 'in_vat' | 'ex_vat'
   total_amount: string | null
   status: string | null
   created_by: string | null
@@ -92,6 +93,12 @@ export interface BillingRecord {
   submission_document_requirements?: string[] | null
   items?: BillItem[]
   address_note?: string | null
+  billing_address?: string | null
+  delivery_address?: string | null
+  billing_address_id?: number | null
+  delivery_address_id?: number | null
+  standard_show_billing_address?: boolean
+  standard_show_delivery_address?: boolean
   province?: string | null
   district?: string | null
   sub_district?: string | null
@@ -196,12 +203,19 @@ export interface Quotation {
   qt_date: string | null
   buyer_name: string | null
   tax_id: string | null
+  price_vat_mode?: 'in_vat' | 'ex_vat'
   total_amount: string | null
   province: string | null
   district: string | null
   sub_district: string | null
   zipcode: string | null
   address_note: string | null
+  billing_address?: string | null
+  delivery_address?: string | null
+  billing_address_id?: number | null
+  delivery_address_id?: number | null
+  standard_show_billing_address?: boolean
+  standard_show_delivery_address?: boolean
   shipping_type: string | null
   shipping_text: string | null
   bill_note: string | null
@@ -243,6 +257,9 @@ export interface Quotation {
     documents?: BillingDocument[]
     quotation_document_version?: {
       document_version_id: number
+      template_id?: string
+      revision_no?: number
+      filename?: string
       power_of_attorney?: {
         authorization_version_id: number
         authorization_no: string
@@ -595,6 +612,35 @@ export interface Customer {
   ar_code: string
   ar_name: string
   tax_id: string | null
+  billing_address?: string | null
+  delivery_address?: string | null
+  province?: string | null
+  district?: string | null
+  sub_district?: string | null
+  zipcode?: string | null
+  addresses?: CustomerAddress[]
+}
+
+export interface CustomerAddress {
+  address_id: number
+  customer_id: number
+  bplus_address_code?: string | null
+  address_name: string
+  address_type: 'billing' | 'delivery' | 'both'
+  full_address: string
+  province?: string | null
+  district?: string | null
+  sub_district?: string | null
+  zipcode?: string | null
+  tax_id?: string | null
+  tax_branch_code?: string | null
+  contact_name?: string | null
+  contact_phone?: string | null
+  delivery_note?: string | null
+  is_default_billing: boolean
+  is_default_delivery: boolean
+  is_active: boolean
+  bplus_synced_at?: string | null
 }
 
 export interface Product {

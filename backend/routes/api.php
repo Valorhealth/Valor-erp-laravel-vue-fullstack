@@ -117,6 +117,7 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::patch('/fibroscan-bookings/{booking}/status', [FibroscanBookingController::class, 'updateStatus'])->middleware('ability:equipment_booking');
         Route::post('/fibroscan-machines', [FibroscanMachineController::class, 'store'])->middleware('ability:system_admin');
         Route::put('/fibroscan-machines/{machine}', [FibroscanMachineController::class, 'update'])->middleware('ability:system_admin');
+        Route::delete('/fibroscan-machines/{machine}', [FibroscanMachineController::class, 'destroy'])->middleware('ability:system_admin');
 
         Route::get('/credit-requests', [CreditRequestController::class, 'index'])
             ->middleware('ability:credit_request_status,approve_bills,system_admin,sales_documents,document_center');
@@ -143,8 +144,9 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::patch('/quotations/{quotation}/document-editor/help-request/{helpRequest}', [QuotationController::class, 'updateEditorHelp'])->middleware('ability:sales_documents,document_center,system_admin');
         Route::post('/quotations/{quotation}/document-editor/preview', [QuotationController::class, 'previewEditor'])->middleware(['ability:sales_documents,document_center,approve_bills,system_admin', 'throttle:30,1']);
         Route::post('/quotations/{quotation}/document-editor/preview.html', [QuotationController::class, 'previewEditorHtml'])->middleware('ability:sales_documents,document_center,approve_bills,system_admin');
-        Route::post('/quotations/{quotation}/document-editor/power-of-attorney/preview', [QuotationController::class, 'previewPowerOfAttorney'])->middleware('ability:sales_documents,document_center,approve_bills,system_admin');
-        Route::post('/quotations/{quotation}/document-editor/power-of-attorney/preview.html', [QuotationController::class, 'previewPowerOfAttorneyHtml'])->middleware('ability:sales_documents,document_center,approve_bills,system_admin');
+        Route::post('/quotations/{quotation}/document-editor/power-of-attorney/preview', [QuotationController::class, 'previewPowerOfAttorney'])->middleware('ability:document_preparation_queue,system_admin');
+        Route::post('/quotations/{quotation}/document-editor/power-of-attorney/preview.html', [QuotationController::class, 'previewPowerOfAttorneyHtml'])->middleware('ability:document_preparation_queue,system_admin');
+        Route::put('/quotations/{quotation}/document-editor/power-of-attorney', [QuotationController::class, 'savePowerOfAttorneyDraft'])->middleware('ability:document_preparation_queue,system_admin');
         Route::post('/quotations/{quotation}/document-editor/confirm', [QuotationController::class, 'confirmEditor'])->middleware('ability:sales_documents,document_center,system_admin');
         Route::get('/quotations/{quotation}/document-versions/{version}/pdf', [QuotationController::class, 'editorVersionPdf'])->middleware('ability:sales_documents,document_center,approve_bills,system_admin');
         Route::get('/quotations/{quotation}/pdf', [QuotationController::class, 'pdf'])->middleware('ability:sales_documents,document_center,approve_bills');
@@ -153,10 +155,12 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
 
         Route::get('/bills/pending-approval', [BillingWorkflowController::class, 'pendingApproval'])->middleware('ability:approve_bills');
         Route::get('/bills/{bill}/approval-quotation', [BillingWorkflowController::class, 'approvalQuotation'])->middleware('ability:approve_bills,system_admin');
-        Route::get('/bills/{bill}/approval-power-of-attorney', [BillingWorkflowController::class, 'approvalPowerOfAttorney'])->middleware('ability:approve_bills,system_admin');
+        Route::get('/bills/{bill}/approval-power-of-attorney', [BillingWorkflowController::class, 'approvalPowerOfAttorney'])->middleware('ability:document_preparation_queue,system_admin');
         Route::get('/bills/ready-export', [BillingWorkflowController::class, 'readyForExport'])->middleware('ability:system_admin');
         Route::get('/document-preparation-queue', [DocumentPreparationController::class, 'index'])->middleware('ability:document_preparation_queue');
         Route::patch('/document-preparation-queue/{preparationItem}', [DocumentPreparationController::class, 'update'])->middleware('ability:document_preparation_queue');
+        Route::post('/document-preparation-queue/{preparationItem}/attachment', [DocumentPreparationController::class, 'storeAttachment'])->middleware('ability:document_preparation_queue');
+        Route::get('/document-preparation-queue/{preparationItem}/attachment', [DocumentPreparationController::class, 'downloadAttachment'])->middleware('ability:document_preparation_queue,my_document_preparation_status');
         Route::get('/my-document-preparation-status', [DocumentPreparationController::class, 'mine'])->middleware('ability:my_document_preparation_status');
         Route::post('/bills/export', [BillingWorkflowController::class, 'export'])->middleware('ability:system_admin');
         Route::post('/bills/export-quotations.pdf', [BillingWorkflowController::class, 'exportQuotationsPdf'])->middleware('ability:system_admin');
@@ -177,9 +181,9 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/bills/{bill}/approval-certificate', [BillingWorkflowController::class, 'approvalCertificate'])
             ->middleware('ability:edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
         Route::get('/bills/{bill}/power-of-attorney', [BillingWorkflowController::class, 'powerOfAttorney'])
-            ->middleware('ability:edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
+            ->middleware('ability:document_preparation_queue,system_admin');
         Route::get('/bills/{bill}/power-of-attorney-preview', [BillingWorkflowController::class, 'powerOfAttorneyPreview'])
-            ->middleware('ability:edit_bill,my_billing_history,approve_bills,system_admin,document_center,sales_documents');
+            ->middleware('ability:document_preparation_queue,system_admin');
         Route::post('/bills/{bill}/reject', [BillingWorkflowController::class, 'reject'])->middleware('ability:approve_bills');
         Route::post('/bills/{bill}/decline', [BillingWorkflowController::class, 'decline'])->middleware('ability:approve_bills');
         Route::post('/bills/{bill}/complete', [BillingWorkflowController::class, 'complete'])->middleware('ability:system_admin');
@@ -190,6 +194,9 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
 
         Route::get('/master-data/customers', [MasterDataController::class, 'customers'])->middleware('ability:master_data');
         Route::post('/master-data/customers', [MasterDataController::class, 'storeCustomer'])->middleware('ability:master_data');
+        Route::post('/master-data/customers/{customer}/addresses', [MasterDataController::class, 'storeCustomerAddress'])->middleware('ability:master_data');
+        Route::put('/master-data/customers/{customer}/addresses/{address}', [MasterDataController::class, 'updateCustomerAddress'])->middleware('ability:master_data');
+        Route::delete('/master-data/customers/{customer}/addresses/{address}', [MasterDataController::class, 'destroyCustomerAddress'])->middleware('ability:master_data');
         Route::delete('/master-data/customers/{customer}', [MasterDataController::class, 'destroyCustomer'])->middleware('ability:master_data');
         Route::get('/master-data/salesmen', [MasterDataController::class, 'salesmen'])->middleware('ability:master_data');
         Route::post('/master-data/salesmen', [MasterDataController::class, 'storeSalesman'])->middleware('ability:master_data');

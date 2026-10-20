@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\Credit\CustomerCreditResolver;
 use App\Services\Documents\BillingDocumentStorage;
 use App\Services\Documents\ElectronicSignatureService;
+use App\Services\Documents\PowerOfAttorneyService;
 use App\Services\Quotations\QuotationRevisionService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
@@ -48,6 +49,7 @@ final class BillingWorkflow
         private readonly QuotationRevisionService $revisions,
         private readonly ElectronicSignatureService $electronicSignatures,
         private readonly BillingDocumentStorage $documentStorage,
+        private readonly PowerOfAttorneyService $powerOfAttorneys,
     ) {}
 
     /** @param array<string, mixed> $payload */
@@ -85,13 +87,6 @@ final class BillingWorkflow
                     'quotation_document' => 'กรุณาเลือกรูปแบบ แก้ไข และกด “ยืนยันและดาวน์โหลด” ใบเสนอราคาก่อนส่งให้ Approve',
                 ]);
             }
-            if (! $isDraft && in_array('power_of_attorney', $this->normalizedSubmissionDocuments($payload), true)
-                && ! $quotationDocument?->powerOfAttorney()->exists()) {
-                throw ValidationException::withMessages([
-                    'submission_documents' => 'เลือกหนังสือมอบอำนาจไว้ แต่ Draft Revision นี้ยังไม่มีหนังสือมอบอำนาจ กรุณาจัดทำและยืนยันเอกสารก่อนส่ง',
-                ]);
-            }
-
             $creditProfile = $this->creditResolver->resolve($quotation->bplus_customer_code, $quotation->buyer_name);
             $creditLimit = (float) ($creditProfile?->credit_limit ?? $quotation->credit_limit ?? 0);
             $creditTerm = (int) ($creditProfile?->credit_term ?? $quotation->credit_term ?? 0);
@@ -104,8 +99,8 @@ final class BillingWorkflow
             $submissionDocuments = $this->normalizedSubmissionDocuments($payload);
             $bill = BillingRecord::query()->create([
                 ...Arr::only($quotation->getAttributes(), [
-                    'buyer_name', 'tax_id', 'total_amount', 'province', 'district', 'sub_district',
-                    'zipcode', 'address_note', 'shipping_type', 'shipping_text', 'bill_note',
+                    'buyer_name', 'tax_id', 'price_vat_mode', 'total_amount', 'province', 'district', 'sub_district',
+                    'zipcode', 'address_note', 'billing_address', 'delivery_address', 'billing_address_id', 'delivery_address_id', 'standard_show_billing_address', 'standard_show_delivery_address', 'shipping_type', 'shipping_text', 'bill_note',
                     'bplus_customer_code', 'workflow_type', 'sale_discount_total', 'sale_discount_note',
                     'credit_limit', 'credit_term', 'requested_credit_term',
                     'customer_po_no', 'customer_confirmed_at', 'customer_contact_name', 'customer_contact_channel',
@@ -143,6 +138,13 @@ final class BillingWorkflow
                 $quotationDocument->forceFill(['bill_id' => $bill->bill_id])->save();
             }
 
+            if (! $isDraft
+                && $quotationDocument
+                && in_array('power_of_attorney', $submissionDocuments, true)
+                && ! $quotationDocument->powerOfAttorney()->exists()) {
+                $this->powerOfAttorneys->createForQuotationVersion($quotation, $bill, $quotationDocument);
+            }
+
             if (! $isDraft) {
                 $this->syncDocumentPreparationQueue($bill, $submissionDocuments);
             }
@@ -174,14 +176,17 @@ final class BillingWorkflow
             $creditLimit = (float) ($credit?->credit_limit ?? 0);
             $creditOutstanding = (float) ($credit?->credit_outstanding ?? 0);
 
+            $netEntered = max(round($gross - $tailDiscount, 2), 0);
             $bill = BillingRecord::query()->create([
                 ...Arr::only($payload, [
                     'bill_date', 'buyer_name', 'tax_id', 'province', 'district', 'sub_district', 'zipcode',
-                    'address_note', 'shipping_type', 'shipping_text', 'bill_note', 'bplus_customer_code',
+                    'address_note', 'billing_address', 'delivery_address', 'billing_address_id', 'delivery_address_id', 'standard_show_billing_address', 'standard_show_delivery_address', 'price_vat_mode', 'shipping_type', 'shipping_text', 'bill_note', 'bplus_customer_code',
                     'sale_discount_note', 'requested_credit_term', 'customer_po_no', 'customer_confirmed_at',
                     'customer_contact_name', 'customer_contact_channel', 'payment_terms', 'delivery_due_date', 'delivery_terms',
                 ]),
-                'total_amount' => max(round($gross - $tailDiscount, 2), 0),
+                'total_amount' => ($payload['price_vat_mode'] ?? 'in_vat') === 'ex_vat'
+                    ? round($netEntered * 1.07, 2)
+                    : $netEntered,
                 'sale_discount_total' => $tailDiscount,
                 'workflow_type' => 'customer_po_direct',
                 'credit_limit' => $creditLimit,
@@ -228,7 +233,7 @@ final class BillingWorkflow
             }
 
             $before = $bill->only([
-                'bill_date', 'buyer_name', 'tax_id', 'total_amount', 'address_note', 'province',
+                'bill_date', 'buyer_name', 'tax_id', 'price_vat_mode', 'total_amount', 'address_note', 'billing_address', 'delivery_address', 'billing_address_id', 'delivery_address_id', 'standard_show_billing_address', 'standard_show_delivery_address', 'province',
                 'district', 'sub_district', 'zipcode', 'shipping_type', 'shipping_text', 'bill_note',
                 'sale_discount_total', 'sale_discount_note',
                 'customer_po_no', 'customer_confirmed_at', 'customer_contact_name', 'customer_contact_channel',
@@ -290,10 +295,12 @@ final class BillingWorkflow
                     : $bill->items()->create($itemValues);
                 $itemsTotal += $lineTotal;
             }
-            $normalizedDocuments = $this->normalizedSubmissionDocuments(['submission_documents' => $submissionDocuments]);
+            $netEntered = max(round($itemsTotal - (float) ($payload['sale_discount_total'] ?? 0), 2), 0);
             $bill->forceFill([
                 'sale_discount_total' => min((float) ($payload['sale_discount_total'] ?? 0), $itemsTotal),
-                'total_amount' => max(round($itemsTotal - (float) ($payload['sale_discount_total'] ?? 0), 2), 0),
+                'total_amount' => ($payload['price_vat_mode'] ?? $bill->price_vat_mode ?? 'in_vat') === 'ex_vat'
+                    ? round($netEntered * 1.07, 2)
+                    : $netEntered,
             ])->save();
 
             $afterItems = $bill->items()->orderBy('item_id')->get()->map(fn ($item): array => $item->only([
@@ -330,6 +337,9 @@ final class BillingWorkflow
     public function submitDraft(User $user, BillingRecord $bill, array $submissionDocuments): BillingRecord
     {
         return DB::transaction(function () use ($user, $bill, $submissionDocuments): BillingRecord {
+            $normalizedDocuments = $this->normalizedSubmissionDocuments([
+                'submission_documents' => $submissionDocuments,
+            ]);
             $bill = BillingRecord::query()->lockForUpdate()->with('items')->findOrFail($bill->bill_id);
             if (! $this->isOwnedBy($bill, $user)) {
                 abort(403, 'คุณไม่มีสิทธิ์ส่งบิลนี้');
@@ -353,10 +363,10 @@ final class BillingWorkflow
                         'quotation_document' => 'กรุณาเลือกรูปแบบ แก้ไข และกด “ยืนยันและดาวน์โหลด” ใบเสนอราคาก่อนส่งให้ Approve',
                     ]);
                 }
-                if (in_array('power_of_attorney', $submissionDocuments, true) && ! $documentVersion->powerOfAttorney()->exists()) {
-                    throw ValidationException::withMessages([
-                        'power_of_attorney' => 'เลือกหนังสือมอบอำนาจไว้ แต่ Revision นี้ยังไม่มี Draft หนังสือมอบอำนาจ กรุณาจัดทำและยืนยันเอกสารใหม่',
-                    ]);
+                if (in_array('power_of_attorney', $normalizedDocuments, true)
+                    && ! $documentVersion->powerOfAttorney()->exists()) {
+                    $quotation = Quotation::query()->findOrFail($bill->ref_qt_id);
+                    $this->powerOfAttorneys->createForQuotationVersion($quotation, $bill, $documentVersion);
                 }
             }
 
@@ -364,6 +374,8 @@ final class BillingWorkflow
                 'bill_date' => 'วันที่บิล',
                 'buyer_name' => 'ชื่อลูกค้า',
                 'address_note' => 'ที่อยู่',
+                'billing_address' => 'ที่อยู่ออกบิล',
+                'delivery_address' => 'ที่อยู่จัดส่ง',
                 'province' => 'จังหวัด',
                 'district' => 'อำเภอ/เขต',
                 'sub_district' => 'ตำบล/แขวง',

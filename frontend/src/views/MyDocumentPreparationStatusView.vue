@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { api } from '../api/client'
+import { onMounted, ref } from 'vue'
+import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import StatusPill from '../components/StatusPill.vue'
 import type { Paginated } from '../types/api'
@@ -15,6 +15,7 @@ type PreparationItem = {
   requested_at?: string | null
   prepared_at?: string | null
   prepared_by_user?: { username: string; first_name?: string | null; last_name?: string | null } | null
+  attachment_document?: { doc_id: number; file_name: string; mime_type?: string | null; version_no: number; uploaded_by: string; uploaded_at: string } | null
 }
 
 type PreparationBill = {
@@ -30,7 +31,6 @@ const result = ref<Paginated<PreparationBill> | null>(null)
 const search = ref('')
 const loading = ref(true)
 const error = ref('')
-let refreshTimer: number | null = null
 
 const labels: Record<string, string> = {
   quotation: 'ใบเสนอราคา', power_of_attorney: 'Draft หนังสือมอบอำนาจ', company_affidavit: 'หนังสือรับรองบริษัท',
@@ -57,16 +57,15 @@ function readyCount(bill: PreparationBill): number {
   return bill.document_preparation_items.filter((item) => item.status === 'prepared').length
 }
 
-onMounted(() => {
-  load()
-  refreshTimer = window.setInterval(() => {
-    if (!document.hidden) load(result.value?.current_page || 1, true)
-  }, 15_000)
-})
+async function downloadPrepared(item: PreparationItem) {
+  if (item.status !== 'prepared') return
+  error.value = ''
+  try {
+    await downloadFile(`/api/v1/document-preparation-queue/${item.preparation_item_id}/attachment`, item.attachment_document?.file_name, 'get', undefined, true)
+  } catch (cause) { error.value = apiError(cause, 'ดาวน์โหลดเอกสารไม่สำเร็จ') }
+}
 
-onBeforeUnmount(() => {
-  if (refreshTimer !== null) window.clearInterval(refreshTimer)
-})
+onMounted(load)
 </script>
 
 <template>
@@ -75,6 +74,7 @@ onBeforeUnmount(() => {
     <form class="content-card tracking-toolbar" @submit.prevent="load(1)">
       <label><span>ค้นหาเลขใบเสนอราคา ลูกค้า หรือเลขรายการ</span><input v-model="search" placeholder="เช่น QT-2610-0001, โรงพยาบาล หรือ #61"></label>
       <button class="secondary-button">ค้นหา</button>
+      <button class="secondary-button" type="button" @click="load(result?.current_page || 1)">รีเฟรชสถานะ</button>
     </form>
 
     <section class="content-card section-gap">
@@ -92,7 +92,7 @@ onBeforeUnmount(() => {
             <div v-for="item in bill.document_preparation_items" :key="item.preparation_item_id" class="tracking-item">
               <span :class="['tracking-mark', item.status === 'prepared' ? 'is-ready' : 'is-pending']">{{ item.status === 'prepared' ? '✓' : '✕' }}</span>
               <div class="document-name"><strong>{{ labels[item.document_type] || item.document_type }}</strong><small>ร้องขอ {{ shortDate(item.requested_at || bill.submitted_at) }}</small></div>
-              <div class="tracking-result"><strong :class="item.status === 'prepared' ? 'ready-text' : 'pending-text'">{{ item.status === 'prepared' ? 'พร้อมส่ง / พร้อมรับ' : 'ยังไม่พร้อม' }}</strong><small v-if="item.admin_note">หมายเหตุจาก Admin: {{ item.admin_note }}</small><small v-if="item.prepared_at">อัปเดต {{ shortDate(item.prepared_at) }}</small></div>
+              <div class="tracking-result"><strong :class="item.status === 'prepared' ? 'ready-text' : 'pending-text'">{{ item.status === 'prepared' ? 'พร้อมส่ง / พร้อมรับ' : 'ยังไม่พร้อม' }}</strong><small v-if="item.admin_note">หมายเหตุจาก Admin: {{ item.admin_note }}</small><small v-if="item.attachment_document">ไฟล์: {{ item.attachment_document.file_name }}</small><small v-if="item.prepared_at">อัปเดต {{ shortDate(item.prepared_at) }}</small><button v-if="item.status === 'prepared' && (item.attachment_document || item.document_type === 'quotation')" class="secondary-button prepared-download" type="button" @click="downloadPrepared(item)">ดาวน์โหลดเอกสาร</button></div>
             </div>
           </div>
         </article>
@@ -104,5 +104,5 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.tracking-toolbar{display:flex;align-items:end;gap:10px}.tracking-toolbar label{display:grid;flex:1;gap:5px}.tracking-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}.tracking-summary h2,.tracking-summary p{margin:0}.tracking-summary p{margin-top:4px;color:#64748b}.tracking-summary>strong{padding:7px 12px;border-radius:999px;background:#eef2ff;color:#3730a3}.tracking-groups{display:grid;gap:14px}.tracking-group{overflow:hidden;border:1px solid #cbd5e1;border-radius:11px;background:#fff}.tracking-group>header{display:grid;grid-template-columns:minmax(160px,.7fr) minmax(240px,1.4fr) auto auto;align-items:center;gap:16px;padding:13px 15px;border-bottom:1px solid #e2e8f0;background:#f8fafc}.tracking-group>header div{display:grid;gap:3px}.tracking-group small{color:#64748b}.progress{padding:6px 10px;border-radius:999px;background:#e2e8f0;color:#334155;font-size:12px;font-weight:700}.tracking-items{display:grid}.tracking-item{display:grid;grid-template-columns:34px minmax(220px,1fr) minmax(240px,1.2fr);align-items:center;gap:12px;padding:12px 15px;border-bottom:1px solid #e2e8f0}.tracking-item:last-child{border-bottom:0}.tracking-mark{display:grid;width:30px;height:30px;place-items:center;border-radius:50%;font-size:18px;font-weight:800}.tracking-mark.is-ready{background:#dcfce7;color:#15803d}.tracking-mark.is-pending{background:#fee2e2;color:#dc2626}.document-name,.tracking-result{display:grid;gap:3px}.ready-text{color:#15803d}.pending-text{color:#b91c1c}@media(max-width:720px){.tracking-toolbar,.tracking-summary{align-items:stretch;flex-direction:column}.tracking-group>header,.tracking-item{grid-template-columns:1fr}.tracking-group>header .customer{grid-column:1}.tracking-mark{grid-row:1}.document-name,.tracking-result{grid-column:1}}
+.tracking-toolbar{display:flex;align-items:end;gap:10px}.tracking-toolbar label{display:grid;flex:1;gap:5px}.tracking-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}.tracking-summary h2,.tracking-summary p{margin:0}.tracking-summary p{margin-top:4px;color:#64748b}.tracking-summary>strong{padding:7px 12px;border-radius:999px;background:#eef2ff;color:#3730a3}.tracking-groups{display:grid;gap:14px}.tracking-group{overflow:hidden;border:1px solid #cbd5e1;border-radius:11px;background:#fff}.tracking-group>header{display:grid;grid-template-columns:minmax(160px,.7fr) minmax(240px,1.4fr) auto auto;align-items:center;gap:16px;padding:13px 15px;border-bottom:1px solid #e2e8f0;background:#f8fafc}.tracking-group>header div{display:grid;gap:3px}.tracking-group small{color:#64748b}.progress{padding:6px 10px;border-radius:999px;background:#e2e8f0;color:#334155;font-size:12px;font-weight:700}.tracking-items{display:grid}.tracking-item{display:grid;grid-template-columns:34px minmax(220px,1fr) minmax(240px,1.2fr);align-items:center;gap:12px;padding:12px 15px;border-bottom:1px solid #e2e8f0}.tracking-item:last-child{border-bottom:0}.tracking-mark{display:grid;width:30px;height:30px;place-items:center;border-radius:50%;font-size:18px;font-weight:800}.tracking-mark.is-ready{background:#dcfce7;color:#15803d}.tracking-mark.is-pending{background:#fee2e2;color:#dc2626}.document-name,.tracking-result{display:grid;gap:3px}.ready-text{color:#15803d}.pending-text{color:#b91c1c}.prepared-download{width:max-content;margin-top:5px;color:#166534;border-color:#86efac;background:#f0fdf4}@media(max-width:720px){.tracking-toolbar,.tracking-summary{align-items:stretch;flex-direction:column}.tracking-group>header,.tracking-item{grid-template-columns:1fr}.tracking-group>header .customer{grid-column:1}.tracking-mark{grid-row:1}.document-name,.tracking-result{grid-column:1}}
 </style>

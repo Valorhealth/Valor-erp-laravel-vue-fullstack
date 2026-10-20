@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Customer;
+use App\Models\CustomerAddress;
 use App\Models\MasterProduct;
 use App\Models\ProductUnit;
 use App\Models\Salesman;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -20,7 +22,8 @@ class MasterDataController extends Controller
         $search = trim((string) $request->query('search', ''));
 
         return response()->json(Customer::query()
-            ->select(['id', 'ar_code', 'ar_name', 'tax_id', 'created_at'])
+            ->select(['id', 'ar_code', 'ar_name', 'tax_id', 'billing_address', 'delivery_address', 'province', 'district', 'sub_district', 'zipcode', 'created_at'])
+            ->with('addresses')
             ->when($search !== '', fn ($query) => $query->where('ar_code', 'ilike', "%{$search}%")->orWhere('ar_name', 'ilike', "%{$search}%"))
             ->orderBy('ar_code')->paginate(min(max($request->integer('per_page', 25), 5), 100)));
     }
@@ -31,8 +34,15 @@ class MasterDataController extends Controller
             'ar_code' => ['required', 'string', 'max:255', Rule::unique('customers', 'ar_code')],
             'ar_name' => ['required', 'string', 'max:1000'],
             'tax_id' => ['nullable', 'string', 'max:30'],
+            'billing_address' => ['nullable', 'string', 'max:5000'],
+            'delivery_address' => ['nullable', 'string', 'max:5000'],
+            'province' => ['nullable', 'string', 'max:255'],
+            'district' => ['nullable', 'string', 'max:255'],
+            'sub_district' => ['nullable', 'string', 'max:255'],
+            'zipcode' => ['nullable', 'string', 'max:20'],
         ]);
         $customer = Customer::query()->create([...$data, 'created_at' => now()]);
+        $this->forgetReferenceDataCache();
 
         return response()->json(['data' => $customer], 201);
     }
@@ -40,6 +50,46 @@ class MasterDataController extends Controller
     public function destroyCustomer(Customer $customer): JsonResponse
     {
         $customer->delete();
+        $this->forgetReferenceDataCache();
+
+        return response()->json(status: 204);
+    }
+
+    public function storeCustomerAddress(Request $request, Customer $customer): JsonResponse
+    {
+        $data = $this->validateCustomerAddress($request, $customer);
+        $address = DB::transaction(function () use ($customer, $data): CustomerAddress {
+            $this->clearAddressDefaults($customer, $data);
+
+            return $customer->addresses()->create($data);
+        });
+        $this->forgetReferenceDataCache();
+
+        return response()->json(['data' => $address], 201);
+    }
+
+    public function updateCustomerAddress(Request $request, Customer $customer, CustomerAddress $address): JsonResponse
+    {
+        abort_unless((int) $address->customer_id === (int) $customer->id, 404);
+        $data = $this->validateCustomerAddress($request, $customer, $address);
+        DB::transaction(function () use ($customer, $address, $data): void {
+            $this->clearAddressDefaults($customer, $data, $address->address_id);
+            $address->update($data);
+        });
+        $this->forgetReferenceDataCache();
+
+        return response()->json(['data' => $address->fresh()]);
+    }
+
+    public function destroyCustomerAddress(Customer $customer, CustomerAddress $address): JsonResponse
+    {
+        abort_unless((int) $address->customer_id === (int) $customer->id, 404);
+        $address->update([
+            'is_active' => false,
+            'is_default_billing' => false,
+            'is_default_delivery' => false,
+        ]);
+        $this->forgetReferenceDataCache();
 
         return response()->json(status: 204);
     }
@@ -61,6 +111,7 @@ class MasterDataController extends Controller
             'salesman_name' => ['required', 'string', 'max:1000'],
         ]);
         $salesman = Salesman::query()->create([...$data, 'created_at' => now()]);
+        $this->forgetReferenceDataCache();
 
         return response()->json(['data' => $salesman], 201);
     }
@@ -68,6 +119,7 @@ class MasterDataController extends Controller
     public function destroySalesman(Salesman $salesman): JsonResponse
     {
         $salesman->delete();
+        $this->forgetReferenceDataCache();
 
         return response()->json(status: 204);
     }
@@ -93,6 +145,7 @@ class MasterDataController extends Controller
 
             return $product->load('units');
         });
+        $this->forgetReferenceDataCache();
 
         return response()->json(['data' => $product], 201);
     }
@@ -116,6 +169,7 @@ class MasterDataController extends Controller
             $product->update(collect($data)->only(['sku_name', 'sku_e_name'])->all());
             $product->units()->sync($unitIds->mapWithKeys(fn (int $id): array => [$id => ['is_default' => $id === $defaultUnitId]])->all());
         });
+        $this->forgetReferenceDataCache();
 
         return response()->json(['data' => $product->fresh()->load('units')]);
     }
@@ -132,7 +186,10 @@ class MasterDataController extends Controller
             'unit_name' => ['required', 'string', 'max:100', Rule::unique('product_units', 'unit_name')],
         ]);
 
-        return response()->json(['data' => ProductUnit::query()->create($data)], 201);
+        $unit = ProductUnit::query()->create($data);
+        $this->forgetReferenceDataCache();
+
+        return response()->json(['data' => $unit], 201);
     }
 
     public function destroyUnit(ProductUnit $unit): JsonResponse
@@ -146,7 +203,49 @@ class MasterDataController extends Controller
             throw ValidationException::withMessages(['unit' => 'หน่วยนี้ถูกใช้ในเอกสารแล้ว จึงลบไม่ได้ กรุณาถอดออกจากสินค้าที่ไม่ใช้แทน']);
         }
         $unit->delete();
+        $this->forgetReferenceDataCache();
 
         return response()->json(status: 204);
+    }
+
+    private function forgetReferenceDataCache(): void
+    {
+        Cache::forget('reference-data:v3');
+        Cache::forget('reference-data:v4');
+    }
+
+    /** @return array<string, mixed> */
+    private function validateCustomerAddress(Request $request, Customer $customer, ?CustomerAddress $address = null): array
+    {
+        return $request->validate([
+            'bplus_address_code' => ['nullable', 'string', 'max:255', Rule::unique('customer_addresses', 'bplus_address_code')->where('customer_id', $customer->id)->ignore($address?->address_id, 'address_id')],
+            'address_name' => ['required', 'string', 'max:500'],
+            'address_type' => ['required', Rule::in(['billing', 'delivery', 'both'])],
+            'full_address' => ['required', 'string', 'max:5000'],
+            'province' => ['nullable', 'string', 'max:255'],
+            'district' => ['nullable', 'string', 'max:255'],
+            'sub_district' => ['nullable', 'string', 'max:255'],
+            'zipcode' => ['nullable', 'string', 'max:20'],
+            'tax_id' => ['nullable', 'string', 'max:30'],
+            'tax_branch_code' => ['nullable', 'string', 'max:20'],
+            'contact_name' => ['nullable', 'string', 'max:500'],
+            'contact_phone' => ['nullable', 'string', 'max:100'],
+            'delivery_note' => ['nullable', 'string', 'max:2000'],
+            'is_default_billing' => ['boolean'],
+            'is_default_delivery' => ['boolean'],
+            'is_active' => ['boolean'],
+        ]);
+    }
+
+    /** @param array<string, mixed> $data */
+    private function clearAddressDefaults(Customer $customer, array $data, ?int $except = null): void
+    {
+        $query = $customer->addresses()->when($except, fn ($items) => $items->whereKeyNot($except));
+        if ($data['is_default_billing'] ?? false) {
+            (clone $query)->update(['is_default_billing' => false]);
+        }
+        if ($data['is_default_delivery'] ?? false) {
+            (clone $query)->update(['is_default_delivery' => false]);
+        }
     }
 }

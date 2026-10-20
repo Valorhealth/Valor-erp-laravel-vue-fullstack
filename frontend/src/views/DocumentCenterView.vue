@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import StatusPill from '../components/StatusPill.vue'
@@ -11,6 +12,8 @@ import { copyText } from '../utils/browser'
 import { preferredRowsPerPage } from '../utils/preferences'
 
 const tab = ref<'quotations' | 'authorizations' | 'bills' | 'purchase-orders' | 'credit-documents'>('quotations')
+const canManageAuthorizations = computed(() => auth.can('document_preparation_queue') || auth.can('system_admin'))
+const router = useRouter()
 const authorizations = ref<Paginated<Quotation> | null>(null)
 const authorizationPreview = ref<string | null>(null)
 const purchaseOrders = ref<Paginated<BillingRecord> | null>(null)
@@ -25,7 +28,6 @@ const error = ref('')
 const message = ref('')
 const evidenceTypes = reactive<Record<number, 'signed_quotation' | 'customer_po'>>({})
 const evidenceFiles = reactive<Record<number, File | null>>({})
-let documentRefreshTimer: number | null = null
 const blockedStatuses = ['ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอแก้ไข']
 async function loadQuotes(page = 1) {
   const response = await api.get<Paginated<Quotation>>('/api/v1/quotations', { params: { page, search: search.value || undefined, per_page: preferredRowsPerPage(25) } })
@@ -70,7 +72,11 @@ async function loadCreditRequests(page = 1) {
 async function load() {
   error.value = ''
   try {
-    await Promise.all([loadQuotes(), loadBills(), loadPurchaseOrders(), loadCreditRequests(), ...(tab.value === 'authorizations' ? [loadAuthorizations()] : [])])
+    if (tab.value === 'quotations') await loadQuotes()
+    else if (tab.value === 'authorizations' && canManageAuthorizations.value) await loadAuthorizations()
+    else if (tab.value === 'bills') await loadBills()
+    else if (tab.value === 'purchase-orders') await loadPurchaseOrders()
+    else if (tab.value === 'credit-documents') await loadCreditRequests()
   }
   catch (cause) { error.value = apiError(cause) }
 }
@@ -111,20 +117,33 @@ function quotationStatus(qt: Quotation) {
   return qt.billing_record?.status || qt.status || '-'
 }
 function quotePdf(qt: Quotation, mode: 'original' | 'copy' | 'revised' = 'original') {
+  const confirmedTemplate = qt.billing_record?.quotation_document_version?.template_id
+  if (confirmedTemplate) {
+    router.push({ name: 'quotation-editor', params: { quotationId: qt.qt_id }, query: { template: confirmedTemplate, mode } })
+    return
+  }
+  if (!auth.can('sales_documents')) {
+    error.value = 'Sale ยังไม่ได้ยืนยันรูปแบบใบเสนอราคา จึงยังไม่สามารถเปิดเอกสารได้'
+    return
+  }
   quotationDownload.value = { id: qt.qt_id, mode }
 }
 function printPoQuotation(bill: BillingRecord) {
+  const confirmedTemplate = bill.quotation_document_version?.template_id
+  if (bill.ref_qt_id && confirmedTemplate) {
+    router.push({ name: 'quotation-editor', params: { quotationId: bill.ref_qt_id }, query: { template: confirmedTemplate, mode: 'original' } })
+    return
+  }
+  if (bill.ref_qt_id && !auth.can('sales_documents')) {
+    error.value = 'Sale ยังไม่ได้ยืนยันรูปแบบใบเสนอราคา จึงยังไม่สามารถเปิดเอกสารได้'
+    return
+  }
   quotationDownload.value = bill.ref_qt_id
     ? { id: bill.ref_qt_id, mode: 'original' }
     : { billId: bill.bill_id, mode: 'original' }
 }
 function closeQuotationDialog() {
   quotationDownload.value = null
-  Promise.all([
-    loadQuotes(quotations.value?.current_page || 1),
-    ...(tab.value === 'authorizations' ? [loadAuthorizations(authorizations.value?.current_page || 1)] : []),
-    loadPurchaseOrders(purchaseOrders.value?.current_page || 1),
-  ]).catch((cause) => { error.value = apiError(cause, 'รีเฟรชรายการเอกสารไม่สำเร็จ') })
 }
 function approvalCertificate(qt: Quotation) {
   if (!qt.billing_record?.bill_id) return
@@ -174,38 +193,23 @@ function billPdf(bill: BillingRecord, mode: 'original' | 'copy' | 'canceled' = '
   return downloadFile(`/api/v1/bills/${bill.bill_id}/pdf${query}`)
 }
 
-onMounted(() => {
-  load()
-  documentRefreshTimer = window.setInterval(() => {
-    if (!document.hidden) {
-      const refreshes = [
-        loadQuotes(quotations.value?.current_page || 1),
-        ...(tab.value === 'authorizations' ? [loadAuthorizations(authorizations.value?.current_page || 1)] : []),
-        loadBills(bills.value?.current_page || 1),
-        loadPurchaseOrders(purchaseOrders.value?.current_page || 1),
-        loadCreditRequests(creditRequests.value?.current_page || 1),
-      ]
-      Promise.all(refreshes).catch((cause) => { error.value = apiError(cause, 'อัปเดตสถานะเอกสารไม่สำเร็จ') })
-    }
-  }, 15_000)
-})
+onMounted(load)
 onBeforeUnmount(() => {
-  if (documentRefreshTimer !== null) window.clearInterval(documentRefreshTimer)
   closeAuthorizationPreview()
 })
 </script>
 
 <template>
   <AppShell title="ศูนย์จัดการเอกสาร" subtitle="ดาวน์โหลดใบเสนอราคา หนังสือมอบอำนาจ หลักฐาน PO และเอกสารประกอบการขอวงเงินย้อนหลัง">
-    <div class="tabs"><button :class="{ active: tab === 'quotations' }" @click="tab = 'quotations'">ใบเสนอราคา</button>
-    <button :class="{ active: tab === 'authorizations' }" @click="tab = 'authorizations'; loadAuthorizations()">หนังสือมอบอำนาจ</button>
+    <div class="tabs"><button :class="{ active: tab === 'quotations' }" @click="tab = 'quotations'; loadQuotes()">ใบเสนอราคา</button>
+    <button v-if="canManageAuthorizations" :class="{ active: tab === 'authorizations' }" @click="tab = 'authorizations'; loadAuthorizations()">หนังสือมอบอำนาจ</button>
     <!-- <button :class="{ active: tab === 'bills' }" @click="tab = 'bills'">ใบกำกับภาษี / ใบขนส่ง</button> -->
-    <button :class="{ active: tab === 'purchase-orders' }" @click="tab = 'purchase-orders'">ประวัติ PO</button>
-    <button :class="{ active: tab === 'credit-documents' }" @click="tab = 'credit-documents'">เอกสารวงเงิน</button>
+    <button :class="{ active: tab === 'purchase-orders' }" @click="tab = 'purchase-orders'; loadPurchaseOrders()">ประวัติ PO</button>
+    <button :class="{ active: tab === 'credit-documents' }" @click="tab = 'credit-documents'; loadCreditRequests()">เอกสารวงเงิน</button>
   </div>
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="message" class="success-message">{{ message }}</p>
-    <form class="content-card search-row" @submit.prevent="load"><label><span>ค้นหาเลขใบเสนอราคา เลขรายการในระบบ เลข PO ลูกค้า หรือผู้สร้าง</span><input v-model="search" placeholder="เช่น QT-2610-0001, #123 หรือเลข PO"></label><button class="secondary-button">ค้นหา</button></form>
+    <form class="content-card search-row" @submit.prevent="load"><label><span>ค้นหาเลขใบเสนอราคา เลขรายการในระบบ เลข PO ลูกค้า หรือผู้สร้าง</span><input v-model="search" placeholder="เช่น QT-2610-0001, #123 หรือเลข PO"></label><button class="secondary-button">ค้นหา</button><button class="secondary-button" type="button" @click="load">รีเฟรชรายการ</button></form>
 
     <section v-if="tab === 'quotations'" class="content-card section-gap">
       <div class="table-wrap"><table>
@@ -229,7 +233,7 @@ onBeforeUnmount(() => {
           <tr v-for="qt in authorizations?.data" :key="qt.qt_id">
             <td class="strong">{{ qt.billing_record?.quotation_document_version?.power_of_attorney?.authorization_no || '-' }}</td>
             <td>{{ qt.qt_no || '-' }}</td><td>R{{ qt.revision_no || 1 }}</td><td>{{ qt.billing_record?.buyer_name || qt.buyer_name }}</td><td>{{ qt.created_by }}</td><td><StatusPill :status="quotationStatus(qt)" /></td>
-            <td><div class="po-document-actions"><button class="secondary-button" type="button" @click="previewAuthorization(qt.billing_record!.bill_id)">ดูตัวอย่าง</button><button class="primary-button primary-button--compact" type="button" @click="downloadAuthorization(qt)">ดาวน์โหลด Draft</button></div><small class="muted">ไม่มีลายเซ็นอิเล็กทรอนิกส์ · ต้องลงลายมือชื่อจริงก่อนใช้งาน</small></td>
+            <td><div class="po-document-actions"><a class="secondary-button" :href="`/quotations/${qt.qt_id}/editor?template=${encodeURIComponent(qt.billing_record?.quotation_document_version?.template_id || 'standard')}&mode=original`">แก้ไขและ Preview</a><button class="secondary-button" type="button" @click="previewAuthorization(qt.billing_record!.bill_id)">ดูตัวอย่าง</button><button class="primary-button primary-button--compact" type="button" @click="downloadAuthorization(qt)">ดาวน์โหลด Draft</button></div><small class="muted">ไม่มีลายเซ็นอิเล็กทรอนิกส์ · ต้องลงลายมือชื่อจริงก่อนใช้งาน</small></td>
           </tr>
           <tr v-if="!authorizations?.data.length"><td colspan="7" class="empty-cell">ไม่พบหนังสือมอบอำนาจตามคำค้นหา</td></tr>
         </tbody>

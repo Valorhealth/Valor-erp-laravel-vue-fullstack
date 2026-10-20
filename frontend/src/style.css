@@ -456,6 +456,7 @@ input[type="checkbox"] { accent-color: var(--brand); box-shadow: none; }
 .equipment-filter-actions { display: flex; align-items: center; gap: 7px; }
 .equipment-filter-actions .secondary-button { white-space: nowrap; }
 .equipment-machine-form { display: grid; grid-template-columns: .65fr 1.2fr 1fr 1.2fr auto; gap: 10px; align-items: end; }
+.equipment-machine-form.is-editing { grid-template-columns: .65fr 1.2fr 1fr 1.2fr .8fr auto; }
 .equipment-machine-list { display: grid; gap: 8px; margin-top: 18px; }
 .equipment-machine-list article { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fafafb; }
 .equipment-machine-list article > div { min-width: 0; }
@@ -463,6 +464,10 @@ input[type="checkbox"] { accent-color: var(--brand); box-shadow: none; }
 .equipment-machine-list article strong { color: var(--ink); font-size: 12px; }
 .equipment-machine-list article small { margin-top: 4px; color: var(--muted); font-size: 9px; }
 .equipment-machine-list article select { width: 150px; flex: 0 0 auto; }
+.equipment-machine-form-actions, .equipment-machine-actions { display: flex; align-items: center; gap: 8px; }
+.equipment-machine-form-actions { align-self: end; }
+.equipment-machine-actions { flex: 0 0 auto; justify-content: flex-end; }
+.equipment-machine-actions .secondary-button, .equipment-machine-actions .danger-button { min-height: 36px; padding: 7px 11px; }
 .equipment-calendar-layout { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(300px, .7fr); gap: 18px; align-items: start; }
 .equipment-calendar-heading { align-items: flex-end; }
 .equipment-calendar-nav { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
@@ -613,7 +618,7 @@ select[multiple] { min-height: 130px; }
   .approval-info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .approval-actions--bill { grid-template-columns: max-content max-content minmax(220px, 1fr); }
   .equipment-filters { grid-template-columns: 1fr 1fr; }
-  .equipment-machine-form { grid-template-columns: 1fr 1fr; }
+  .equipment-machine-form, .equipment-machine-form.is-editing { grid-template-columns: 1fr 1fr; }
   .equipment-calendar-layout { grid-template-columns: 1fr; }
   .equipment-booking-detail { position: static; }
 }
@@ -706,9 +711,12 @@ select[multiple] { min-height: 130px; }
   .approval-info-grid__wide { grid-column: auto; }
   .approval-actions--bill { grid-template-columns: 1fr 1fr; }
   .approval-actions--bill label { grid-column: 1 / -1; }
-  .equipment-filters, .equipment-machine-form { grid-template-columns: 1fr; }
+  .equipment-filters, .equipment-machine-form, .equipment-machine-form.is-editing { grid-template-columns: 1fr; }
   .equipment-machine-list article { align-items: stretch; flex-direction: column; }
   .equipment-machine-list article select { width: 100%; }
+  .equipment-machine-actions { width: 100%; flex-wrap: wrap; justify-content: stretch; }
+  .equipment-machine-actions select { flex: 1 1 100%; }
+  .equipment-machine-actions button { flex: 1; }
   .equipment-calendar-heading { align-items: stretch; flex-direction: column; }
   .equipment-calendar-nav { justify-content: flex-start; flex-wrap: wrap; }
   .equipment-booking-detail__grid { grid-template-columns: 1fr; }

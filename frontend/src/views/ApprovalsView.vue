@@ -23,8 +23,6 @@ const approvalConsents = reactive<Record<number, boolean>>({})
 const quotationApprovalIntent = 'ข้าพเจ้าได้ตรวจสอบใบเสนอราคาและชุดเอกสารประกอบ Revision นี้ และอนุมัติให้ดำเนินการตามข้อมูลดังกล่าว'
 const legacyQuotationApprovalIntent = 'ข้าพเจ้าได้ตรวจสอบใบเสนอราคา Revision นี้และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว'
 const poDirectApprovalIntent = 'ข้าพเจ้าได้ตรวจสอบใบสั่งซื้อของลูกค้าและข้อมูลเปิดบิลรายการนี้แล้ว และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว'
-const requiresSubmissionDocument = (bill: BillingRecord, document: string) =>
-  (bill.submission_document_requirements || []).includes(document)
 const approvalIntent = (bill: BillingRecord) => bill.workflow_type === 'customer_po_direct'
   ? poDirectApprovalIntent
   : ((bill.submission_document_requirements || []).length ? quotationApprovalIntent : legacyQuotationApprovalIntent)
@@ -85,17 +83,12 @@ async function openQuotationReview(bill: BillingRecord) {
   quotationReviewLoading.value = bill.bill_id
   error.value = ''
   try {
-    const [quotation, authorization] = await Promise.all([
-      api.get<Blob>(`/api/v1/bills/${bill.bill_id}/approval-quotation`, { responseType: 'blob' }),
-      requiresSubmissionDocument(bill, 'power_of_attorney')
-        ? api.get<Blob>(`/api/v1/bills/${bill.bill_id}/approval-power-of-attorney`, { responseType: 'blob' })
-        : Promise.resolve(null),
-    ])
+    const quotation = await api.get<Blob>(`/api/v1/bills/${bill.bill_id}/approval-quotation`, { responseType: 'blob' })
     closeQuotationReview()
     quotationReview.value = {
       bill,
       quotationUrl: URL.createObjectURL(quotation.data),
-      authorizationUrl: authorization ? URL.createObjectURL(authorization.data) : '',
+      authorizationUrl: '',
     }
   } catch (cause) {
     error.value = apiError(cause, 'เปิดชุดเอกสารใบเสนอราคาและหนังสือมอบอำนาจไม่สำเร็จ')

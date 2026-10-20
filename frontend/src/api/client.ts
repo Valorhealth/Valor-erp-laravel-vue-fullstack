@@ -1,16 +1,37 @@
 import axios from 'axios'
+import { networkActivity } from '../stores/networkActivity'
+
+declare module 'axios' {
+  export interface AxiosRequestConfig { skipGlobalLoading?: boolean }
+  export interface InternalAxiosRequestConfig { skipGlobalLoading?: boolean }
+}
 
 const apiOrigin = import.meta.env.VITE_API_URL
   ?? (import.meta.env.PROD ? window.location.origin : 'http://127.0.0.1:8000')
 
 export const api = axios.create({
   baseURL: apiOrigin,
+  // Never leave a screen waiting forever when the API or database connection stalls.
+  // Long-running operations such as PO scanning explicitly override this value.
+  timeout: 30_000,
   headers: {
     Accept: 'application/json',
     'X-Requested-With': 'XMLHttpRequest',
   },
   withCredentials: true,
   withXSRFToken: true,
+})
+
+api.interceptors.request.use((config) => {
+  if (!config.skipGlobalLoading) networkActivity.begin()
+  return config
+}, error => Promise.reject(error))
+api.interceptors.response.use((response) => {
+  if (!response.config.skipGlobalLoading) networkActivity.end()
+  return response
+}, (error) => {
+  if (!error.config?.skipGlobalLoading) networkActivity.end()
+  return Promise.reject(error)
 })
 
 function responseFilename(contentDisposition?: string): string | null {

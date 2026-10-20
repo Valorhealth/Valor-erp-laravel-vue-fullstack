@@ -230,11 +230,29 @@ final class DocumentService
             ];
         });
         $billDiscount = max((float) ($payload['bill_discount'] ?? 0), 0);
-        $total = max(round((float) $items->sum('line_total') - $billDiscount, 2), 0);
+        $enteredTotal = max(round((float) $items->sum('line_total') - $billDiscount, 2), 0);
+        $priceVatMode = ($payload['price_vat_mode'] ?? 'in_vat') === 'ex_vat' ? 'ex_vat' : 'in_vat';
+        $total = $priceVatMode === 'ex_vat'
+            ? round($enteredTotal * 1.07, 2)
+            : $enteredTotal;
         $document = (array) ($payload['document'] ?? []);
         $customer = (array) ($payload['customer'] ?? []);
         $date = \DateTimeImmutable::createFromFormat('Y-m-d', (string) ($document['date'] ?? ''));
         if (($payload['template'] ?? QuotationTemplateCatalog::STANDARD) === QuotationTemplateCatalog::STANDARD) {
+            $billingAddress = trim((string) ($customer['billing_address'] ?? $customer['address'] ?? ''));
+            $deliveryAddress = trim((string) ($customer['delivery_address'] ?? ''));
+            $addressLines = [];
+            $showBilling = (bool) ($customer['show_billing_address'] ?? true);
+            $showDelivery = (bool) ($customer['show_delivery_address'] ?? false);
+            if ($showBilling && $billingAddress !== '') {
+                $addressLines[] = 'ที่อยู่ออกบิล: '.$billingAddress;
+            }
+            if ($showDelivery && $deliveryAddress !== '' && (! $showBilling || $deliveryAddress !== $billingAddress)) {
+                $addressLines[] = 'ที่อยู่จัดส่ง: '.$deliveryAddress;
+            }
+            if ($addressLines === []) {
+                $addressLines[] = $billingAddress !== '' ? $billingAddress : $deliveryAddress;
+            }
             $note = implode(' | ', array_filter([
                 (string) ($document['subject'] ?? ''),
                 (string) ($document['intro'] ?? ''),
@@ -248,7 +266,7 @@ final class DocumentService
                 date: $date?->format('d-m-Y') ?? now()->format('d-m-Y'),
                 customerName: (string) ($document['recipient'] ?? ''),
                 customerCode: (string) ($customer['code'] ?? ''),
-                customerAddress: (string) ($customer['address'] ?? ''),
+                customerAddress: implode("\n", $addressLines),
                 customerTaxId: (string) ($customer['tax_id'] ?? '-'),
                 salesperson: (string) ($document['salesperson'] ?? ''),
                 department: '',
@@ -334,19 +352,25 @@ final class DocumentService
             $logoUrl,
             $saleSignature,
         );
+        $showFooter = $template !== PowerOfAttorneyTemplateCatalog::ANANDAMAHIDOL_EBIDDING;
         $html = '<!doctype html><html lang="th"><head><meta charset="utf-8"><style>
             @font-face{font-family:THSarabun;src:url("'.$fontUrl.'") format("truetype")}@page{size:A4;margin:13mm 17mm 14mm}
             *{box-sizing:border-box}body{font-family:THSarabun,sans-serif;font-size:15px;line-height:1.22;color:#111;margin:0;padding-bottom:14mm;overflow-wrap:break-word;word-break:normal}
             .poa-header{position:relative;min-height:24mm}.poa-header h1{text-align:center;font-size:27px;margin:7mm 0 0}.poa-logo{position:absolute;left:0;top:0;width:40mm;height:17mm;object-fit:contain}.doc-no{position:absolute;left:0;top:19mm}.date{text-align:right;margin:-2mm 0 3mm;line-height:1.3}
             p{margin:1.5mm 0;text-align:left;text-indent:10mm;white-space:pre-wrap}.no-indent{text-indent:0}.center{text-align:center;text-indent:0}.authority-options{width:78%;margin:4mm auto}.authority-options td{padding:1mm 3mm;border:0}.check-box{display:inline-block;width:12px;height:12px;margin-right:5px;border:1px solid #111;vertical-align:-1px;text-align:center;font:700 10px/10px Arial}.check-box.checked:after{content:"X"}
             .signatures{width:100%;margin-top:3mm;table-layout:fixed;border-collapse:collapse}.signatures tr{page-break-inside:avoid}.signatures td{width:50%;height:17mm;padding:1mm 3mm;border:0;text-align:center;vertical-align:middle}.signature{display:inline-block;width:27mm;height:11mm;object-fit:contain;vertical-align:middle;margin:-3mm 1mm}.signature-placeholder{display:inline-block;width:34mm;height:7mm;color:#777;border-bottom:1px dotted #777;font-size:10px;vertical-align:middle}.signature-name{margin-top:.5mm;min-height:3mm}.witness{min-height:12mm}.signature-stack{width:100%;margin:0}.signature-stack td{width:100%;height:14mm;padding:1mm}.proof{font-size:8px;color:#555;line-height:1.1;word-break:break-all;margin-top:1px}
-            .stamp-duty{width:30mm;min-height:20mm;padding:4mm 2mm;border:1px solid #999;text-align:center;color:#555}.stamp-duty--top{position:absolute;right:0;top:0}.stamp-row{white-space:nowrap}.stamp-row--top{position:absolute;right:0;top:0}.stamp-row span{display:inline-block;width:20mm;height:25mm;margin-left:2mm;padding:5mm 1mm;border:1px solid #999;text-align:center;color:#555}.poa-photo{width:29mm;height:38mm;margin:2mm auto;padding-top:14mm;border:1px solid #aaa;text-align:center;color:#777}.anand-copy{margin-top:8mm}.anand-copy p{margin:2.5mm 0}
-            .poa-page{position:relative}.poa-page--plain .poa-logo{display:none}.poa-page--small-logo{font-size:14px;line-height:1.16}.poa-page--small-logo .poa-header{min-height:21mm}.poa-page--small-logo .poa-logo{left:50%;width:27mm;height:12mm;transform:translateX(-50%)}.poa-page--small-logo .poa-header h1{padding-top:10mm;margin-top:4mm}.poa-page--small-logo .poa-copy p{margin:1mm 0}.poa-page--stamps-header .poa-header h1{width:55%;margin-left:38mm;text-align:center}.poa-copy{margin:2mm 0}.poa-copy--wide{margin-inline:8mm}.signing-layout-table{width:100%;margin-top:2mm;border-collapse:collapse;page-break-inside:avoid}.signing-layout-table>tbody>tr>td{padding:0;border:0;vertical-align:top}.poa-signing-aside{width:39%;text-align:center}.poa-signing-main{width:61%}.poa-seal{width:34mm;height:34mm;margin:2mm auto;padding-top:13mm;border:1px solid #999;border-radius:50%;color:#777;text-align:center}.poa-stamps{white-space:nowrap}.poa-stamps span{display:inline-block;width:20mm;height:27mm;margin:2mm 1mm 0;padding-top:9mm;border:1px solid #999;color:#777;text-align:center}.poa-page--small-logo .poa-photo{width:25mm;height:31mm;margin:1mm auto;padding-top:11mm}.poa-page--small-logo .poa-seal{width:28mm;height:28mm;margin:1mm auto;padding-top:10mm}.poa-page--small-logo .poa-stamps span{width:18mm;height:22mm;margin:1mm .5mm 0;padding-top:7mm}.poa-page--small-logo .signature-stack td{height:11mm;padding:.5mm}.poa-options{width:68%;margin:4mm auto;border-collapse:collapse}.poa-options td{padding:1mm 4mm;border:0}.poa-source-note{margin-top:2mm;text-align:center;text-indent:0}.poa-bottom-assets{width:100%;margin-top:2mm;border-collapse:collapse;page-break-inside:avoid}.poa-bottom-assets td{padding:0;border:0;vertical-align:bottom}.poa-bottom-assets .poa-stamps{width:60%;text-align:center}.poa-bottom-assets .poa-seal-cell{width:40%;text-align:center}
+            .stamp-duty{width:30mm;min-height:20mm;padding:4mm 2mm;border:1px solid transparent;text-align:center;color:#555}.stamp-duty--top{position:absolute;right:0;top:0}.stamp-row{white-space:nowrap}.stamp-row--top{position:absolute;right:0;top:0}.stamp-row span{display:inline-block;width:20mm;height:25mm;margin-left:2mm;padding:5mm 1mm;border:1px solid transparent;text-align:center;color:#555}.poa-photo{width:29mm;height:38mm;margin:2mm auto;padding-top:14mm;border:1px solid transparent;text-align:center;color:#777}.anand-copy{margin-top:8mm}.anand-copy p{margin:2.5mm 0}
+            .poa-page{position:relative}.poa-page--plain .poa-logo{display:none}.poa-page--small-logo{font-size:14px;line-height:1.16}.poa-page--small-logo .poa-header{min-height:21mm}.poa-page--small-logo .poa-logo{left:50%;width:27mm;height:12mm;transform:translateX(-50%)}.poa-page--small-logo .poa-header h1{padding-top:10mm;margin-top:4mm}.poa-page--small-logo .poa-copy p{margin:1mm 0}.poa-page--stamps-header .poa-header h1{width:55%;margin-left:38mm;text-align:center}.poa-copy{margin:2mm 0}.poa-copy--wide{margin-inline:8mm}.signing-layout-table{width:100%;margin-top:2mm;border-collapse:collapse;page-break-inside:avoid}.signing-layout-table>tbody>tr>td{padding:0;border:0;vertical-align:top}.poa-signing-aside{width:39%;text-align:center}.poa-signing-main{width:61%}.poa-seal{width:34mm;height:34mm;margin:2mm auto;padding-top:13mm;border:1px solid transparent;border-radius:50%;color:#777;text-align:center}.poa-stamps{white-space:nowrap}.poa-stamps span{display:inline-block;width:20mm;height:27mm;margin:2mm 1mm 0;padding-top:9mm;border:1px solid transparent;color:#777;text-align:center}.poa-page--small-logo .poa-photo{width:25mm;height:31mm;margin:1mm auto;padding-top:11mm}.poa-page--small-logo .poa-seal{width:28mm;height:28mm;margin:1mm auto;padding-top:10mm}.poa-page--small-logo .poa-stamps span{width:18mm;height:22mm;margin:1mm .5mm 0;padding-top:7mm}.poa-page--small-logo .signature-stack td{height:11mm;padding:.5mm}.poa-options{width:68%;margin:4mm auto;border-collapse:collapse}.poa-options td{padding:1mm 4mm;border:0}.poa-source-note{margin-top:2mm;text-align:center;text-indent:0}.poa-bottom-assets{width:100%;margin-top:2mm;border-collapse:collapse;page-break-inside:avoid}.poa-bottom-assets td{padding:0;border:0;vertical-align:bottom}.poa-bottom-assets .poa-stamps{width:60%;text-align:center}.poa-bottom-assets .poa-seal-cell{width:40%;text-align:center}
             .poa-page--plain{font-size:14px;line-height:1.16}.poa-page--plain .signatures td{height:14mm}
+            .poa-page--general .poa-header{min-height:31mm}.poa-page--general .poa-header h1{padding-top:10mm}.poa-page--general .date{margin-top:-4mm;margin-bottom:7mm}.poa-page--general .poa-copy{margin-top:7mm}.poa-page--general .signing-layout-table{margin-top:3mm}.poa-page--general .poa-signing-aside{padding-top:2mm}.poa-page--general .poa-seal{margin-bottom:7mm}
+            .poa-page--anand .poa-header{min-height:19mm}.poa-page--anand .poa-header h1{padding-top:9mm}.poa-page--anand .date{margin:0 0 4mm}.poa-page--anand .poa-copy{margin-top:2mm}.poa-page--anand .signing-layout-table{margin-top:1mm}.poa-page--anand .poa-signing-aside{padding-top:4mm}.poa-certification{margin-top:4mm;text-align:center;page-break-inside:avoid}.poa-certification-title{margin-bottom:2mm}.poa-certification .signatures{width:70%;margin:0 auto}
+            .poa-page--egp .poa-header{min-height:25mm}.poa-page--egp .date{margin:-2mm 0 7mm}.poa-page--egp .poa-copy{margin-top:4mm}.poa-page--egp .signatures{margin-top:7mm}.poa-page--egp .poa-bottom-assets{margin-top:6mm}.poa-page--egp .poa-stamps{width:65%}.poa-page--egp .poa-seal-cell{width:35%}
+            .poa-page--grantee .poa-header{min-height:35mm}.poa-page--grantee .poa-header h1{padding-top:8mm}.poa-page--grantee .date{margin:-3mm 0 5mm}.poa-page--grantee .poa-options{margin-top:6mm;margin-bottom:6mm}.poa-page--grantee .signatures{margin-top:6mm}.poa-page--grantee .poa-seal{margin-top:4mm}
+            .poa-page--ebidding{font-size:16px;line-height:1.25}.poa-page--ebidding .poa-header{min-height:34mm}.poa-page--ebidding .poa-header h1{padding-top:8mm}.poa-page--ebidding .doc-no{top:25mm}.poa-page--ebidding .date{margin:-3mm 0 5mm}.poa-page--ebidding .poa-options{margin-top:7mm;margin-bottom:7mm}.poa-page--ebidding .signatures{margin-top:9mm}.poa-page--ebidding .signatures td{height:20mm}
             .footer{position:fixed;right:0;bottom:0;left:0;padding-top:2mm;border-top:3px solid #c72d3a;text-align:center;font-size:10px;color:#555;line-height:1.22}.footer strong{color:#c72d3a;font-size:12px}
             [data-edit-path][contenteditable="true"]{border-radius:2px;cursor:text;white-space:pre-wrap;overflow-wrap:anywhere;transition:outline-color .15s,background .15s}[data-edit-path][contenteditable="true"]:hover{outline:1px dashed #60a5fa;background:#eff6ff}[data-edit-path][contenteditable="true"]:focus{outline:2px solid #2563eb;background:#fff;box-shadow:0 0 0 3px rgba(37,99,235,.14)}
-        </style></head><body>'.$documentBody.'
-            <div class="footer">'.$this->powerOfAttorneyField('footer_text', (string) ($payload['footer_text'] ?? "บริษัท เวเลอร์ เฮลธ์ จำกัด 2/22 อาคารไอยรา ทาวเวอร์ ชั้น 10 ถนนจันทน์ แขวงทุ่งวัดดอน เขตสาทร กรุงเทพมหานคร 10120 โทร. 02-678-7500, 02-678-5150 แฟกซ์ 02-678-8400\nValor Health Co., Ltd. · email: valorhealth@valorhealth.co.th · เลขประจำตัวผู้เสียภาษี 0105558041179 สำนักงานใหญ่"), (bool) ($payload['_editor'] ?? false)).'</div>
+        </style></head><body>'.$documentBody.($showFooter ? '
+            <div class="footer">'.$this->powerOfAttorneyField('footer_text', (string) ($payload['footer_text'] ?? "บริษัท เวเลอร์ เฮลธ์ จำกัด 2/22 อาคารไอยรา ทาวเวอร์ ชั้น 10 ถนนจันทน์ แขวงทุ่งวัดดอน เขตสาทร กรุงเทพมหานคร 10120 โทร. 02-678-7500, 02-678-5150 แฟกซ์ 02-678-8400\nValor Health Co., Ltd. · email: valorhealth@valorhealth.co.th · เลขประจำตัวผู้เสียภาษี 0105558041179 สำนักงานใหญ่"), (bool) ($payload['_editor'] ?? false)).'</div>' : '').'
         </body></html>';
 
         return $htmlOnly ? $html : $this->dompdfOutput($html);
@@ -438,19 +462,20 @@ final class DocumentService
         $logo = '<img class="poa-logo" src="'.$logoUrl.'" alt="Valor Health">';
 
         if ($template === PowerOfAttorneyTemplateCatalog::ANANDAMAHIDOL_EBIDDING) {
-            return '<div class="poa-page poa-page--plain"><div class="poa-header"><div class="doc-no">ที่ '.$authorizationNo.'</div><h1>หนังสือมอบอำนาจ</h1><div class="stamp-duty stamp-duty--top">อากรแสตมป์<br>30 บาท / 10 บาท</div></div><div class="date">ทำที่ '.$place.'<br>วันที่ '.$issueDate.'</div>'.$companyDetails.$granteeDetails.$options.$projectDetails.'<p>'.$acceptance.'</p><p>'.$closing.'</p>'.$signatureGrid.'</div>';
+            return '<div class="poa-page poa-page--plain poa-page--ebidding"><div class="poa-header"><div class="doc-no">ที่ '.$authorizationNo.'</div><h1>หนังสือมอบอำนาจ</h1><div class="stamp-duty stamp-duty--top">อากรแสตมป์<br>30 บาท / 10 บาท</div></div><div class="date">ทำที่ '.$place.'<br>วันที่ '.$issueDate.'</div>'.$companyDetails.$granteeDetails.$options.$projectDetails.'<p>'.$acceptance.'</p><p>'.$closing.'</p>'.$signatureGrid.'</div>';
         }
         if ($template === PowerOfAttorneyTemplateCatalog::GRANTEE_FORM) {
-            return '<div class="poa-page poa-page--stamps-header"><div class="poa-header">'.$logo.'<div class="doc-no">ที่ '.$authorizationNo.'</div><h1>หนังสือมอบอำนาจ</h1><div class="stamp-row stamp-row--top"><span>อากรแสตมป์<br>20 บาท</span><span>อากรแสตมป์<br>5 บาท</span><span>อากรแสตมป์<br>5 บาท</span></div></div><div class="date">ทำที่ '.$place.'<br>วันที่ '.$issueDate.'</div>'.$companyDetails.$granteeDetails.$options.$projectDetails.'<p>'.$acceptance.'</p><p>'.$closing.'</p>'.$signatureGrid.'<div class="poa-seal" style="margin-left:auto;margin-right:11%">ตราประทับบริษัท</div><div class="poa-source-note">'.$stampText.'</div></div>';
+            return '<div class="poa-page poa-page--stamps-header poa-page--grantee"><div class="poa-header">'.$logo.'<div class="doc-no">ที่ '.$authorizationNo.'</div><h1>หนังสือมอบอำนาจ</h1><div class="stamp-row stamp-row--top"><span>อากรแสตมป์<br>20 บาท</span><span>อากรแสตมป์<br>5 บาท</span><span>อากรแสตมป์<br>5 บาท</span></div></div><div class="date">ทำที่ '.$place.'<br>วันที่ '.$issueDate.'</div>'.$companyDetails.$granteeDetails.$options.$projectDetails.'<p>'.$acceptance.'</p><p>'.$closing.'</p>'.$signatureGrid.'<div class="poa-seal" style="margin-left:auto;margin-right:11%">ตราประทับบริษัท</div><div class="poa-source-note">'.$stampText.'</div></div>';
         }
         if ($template === PowerOfAttorneyTemplateCatalog::GENERAL) {
-            return '<div class="poa-page"><div class="poa-header">'.$logo.'<h1>หนังสือมอบอำนาจ</h1></div><div class="date">เขียนที่ '.$place.'<br>วันที่ '.$issueDate.'</div>'.$copy.'<table class="signing-layout-table"><tr><td class="poa-signing-aside"><div class="poa-seal">ตราประทับบริษัท</div><div class="poa-stamps"><span>อากรแสตมป์<br>20 บาท</span><span>5 บาท</span><span>5 บาท</span></div></td><td class="poa-signing-main">'.$signatureStack.'</td></tr></table></div>';
+            return '<div class="poa-page poa-page--general"><div class="poa-header">'.$logo.'<h1>หนังสือมอบอำนาจ</h1></div><div class="date">เขียนที่ '.$place.'<br>วันที่ '.$issueDate.'</div>'.$copy.'<table class="signing-layout-table"><tr><td class="poa-signing-aside"><div class="poa-seal">ตราประทับบริษัท</div><div class="poa-stamps"><span>อากรแสตมป์<br>20 บาท</span><span>5 บาท</span><span>5 บาท</span></div></td><td class="poa-signing-main">'.$signatureStack.'</td></tr></table></div>';
         }
         if ($template === PowerOfAttorneyTemplateCatalog::ANANDAMAHIDOL) {
-            return '<div class="poa-page poa-page--small-logo"><div class="poa-header">'.$logo.'<h1>หนังสือมอบอำนาจ</h1></div><div class="date">วันที่ '.$issueDate.'</div>'.$copy.'<table class="signing-layout-table"><tr><td class="poa-signing-aside"><div class="poa-photo">รูปถ่ายผู้รับมอบอำนาจ</div><div class="poa-seal">ตราประทับบริษัท</div><div class="poa-stamps"><span>5 บาท</span><span>5 บาท</span><span>20 บาท</span></div></td><td class="poa-signing-main">'.$signatureStack.'</td></tr></table></div>';
+            $certification = '<div class="poa-certification"><div class="poa-certification-title">ขอรับรองว่าเป็นภาพถ่ายและลายมือชื่อของผู้รับมอบอำนาจจริง</div><table class="signatures"><tr><td>'.$grantorOneLine.'</td><td>'.$grantorTwoLine.'</td></tr></table></div>';
+            return '<div class="poa-page poa-page--small-logo poa-page--anand"><div class="poa-header">'.$logo.'<h1>หนังสือมอบอำนาจ</h1></div><div class="date">วันที่ '.$issueDate.'</div>'.$copy.'<table class="signing-layout-table"><tr><td class="poa-signing-aside"><div class="poa-photo">รูปถ่ายผู้รับมอบอำนาจ</div><div class="poa-seal">ตราประทับบริษัท</div><div class="poa-stamps"><span>5 บาท</span><span>5 บาท</span><span>20 บาท</span></div></td><td class="poa-signing-main">'.$signatureStack.'</td></tr></table>'.$certification.'</div>';
         }
 
-        return '<div class="poa-page"><div class="poa-header">'.$logo.'<h1>หนังสือมอบอำนาจ</h1></div><div class="date">วันที่ '.$issueDate.'</div>'.$copy.$signatureGrid.'<table class="poa-bottom-assets"><tr><td class="poa-stamps"><span>20 บาท</span><span>5 บาท</span><span>5 บาท</span></td><td class="poa-seal-cell"><div class="poa-seal">ตราประทับบริษัท</div></td></tr></table></div>';
+        return '<div class="poa-page poa-page--egp"><div class="poa-header">'.$logo.'<h1>หนังสือมอบอำนาจ</h1></div><div class="date">วันที่ '.$issueDate.'</div><div class="poa-copy"><p>'.$intro.'</p>'.$companyDetails.$granteeDetails.'<p>'.$scope.'</p><p>'.$acceptance.'</p><p>'.$closing.'</p></div>'.$signatureGrid.'<table class="poa-bottom-assets"><tr><td class="poa-stamps"><span>อากรแสตมป์<br>20 บาท</span><span>5 บาท</span><span>5 บาท</span></td><td class="poa-seal-cell"><div class="poa-seal">ตราประทับบริษัท</div></td></tr></table></div>';
     }
 
     private function powerOfAttorneyField(string $key, string $value, bool $editor): string
@@ -479,9 +504,8 @@ final class DocumentService
     }
 
     /** @param Collection<int, BillingRecord> $bills */
-    public function quotationBatchPdf(Collection $bills, bool $htmlOnly = false, string $template = QuotationTemplateCatalog::STANDARD): string
+    public function quotationBatchPdf(Collection $bills, bool $htmlOnly = false): string
     {
-        app(QuotationTemplateCatalog::class)->requireAvailable($template);
         $pages = [];
         $styles = '';
         foreach ($bills as $bill) {
@@ -489,9 +513,14 @@ final class DocumentService
             if (! $quotation) {
                 throw new RuntimeException("Bill #{$bill->bill_id} ไม่มีใบเสนอราคาอ้างอิง");
             }
+            $template = (string) ($bill->quotationDocumentVersion?->template_id ?? '');
+            if ($template === '') {
+                throw new RuntimeException("Bill #{$bill->bill_id} ยังไม่มี Template ใบเสนอราคาที่ Sale ยืนยัน");
+            }
+            app(QuotationTemplateCatalog::class)->requireAvailable($template);
             $html = $this->quotationPdf($quotation, draft: $bill, htmlOnly: true, template: $template);
-            if ($styles === '' && preg_match('/<style>(.*?)<\/style>/s', $html, $styleMatch) === 1) {
-                $styles = $styleMatch[1];
+            if (preg_match('/<style>(.*?)<\/style>/s', $html, $styleMatch) === 1) {
+                $styles .= $styleMatch[1];
             }
             if (preg_match('/<body>(.*?)<\/body>/s', $html, $bodyMatch) !== 1) {
                 throw new RuntimeException("ไม่สามารถรวมใบเสนอราคาของ Bill #{$bill->bill_id} ได้");
@@ -1098,6 +1127,26 @@ final class DocumentService
             ? '<div class="rejection-cross rejection-cross--forward"></div><div class="rejection-cross rejection-cross--backward"></div>'
             : '';
         $isQuotation = $title === 'ใบเสนอราคา';
+        $isStandardEditor = $isQuotation && data_get($editorPayload, 'template') === QuotationTemplateCatalog::STANDARD;
+        $addressHeading = $isStandardEditor ? '' : '<strong>ที่อยู่:</strong> ';
+        $customerAddressHtml = nl2br(e($customerAddress));
+        $customerCodeHtml = e($customerCode);
+        $customerTaxIdHtml = e($customerTaxId);
+        if ($isStandardEditor) {
+            $customerPayload = (array) ($editorPayload['customer'] ?? []);
+            $addressParts = [];
+            if ((bool) ($customerPayload['show_billing_address'] ?? true)) {
+                $addressParts[] = '<strong>ที่อยู่ออกบิล:</strong> '.$this->editableField('customer.billing_address', (string) ($customerPayload['billing_address'] ?? ''), $editorContext);
+            }
+            if ((bool) ($customerPayload['show_delivery_address'] ?? false)
+                && (! (bool) ($customerPayload['show_billing_address'] ?? true)
+                    || trim((string) ($customerPayload['delivery_address'] ?? '')) !== trim((string) ($customerPayload['billing_address'] ?? '')))) {
+                $addressParts[] = '<strong>ที่อยู่จัดส่ง:</strong> '.$this->editableField('customer.delivery_address', (string) ($customerPayload['delivery_address'] ?? ''), $editorContext);
+            }
+            $customerAddressHtml = implode('<br>', $addressParts);
+            $customerCodeHtml = $this->editableField('customer.code', (string) ($customerPayload['code'] ?? ''), $editorContext);
+            $customerTaxIdHtml = $this->editableField('customer.tax_id', (string) ($customerPayload['tax_id'] ?? '-'), $editorContext);
+        }
         $documentBranch = $isQuotation
             ? 'สำนักงานใหญ่<br>สาขา '.e($department)
             : 'สาขาที่ออกใบกำกับภาษี<br>สาขา '.e($department);
@@ -1108,6 +1157,17 @@ final class DocumentService
                 ? $this->editableField('document.document_note', (string) data_get($editorPayload, 'document.document_note', 'กรุณาตรวจสอบรายการ ราคา เงื่อนไขชำระเงิน และกำหนดส่งก่อนยืนยัน'), $editorContext)
                 : 'กรุณาตรวจสอบรายการ ราคา เงื่อนไขชำระเงิน และกำหนดส่งก่อนยืนยัน').'</div>'
             : '<div class="received">○ ได้รับสินค้าตามรายการนี้ในสภาพสมบูรณ์และจำนวนครบถ้วน</div><div class="document-note"><strong>หมายเหตุ:</strong> เป็นการยกเลิกใบกำกับภาษีอย่างย่อ<br>และออกใบกำกับภาษีเต็มรูปแบบแทน</div>';
+        $customerNoteHtml = e($note);
+        if ($isStandardEditor) {
+            $noteParts = [
+                $this->editableField('document.subject', (string) data_get($editorPayload, 'document.subject', ''), $editorContext),
+                $this->editableField('document.intro', (string) data_get($editorPayload, 'document.intro', ''), $editorContext),
+            ];
+            foreach ((array) ($editorPayload['terms'] ?? []) as $index => $term) {
+                $noteParts[] = $this->editableField('terms.'.$index, (string) $term, $editorContext);
+            }
+            $customerNoteHtml = implode(' | ', array_filter($noteParts, fn (string $part): bool => trim(strip_tags($part)) !== '')) ?: '-';
+        }
         $signatureHtml = '';
         if ($title === 'ใบเสนอราคา') {
             $signatureImage = ! empty($approvalEvidence['signature_image'])
@@ -1145,13 +1205,13 @@ final class DocumentService
             [data-edit-path][contenteditable="true"]{border-radius:2px;cursor:text}[data-edit-path][contenteditable="true"]:hover{outline:1px dashed #60a5fa;background:#eff6ff}[data-edit-path][contenteditable="true"]:focus{outline:2px solid #2563eb;background:#fff}
         </style></head><body>'.$rejectionCross.($watermark ? '<div class="watermark'.$watermarkClass.'">'.e($watermark).'</div>' : '').$logo.'
         <table class="header"><tr>
-            <td class="company-cell"><div class="company header-line">บริษัท เวเลอร์ เฮลธ์ จำกัด (สำนักงานใหญ่)</div><div class="header-line">2/22 อาคารไอยรา ถ.จันทน์ แขวงทุ่งวัดดอน เขตสาทร</div><div class="header-line">จ.กรุงเทพมหานคร 10120</div><div class="header-line">โทรศัพท์ +66-655219785</div><div>เลขผู้เสียภาษี 0105558041179</div></td>
-            <td class="title-cell"><div class="document-title">'.e($title).'<br><span>'.e($englishTitle).'</span></div></td>
-            <td class="document-cell">'.$documentBranch.'<br><br>เลขที่ '.$this->editableField('document.number', $documentNo, $editorContext).'<br>วันที่ '.e($date).'</td>
+            <td class="company-cell"><div class="company header-line">'.($isStandardEditor ? $this->editableField('document.company_name', (string) data_get($editorPayload, 'document.company_name', 'บริษัท เวเลอร์ เฮลธ์ จำกัด (สำนักงานใหญ่)'), $editorContext) : 'บริษัท เวเลอร์ เฮลธ์ จำกัด (สำนักงานใหญ่)').'</div><div class="header-line">'.($isStandardEditor ? $this->editableField('document.company_address', (string) data_get($editorPayload, 'document.company_address', ''), $editorContext) : '2/22 อาคารไอยรา ถ.จันทน์ แขวงทุ่งวัดดอน เขตสาทร จ.กรุงเทพมหานคร 10120').'</div><div class="header-line">'.($isStandardEditor ? $this->editableField('document.company_contact', (string) data_get($editorPayload, 'document.company_contact', ''), $editorContext) : 'โทรศัพท์ +66-655219785').'</div><div>'.($isStandardEditor ? $this->editableField('document.company_tax_id', (string) data_get($editorPayload, 'document.company_tax_id', ''), $editorContext) : 'เลขผู้เสียภาษี 0105558041179').'</div></td>
+            <td class="title-cell"><div class="document-title">'.($isStandardEditor ? $this->editableField('document.title', (string) data_get($editorPayload, 'document.title', $title), $editorContext) : e($title)).'<br><span>'.($isStandardEditor ? $this->editableField('document.english_title', (string) data_get($editorPayload, 'document.english_title', $englishTitle), $editorContext) : e($englishTitle)).'</span></div></td>
+            <td class="document-cell">'.($isStandardEditor ? $this->editableField('document.branch', (string) data_get($editorPayload, 'document.branch', 'สำนักงานใหญ่ สาขา'), $editorContext) : $documentBranch).'<br><br>เลขที่ '.$this->editableField('document.number', $documentNo, $editorContext).'<br>วันที่ '.$this->editableField('document.date', (string) data_get($editorPayload, 'document.date', $date), $editorContext).'</td>
         </tr></table>
         <table class="customer"><tr>
-            <td class="customer-left"><div class="customer-line"><strong>ชื่อลูกค้า:</strong> '.$this->editableField('document.recipient', $customerName, $editorContext).'</div><div class="customer-line"><strong>ที่อยู่:</strong> '.e($customerAddress).'</div><div><strong>เลขที่ผู้เสียภาษี:</strong> '.e($customerTaxId).'</div><div><strong>หมายเหตุ:</strong> '.e($note).'</div></td>
-            <td class="customer-right"><div class="customer-line"><strong>รหัสลูกค้า:</strong> '.e($customerCode).'</div><div style="height:35px"></div><div><strong>พนักงานขาย:</strong> '.$this->editableField('document.salesperson', $salesperson, $editorContext).'</div></td>
+            <td class="customer-left"><div class="customer-line"><strong>ชื่อลูกค้า:</strong> '.$this->editableField('document.recipient', $customerName, $editorContext).'</div><div class="customer-line">'.$addressHeading.$customerAddressHtml.'</div><div><strong>เลขที่ผู้เสียภาษี:</strong> '.$customerTaxIdHtml.'</div><div><strong>หมายเหตุ:</strong> '.$customerNoteHtml.'</div></td>
+            <td class="customer-right"><div class="customer-line"><strong>รหัสลูกค้า:</strong> '.$customerCodeHtml.'</div><div style="height:35px"></div><div><strong>พนักงานขาย:</strong> '.$this->editableField('document.salesperson', $salesperson, $editorContext).'</div></td>
         </tr></table>
         <table class="items"><thead><tr><th style="width:13%"><strong>รหัสสินค้า</strong><br>Product ID</th><th style="width:35%"><strong>รายการ</strong><br>Description</th><th style="width:8%"><strong>จำนวน</strong><br>Quantity</th><th style="width:13%"><strong>ราคาต่อหน่วย</strong><br>Unit Price</th><th style="width:11%"><strong>ส่วนลด</strong><br>Discount</th><th style="width:20%"><strong>จำนวนเงิน</strong><br>Amount (Baht)</th></tr></thead><tbody>'.$rows.'</tbody></table>
         <table class="after-items"><tr><td class="after-left"><div class="words">-'.e($this->bahtText->convert($total)).'-</div>'.$leftDocumentText.'</td><td class="after-right">

@@ -7,10 +7,14 @@ use App\Models\BillingDocumentPreparationItem;
 use App\Models\BillingRecord;
 use App\Models\EditLog;
 use App\Models\User;
+use App\Services\Authorization\RoleAccess;
+use App\Services\Documents\BillingDocumentStorage;
+use App\Services\Documents\DocumentService;
 use App\Services\Notifications\InAppNotificationPublisher;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 final class DocumentPreparationController extends Controller
@@ -55,11 +59,14 @@ final class DocumentPreparationController extends Controller
                 'quotation:qt_id,qt_no',
                 'documentPreparationItems' => fn ($items) => $items
                     ->select([
-                        'preparation_item_id', 'bill_id', 'document_type', 'status', 'admin_note',
+                        'preparation_item_id', 'bill_id', 'document_type', 'status', 'admin_note', 'attachment_document_id',
                         'requested_at', 'updated_at', 'prepared_at', 'prepared_by',
                     ])
                     ->whereIn('status', self::ACTIVE_STATUSES)
-                    ->with('preparedByUser:id,username,first_name,last_name')
+                    ->with([
+                        'preparedByUser:id,username,first_name,last_name',
+                        'attachmentDocument:doc_id,bill_id,file_name,mime_type,version_no,sha256,uploaded_by,uploaded_at',
+                    ])
                     ->orderBy('preparation_item_id'),
             ])
             ->orderByDesc(
@@ -124,6 +131,88 @@ final class DocumentPreparationController extends Controller
             }
         }
 
-        return response()->json(['data' => $preparationItem->fresh('preparedByUser:id,username,first_name,last_name')]);
+        return response()->json(['data' => $preparationItem->fresh([
+            'preparedByUser:id,username,first_name,last_name',
+            'attachmentDocument:doc_id,bill_id,file_name,mime_type,version_no,sha256,uploaded_by,uploaded_at',
+        ])]);
+    }
+
+    public function storeAttachment(
+        Request $request,
+        BillingDocumentPreparationItem $preparationItem,
+        BillingDocumentStorage $storage,
+    ): JsonResponse {
+        $file = $request->validate([
+            'file' => ['required', 'file', 'max:20480', 'mimes:pdf,png,jpg,jpeg,doc,docx,xls,xlsx'],
+        ])['file'];
+        $bill = $preparationItem->bill()->firstOrFail();
+        $documentType = 'preparation_'.$preparationItem->preparation_item_id;
+        $document = $storage->storeUpload($bill, $documentType, $file, $request->user()->username);
+
+        $preparationItem->forceFill([
+            'attachment_document_id' => $document->doc_id,
+            'status' => $preparationItem->status === 'prepared' ? 'prepared' : 'preparing',
+            'updated_at' => now(),
+        ])->save();
+
+        EditLog::query()->create([
+            'bill_id' => $preparationItem->bill_id,
+            'edited_by' => $request->user()->username,
+            'edit_time' => now(),
+            'edit_summary' => "อัปโหลดเอกสาร {$preparationItem->document_type}: {$document->file_name}",
+        ]);
+
+        return response()->json([
+            'data' => $preparationItem->fresh([
+                'preparedByUser:id,username,first_name,last_name',
+                'attachmentDocument:doc_id,bill_id,file_name,mime_type,version_no,sha256,uploaded_by,uploaded_at',
+            ]),
+        ], 201);
+    }
+
+    public function downloadAttachment(
+        Request $request,
+        BillingDocumentPreparationItem $preparationItem,
+        DocumentService $documents,
+    ): mixed {
+        $bill = $preparationItem->bill()->firstOrFail();
+        $isQueueAdmin = RoleAccess::canUser($request->user(), 'document_preparation_queue', 'system_admin');
+        if (! $isQueueAdmin) {
+            $owned = (int) ($bill->creator_user_id ?? 0) === (int) $request->user()->id
+                || ($bill->creator_user_id === null && $bill->created_by === $request->user()->username);
+            abort_unless($owned, 403, 'คุณไม่มีสิทธิ์เข้าถึงเอกสารนี้');
+            abort_unless($preparationItem->status === 'prepared', 422, 'Admin ยังไม่ได้ยืนยันว่าเอกสารพร้อม');
+        }
+
+        if ($preparationItem->attachment_document_id) {
+            $stored = DB::selectOne(
+                "SELECT file_name, mime_type, encode(file_bytes, 'base64') AS encoded
+                 FROM billing_documents WHERE doc_id = ? AND bill_id = ? LIMIT 1",
+                [$preparationItem->attachment_document_id, $bill->bill_id],
+            );
+            abort_unless($stored, 404, 'ไม่พบไฟล์แนบฉบับปัจจุบัน');
+            $disposition = $request->boolean('inline') ? 'inline' : 'attachment';
+
+            return response(base64_decode((string) $stored->encoded, true), 200, [
+                'Content-Type' => $stored->mime_type ?: 'application/octet-stream',
+                'Content-Disposition' => $disposition."; filename*=UTF-8''".rawurlencode($stored->file_name),
+                'X-Content-Type-Options' => 'nosniff',
+                'Cache-Control' => 'no-store, private',
+            ]);
+        }
+
+        if ($preparationItem->document_type === 'quotation' && $bill->quotation_document_version_id) {
+            $version = $bill->quotationDocumentVersion()->firstOrFail();
+            $bytes = $documents->confirmedQuotationVersionPdf($version, $bill);
+
+            return response($bytes, 200, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => $documents->attachmentDisposition($version->filename),
+                'X-Content-Type-Options' => 'nosniff',
+                'Cache-Control' => 'no-store, private',
+            ]);
+        }
+
+        abort(404, 'Admin ยังไม่ได้อัปโหลดไฟล์สำหรับรายการนี้');
     }
 }

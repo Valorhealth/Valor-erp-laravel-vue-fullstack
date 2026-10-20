@@ -14,7 +14,7 @@ final class QuotationFromPurchaseOrder
 {
     private const CUSTOMER_FIELDS = [
         'buyer_name', 'tax_id', 'province', 'district', 'sub_district', 'zipcode',
-        'address_note', 'shipping_type', 'shipping_text', 'bill_note',
+        'address_note', 'billing_address', 'delivery_address', 'price_vat_mode', 'shipping_type', 'shipping_text', 'bill_note',
         'bplus_customer_code', 'sale_discount_total', 'sale_discount_note',
         'credit_limit', 'credit_term', 'requested_credit_term', 'customer_po_no',
         'customer_confirmed_at', 'customer_contact_name', 'customer_contact_channel',

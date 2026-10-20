@@ -15,7 +15,6 @@ use App\Services\Documents\DocumentDownloadAudit;
 use App\Services\Documents\DocumentService;
 use App\Services\Documents\ElectronicSignatureService;
 use App\Services\Documents\PowerOfAttorneyService;
-use App\Services\Documents\QuotationTemplateCatalog;
 use App\Services\Notifications\WorkflowEmailNotifier;
 use App\Services\Products\ProductUnitValidator;
 use Illuminate\Http\JsonResponse;
@@ -23,6 +22,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class BillingWorkflowController extends Controller
 {
@@ -53,12 +53,19 @@ class BillingWorkflowController extends Controller
             'bill_date' => ['required', 'date'],
             'buyer_name' => ['required', 'string', 'max:1000'],
             'tax_id' => ['nullable', 'string', 'max:30'],
+            'price_vat_mode' => ['required', Rule::in(['in_vat', 'ex_vat'])],
             'bplus_customer_code' => ['required', 'string', 'max:255'],
             'province' => ['required', 'string', 'max:255'],
             'district' => ['required', 'string', 'max:255'],
             'sub_district' => ['required', 'string', 'max:255'],
             'zipcode' => ['required', 'string', 'max:20'],
             'address_note' => ['required', 'string', 'max:5000'],
+            'billing_address' => ['required', 'string', 'max:5000'],
+            'delivery_address' => ['required', 'string', 'max:5000'],
+            'billing_address_id' => ['nullable', 'integer', Rule::exists('customer_addresses', 'address_id')->where('is_active', true)],
+            'delivery_address_id' => ['nullable', 'integer', Rule::exists('customer_addresses', 'address_id')->where('is_active', true)],
+            'standard_show_billing_address' => ['required', 'boolean'],
+            'standard_show_delivery_address' => ['required', 'boolean'],
             'shipping_type' => ['required', 'string', 'max:255'],
             'shipping_text' => ['nullable', 'string', 'max:2000'],
             'bill_note' => ['nullable', 'string', 'max:5000'],
@@ -82,6 +89,9 @@ class BillingWorkflowController extends Controller
             'items.*.unit_price' => ['required', 'numeric', 'min:0'],
             'items.*.sale_discount_unit' => ['nullable', 'numeric', 'min:0'],
         ]);
+        if (! $data['standard_show_billing_address'] && ! $data['standard_show_delivery_address']) {
+            throw ValidationException::withMessages(['standard_address_visibility' => 'ใบเสนอราคามาตรฐานต้องแสดงที่อยู่อย่างน้อยหนึ่งประเภท']);
+        }
         $productUnits->validate($data['items']);
         $bill = $workflow->createFromPurchaseOrder($request->user(), $data, $data['purchase_order']);
         $notifier->billSubmitted($bill, $request->user());
@@ -102,8 +112,15 @@ class BillingWorkflowController extends Controller
             'bill_date' => ['required', 'date'],
             'buyer_name' => ['required', 'string', 'max:1000'],
             'tax_id' => ['nullable', 'string', 'max:30'],
+            'price_vat_mode' => ['required', Rule::in(['in_vat', 'ex_vat'])],
             'total_amount' => ['required', 'numeric', 'min:0'],
             'address_note' => ['required', 'string', 'max:5000'],
+            'billing_address' => ['required', 'string', 'max:5000'],
+            'delivery_address' => ['required', 'string', 'max:5000'],
+            'billing_address_id' => ['nullable', 'integer', Rule::exists('customer_addresses', 'address_id')->where('is_active', true)],
+            'delivery_address_id' => ['nullable', 'integer', Rule::exists('customer_addresses', 'address_id')->where('is_active', true)],
+            'standard_show_billing_address' => ['required', 'boolean'],
+            'standard_show_delivery_address' => ['required', 'boolean'],
             'province' => ['required', 'string', 'max:255'],
             'district' => ['required', 'string', 'max:255'],
             'sub_district' => ['required', 'string', 'max:255'],
@@ -133,6 +150,9 @@ class BillingWorkflowController extends Controller
             'items.*.line_total_before_discount' => ['required', 'numeric', 'min:0'],
             'items.*.line_total' => ['required', 'numeric', 'min:0'],
         ]);
+        if (! $data['standard_show_billing_address'] && ! $data['standard_show_delivery_address']) {
+            throw ValidationException::withMessages(['standard_address_visibility' => 'ใบเสนอราคามาตรฐานต้องแสดงที่อยู่อย่างน้อยหนึ่งประเภท']);
+        }
         $productUnits->validate($data['items']);
         $bill = $workflow->updateBySale($request->user(), $bill, $data);
 
@@ -368,19 +388,18 @@ class BillingWorkflowController extends Controller
         ]);
     }
 
-    public function exportQuotationsPdf(Request $request, DocumentService $documents, QuotationTemplateCatalog $templates): mixed
+    public function exportQuotationsPdf(Request $request, DocumentService $documents): mixed
     {
         $data = $request->validate([
             'bill_ids' => ['required', 'array', 'min:1', 'max:100'],
             'bill_ids.*' => ['required', 'integer', 'distinct'],
-            'template' => ['nullable', 'string', 'max:64'],
         ]);
         $ids = $data['bill_ids'];
-        $template = $templates->requireAvailable($data['template'] ?? null);
         $bills = BillingRecord::query()
             ->with([
                 'items', 'signatures', 'documents', 'customerAcceptanceSignatures',
                 'quotation.items', 'quotation.creator:id,username,first_name,last_name,phone,department',
+                'quotationDocumentVersion:document_version_id,qt_id,bill_id,template_id,revision_no,filename',
             ])
             ->whereIn('status', self::EXPORTABLE_STATUSES)
             ->whereIn('bill_id', $ids)
@@ -389,8 +408,10 @@ class BillingWorkflowController extends Controller
         abort_if($bills->count() !== count(array_unique($ids)), 422, 'พบบิลที่ไม่อยู่ในสถานะพร้อม Export');
         $withoutQuotation = $bills->filter(fn (BillingRecord $bill): bool => $bill->quotation === null)->pluck('bill_id');
         abort_if($withoutQuotation->isNotEmpty(), 422, 'Bill #'.$withoutQuotation->implode(', #').' เปิดจาก PO โดยตรง จึงไม่มีใบเสนอราคาให้ Export');
+        $withoutConfirmedTemplate = $bills->filter(fn (BillingRecord $bill): bool => ! $bill->quotationDocumentVersion?->template_id)->pluck('bill_id');
+        abort_if($withoutConfirmedTemplate->isNotEmpty(), 422, 'Bill #'.$withoutConfirmedTemplate->implode(', #').' ยังไม่มี Template ใบเสนอราคาที่ Sale ยืนยัน');
 
-        $bytes = $documents->quotationBatchPdf($bills, template: $template);
+        $bytes = $documents->quotationBatchPdf($bills);
         $request->attributes->set('document_audit', ['type' => 'quotation_batch', 'documents' => $bills->map(fn ($bill) => ['bill_id' => $bill->bill_id, 'quotation_id' => $bill->ref_qt_id, 'quotation_no' => $bill->quotation->qt_no, 'revision_no' => $bill->revision_no])->all()]);
         Quotation::query()->whereIn('qt_id', $bills->pluck('ref_qt_id'))->update([
             'quotation_printed_at' => now(),

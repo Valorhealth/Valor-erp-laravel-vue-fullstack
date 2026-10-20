@@ -64,6 +64,7 @@ final class AuditLogger
         'FibroscanBookingController@updateStatus' => ['fibroscan_booking.status', 'ตารางจองเครื่อง', 'เปลี่ยนสถานะรายการจองเครื่อง FibroScan'],
         'FibroscanMachineController@store' => ['fibroscan_machine.create', 'ทะเบียนเครื่อง', 'เพิ่มเครื่อง FibroScan'],
         'FibroscanMachineController@update' => ['fibroscan_machine.update', 'ทะเบียนเครื่อง', 'แก้ไขทะเบียนเครื่อง FibroScan'],
+        'FibroscanMachineController@destroy' => ['fibroscan_machine.delete', 'ทะเบียนเครื่อง', 'ลบเครื่อง FibroScan'],
         'MasterDataController@storeCustomer' => ['master.customer_create', 'ข้อมูลหลัก', 'เพิ่มข้อมูลลูกค้า'],
         'MasterDataController@destroyCustomer' => ['master.customer_delete', 'ข้อมูลหลัก', 'ลบข้อมูลลูกค้า'],
         'MasterDataController@storeSalesman' => ['master.salesman_create', 'ข้อมูลหลัก', 'เพิ่มข้อมูลพนักงานขาย'],

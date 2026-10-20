@@ -24,7 +24,6 @@ const notificationOpen = ref(false)
 const notificationLoading = ref(false)
 const unreadCount = ref(0)
 const notifications = ref<Array<{ notification_id: number; title: string; body: string | null; action_url: string | null; read_at: string | null; created_at: string }>>([])
-let notificationTimer: number | null = null
 
 const iconByKey: Record<string, string> = {
   create_bill: 'file-plus', edit_bill: 'file-pen', sales_documents: 'folder', document_center: 'folder',
@@ -95,14 +94,11 @@ function syncViewport() {
   if (tabletQuery.matches) sidebarCollapsed.value = true
 }
 function syncConnection() { isOnline.value = navigator.onLine }
-function refreshNotificationsWhenVisible() {
-  if (document.visibilityState === 'visible') loadNotifications()
-}
 async function loadNotifications(): Promise<void> {
   if (!auth.isAuthenticated.value || notificationLoading.value) return
   notificationLoading.value = true
   try {
-    const response = await api.get<{ data: typeof notifications.value; unread_count: number }>('/api/v1/notifications')
+    const response = await api.get<{ data: typeof notifications.value; unread_count: number }>('/api/v1/notifications', { skipGlobalLoading: true })
     notifications.value = response.data.data
     unreadCount.value = response.data.unread_count
   } catch { /* การแจ้งเตือนไม่ควรขัดขวางการใช้งานหน้าหลัก */ }
@@ -146,9 +142,6 @@ onMounted(() => {
   window.addEventListener('online', syncConnection)
   window.addEventListener('offline', syncConnection)
   loadNotifications()
-  document.addEventListener('visibilitychange', refreshNotificationsWhenVisible)
-  window.addEventListener('focus', loadNotifications)
-  notificationTimer = window.setInterval(loadNotifications, 20_000)
 })
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
@@ -156,9 +149,6 @@ onBeforeUnmount(() => {
   tabletQuery.removeEventListener('change', syncViewport)
   window.removeEventListener('online', syncConnection)
   window.removeEventListener('offline', syncConnection)
-  document.removeEventListener('visibilitychange', refreshNotificationsWhenVisible)
-  window.removeEventListener('focus', loadNotifications)
-  if (notificationTimer !== null) window.clearInterval(notificationTimer)
   document.body.classList.remove('mobile-menu-open')
 })
 </script>

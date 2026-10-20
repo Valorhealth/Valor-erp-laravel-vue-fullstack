@@ -24,6 +24,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class QuotationController extends Controller
 {
@@ -36,7 +37,7 @@ class QuotationController extends Controller
             ->with(['billingRecord' => fn ($query) => $query
                 ->select(['bill_id', 'ref_qt_id', 'bill_date', 'status', 'buyer_name', 'total_amount', 'customer_acceptance_token', 'customer_acceptance_expires_at', 'customer_acceptance_used_at', 'quotation_document_version_id'])
                 ->with(['documents', 'quotationDocumentVersion' => fn ($version) => $version
-                    ->select(['document_version_id', 'qt_id', 'bill_id'])
+                    ->select(['document_version_id', 'qt_id', 'bill_id', 'template_id', 'revision_no', 'filename'])
                     ->with('powerOfAttorney:authorization_version_id,document_version_id,authorization_no,filename,created_at')])
                 ->withExists(['signatures as internal_approval_exists' => fn ($signatures) => $signatures
                     ->where('signature_type', 'internal_quotation_approval')
@@ -91,12 +92,19 @@ class QuotationController extends Controller
             'qt_date' => ['required', 'date'],
             'buyer_name' => ['required', 'string', 'max:1000'],
             'tax_id' => ['nullable', 'string', 'max:30'],
+            'price_vat_mode' => ['required', Rule::in(['in_vat', 'ex_vat'])],
             'bplus_customer_code' => ['required', 'string', 'max:255'],
             'province' => ['required', 'string', 'max:255'],
             'district' => ['required', 'string', 'max:255'],
             'sub_district' => ['required', 'string', 'max:255'],
             'zipcode' => ['required', 'string', 'max:20'],
             'address_note' => ['required', 'string', 'max:5000'],
+            'billing_address' => ['required', 'string', 'max:5000'],
+            'delivery_address' => ['required', 'string', 'max:5000'],
+            'billing_address_id' => ['nullable', 'integer', Rule::exists('customer_addresses', 'address_id')->where('is_active', true)],
+            'delivery_address_id' => ['nullable', 'integer', Rule::exists('customer_addresses', 'address_id')->where('is_active', true)],
+            'standard_show_billing_address' => ['required', 'boolean'],
+            'standard_show_delivery_address' => ['required', 'boolean', 'required_without:standard_show_billing_address'],
             'shipping_type' => ['required', 'in:ส่งปกติ,ส่งเร็ว,ส่งด่วน'],
             'shipping_text' => ['nullable', 'string', 'max:2000'],
             'bill_note' => ['nullable', 'string', 'max:5000'],
@@ -121,6 +129,9 @@ class QuotationController extends Controller
             'items.*.unit_price' => ['required', 'numeric', 'min:0'],
             'items.*.sale_discount_unit' => ['nullable', 'numeric', 'min:0'],
         ]);
+        if (! $data['standard_show_billing_address'] && ! $data['standard_show_delivery_address']) {
+            throw ValidationException::withMessages(['standard_address_visibility' => 'ใบเสนอราคามาตรฐานต้องแสดงที่อยู่อย่างน้อยหนึ่งประเภท']);
+        }
         $productUnits->validate($data['items']);
 
         $quotation = DB::transaction(function () use ($request, $data, $creditResolver, $workflow, $quotationNumbers): Quotation {
@@ -134,9 +145,12 @@ class QuotationController extends Controller
             $tailDiscount = min((float) ($data['sale_discount_total'] ?? 0), $gross);
             $credit = $creditResolver->resolve($data['bplus_customer_code'], $data['buyer_name']);
 
+            $netEntered = round($gross - $tailDiscount, 2);
             $quotation = Quotation::query()->create([
                 ...collect($data)->except(['items'])->all(),
-                'total_amount' => round($gross - $tailDiscount, 2),
+                'total_amount' => $data['price_vat_mode'] === 'ex_vat'
+                    ? round($netEntered * 1.07, 2)
+                    : $netEntered,
                 'sale_discount_total' => $tailDiscount,
                 'workflow_type' => $data['workflow_type'] ?? 'existing_customer',
                 'credit_limit' => $credit?->credit_limit ?? 0,
@@ -409,6 +423,32 @@ class QuotationController extends Controller
         ]);
     }
 
+    public function savePowerOfAttorneyDraft(
+        Request $request,
+        Quotation $quotation,
+        QuotationTemplateCatalog $templates,
+        PowerOfAttorneyService $powerOfAttorneys,
+    ): JsonResponse {
+        $this->authorizeQuotation($request, $quotation);
+        $data = $request->validate(Arr::except($this->editorPayloadRules(), ['lock_version']));
+        abort_if($data['mode'] !== 'original', 422, 'หนังสือมอบอำนาจสร้างคู่กับใบเสนอราคาต้นฉบับเท่านั้น');
+        $templates->requireAvailable($data['template']);
+        $bill = $quotation->billingRecord()->firstOrFail();
+        $version = QuotationDocumentVersion::query()
+            ->whereKey($bill->quotation_document_version_id)
+            ->where('qt_id', $quotation->qt_id)
+            ->where('bill_id', $bill->bill_id)
+            ->firstOrFail();
+        $authorization = $powerOfAttorneys->saveForQuotationVersion($quotation, $bill, $version, $data['payload']);
+
+        return response()->json(['data' => [
+            'authorization_version_id' => $authorization->authorization_version_id,
+            'authorization_no' => $authorization->authorization_no,
+            'filename' => $authorization->filename,
+            'draft_pdf_sha256' => $authorization->draft_pdf_sha256,
+        ]]);
+    }
+
     public function confirmEditor(Request $request, Quotation $quotation, QuotationDocumentEditor $editor, QuotationTemplateCatalog $templates): JsonResponse
     {
         $this->authorizeQuotation($request, $quotation);
@@ -436,7 +476,6 @@ class QuotationController extends Controller
         $this->authorizeQuotation($request, $quotation);
         $data = $request->validate(Arr::except($this->editorPayloadRules(), ['lock_version']));
         abort_if($data['mode'] !== 'original', 422, 'หนังสือมอบอำนาจสร้างคู่กับใบเสนอราคาต้นฉบับเท่านั้น');
-        $this->rejectLockedOriginalPreview($quotation, $data['mode']);
         $template = $templates->requireAvailable($data['template']);
         $normalized = $editor->normalizedPayload($quotation, $template, $data['mode'], $data['payload']);
 

@@ -8,6 +8,7 @@ use App\Models\Quotation;
 use App\Models\QuotationDocumentDraft;
 use App\Models\QuotationDocumentVersion;
 use App\Models\User;
+use App\Services\Authorization\RoleAccess;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -173,7 +174,8 @@ final class QuotationDocumentEditor
             ]);
 
             if ($billId !== null && $mode === 'original') {
-                if ((bool) data_get($normalized, 'power_of_attorney.enabled', true)) {
+                if ((bool) data_get($normalized, 'power_of_attorney.enabled', true)
+                    && RoleAccess::canUser($actor, 'document_preparation_queue', 'system_admin')) {
                     $this->powerOfAttorneys->createForQuotationVersion($quotation, $bill, $version);
                 }
                 DB::table('billing_records')
@@ -273,7 +275,10 @@ final class QuotationDocumentEditor
         }
         $bill->items()->whereNotIn('item_id', $keepBill)->delete();
         $quotation->items()->whereNotIn('qt_item_id', $keepQuotation)->delete();
-        $total = round(max($gross - min($tailDiscount, $gross), 0), 2);
+        $enteredTotal = round(max($gross - min($tailDiscount, $gross), 0), 2);
+        $total = ($bill->price_vat_mode ?? $quotation->price_vat_mode ?? 'in_vat') === 'ex_vat'
+            ? round($enteredTotal * 1.07, 2)
+            : $enteredTotal;
         $bill->forceFill(['sale_discount_total' => min($tailDiscount, $gross), 'total_amount' => $total, 'quotation_document_version_id' => null])->save();
         $quotation->forceFill(['sale_discount_total' => min($tailDiscount, $gross), 'total_amount' => $total])->save();
         $payload['commercial_baseline'] = $this->commercialBaseline($bill);
@@ -333,9 +338,19 @@ final class QuotationDocumentEditor
         return [
             'template' => $template,
             'mode' => $mode,
+            'price_vat_mode' => in_array((string) ($source->price_vat_mode ?? 'in_vat'), ['in_vat', 'ex_vat'], true)
+                ? (string) ($source->price_vat_mode ?? 'in_vat')
+                : 'in_vat',
             'document' => [
                 'number' => $documentNumber,
                 'date' => $date,
+                'title' => 'ใบเสนอราคา',
+                'english_title' => 'Quotation',
+                'company_name' => 'บริษัท เวเลอร์ เฮลธ์ จำกัด (สำนักงานใหญ่)',
+                'company_address' => '2/22 อาคารไอยรา ถ.จันทน์ แขวงทุ่งวัดดอน เขตสาทร จ.กรุงเทพมหานคร 10120',
+                'company_contact' => 'โทรศัพท์ +66-655219785',
+                'company_tax_id' => 'เลขผู้เสียภาษี 0105558041179',
+                'branch' => 'สำนักงานใหญ่ สาขา',
                 'subject' => (string) ($profile['subject'] ?? ''),
                 'recipient' => (string) ($profile['recipient'] ?? $source->buyer_name),
                 'intro' => (string) ($profile['intro'] ?? ''),
@@ -348,6 +363,10 @@ final class QuotationDocumentEditor
             'customer' => [
                 'code' => (string) ($source->bplus_customer_code ?? ''),
                 'address' => (string) ($source->address_note ?? ''),
+                'billing_address' => (string) ($source->billing_address ?: $source->address_note ?? ''),
+                'delivery_address' => (string) ($source->delivery_address ?: $source->address_note ?? ''),
+                'show_billing_address' => (bool) ($source->standard_show_billing_address ?? true),
+                'show_delivery_address' => (bool) ($source->standard_show_delivery_address ?? false),
                 'tax_id' => (string) ($source->tax_id ?: '-'),
             ],
             'items' => $items->values()->map(fn ($item, int $index): array => [
@@ -417,7 +436,8 @@ final class QuotationDocumentEditor
         $this->requireMode($mode);
         $defaults = $this->initialPayload($quotation, $template, $mode);
         $document = array_merge($defaults['document'], Arr::only((array) ($payload['document'] ?? []), [
-            'number', 'date', 'subject', 'recipient', 'intro', 'salesperson', 'signature_role', 'contact',
+            'number', 'date', 'title', 'english_title', 'company_name', 'company_address', 'company_contact', 'company_tax_id', 'branch',
+            'subject', 'recipient', 'intro', 'salesperson', 'signature_role', 'contact',
             'confirmation_terms', 'document_note',
         ]));
         if ($template === QuotationTemplateCatalog::RAMATHIBODI && trim((string) ($document['contact'] ?? '')) === '') {
@@ -465,11 +485,24 @@ final class QuotationDocumentEditor
             (string) data_get($quotation, 'billingRecord.buyer_name', $quotation->buyer_name),
         );
 
+        $customer = $defaults['customer'];
+        if ($template === QuotationTemplateCatalog::STANDARD) {
+            $customerInput = (array) ($payload['customer'] ?? []);
+            foreach (['code', 'billing_address', 'delivery_address', 'tax_id'] as $field) {
+                if (array_key_exists($field, $customerInput)) {
+                    $customer[$field] = mb_substr(trim((string) $customerInput[$field]), 0, $field === 'billing_address' || $field === 'delivery_address' ? 5000 : 255);
+                }
+            }
+        }
+
         return [
             'template' => $template,
             'mode' => $mode,
+            // VAT mode is commercial data controlled by the Draft form. Do not
+            // trust a stale/editor-supplied value when regenerating the PDF.
+            'price_vat_mode' => $defaults['price_vat_mode'],
             'document' => $document,
-            'customer' => $defaults['customer'],
+            'customer' => $customer,
             'items' => $items,
             'bill_discount' => max(0, min((float) ($payload['bill_discount'] ?? $defaults['bill_discount']), 999_999_999)),
             'commercial_baseline' => (string) ($payload['commercial_baseline'] ?? $defaults['commercial_baseline']),
@@ -540,7 +573,9 @@ final class QuotationDocumentEditor
         ])->all();
 
         return hash('sha256', json_encode([
-            $rows, number_format((float) $bill->sale_discount_total, 2, '.', ''),
+            $rows,
+            number_format((float) $bill->sale_discount_total, 2, '.', ''),
+            (string) ($bill->price_vat_mode ?? 'in_vat'),
         ], JSON_THROW_ON_ERROR));
     }
 

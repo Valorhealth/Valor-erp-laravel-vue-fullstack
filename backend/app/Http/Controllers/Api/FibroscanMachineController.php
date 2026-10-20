@@ -42,6 +42,19 @@ class FibroscanMachineController extends Controller
         return response()->json(['data' => $machine->fresh()]);
     }
 
+    public function destroy(FibroscanMachine $machine): JsonResponse
+    {
+        abort_if(
+            $machine->bookings()->exists(),
+            422,
+            'ไม่สามารถลบเครื่องที่มีประวัติการจองได้ กรุณาเปลี่ยนสถานะเป็น “เลิกใช้งาน” เพื่อเก็บประวัติเดิม',
+        );
+
+        $machine->delete();
+
+        return response()->json(['message' => 'ลบเครื่องออกจากทะเบียนแล้ว']);
+    }
+
     /** @return array<string, mixed> */
     private function validateMachine(Request $request, ?FibroscanMachine $machine = null): array
     {

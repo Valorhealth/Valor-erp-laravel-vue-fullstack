@@ -40,6 +40,8 @@ class BillingRecord extends Model
             'credit_remain' => 'decimal:2',
             'admin_discount_final' => 'decimal:2',
             'submission_document_requirements' => 'array',
+            'standard_show_billing_address' => 'boolean',
+            'standard_show_delivery_address' => 'boolean',
         ];
     }
 

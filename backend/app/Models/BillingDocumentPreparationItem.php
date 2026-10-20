@@ -33,4 +33,9 @@ final class BillingDocumentPreparationItem extends Model
     {
         return $this->belongsTo(User::class, 'prepared_by', 'id');
     }
+
+    public function attachmentDocument(): BelongsTo
+    {
+        return $this->belongsTo(BillingDocument::class, 'attachment_document_id', 'doc_id');
+    }
 }

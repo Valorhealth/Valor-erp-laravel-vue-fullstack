@@ -14,6 +14,9 @@ const calendarBookings = ref<FibroscanBooking[]>([])
 const machines = ref<FibroscanMachine[]>([])
 const loading = ref(false)
 const saving = ref(false)
+const machineSaving = ref(false)
+const machineDeletingId = ref<number | null>(null)
+const machineEditingId = ref<number | null>(null)
 const error = ref('')
 const success = ref('')
 const editingId = ref<number | null>(null)
@@ -63,7 +66,7 @@ const bookingForm = reactive({
   reserved_until: localDateTime(new Date(Date.now() + 24 * 60 * 60 * 1000)),
   contact_name: '', contact_phone: '', note: '',
 })
-const machineForm = reactive({ machine_code: '', machine_name: '', serial_number: '', note: '' })
+const machineForm = reactive({ machine_code: '', machine_name: '', serial_number: '', note: '', status: 'พร้อมใช้งาน' as FibroscanMachineStatus })
 
 const selectedFrom = computed(() => new Date(bookingForm.reserved_from).getTime())
 const selectedUntil = computed(() => new Date(bookingForm.reserved_until).getTime())
@@ -402,24 +405,66 @@ function historyValue(field: string, value: unknown): string {
   return String(value)
 }
 
-async function addMachine() {
+function resetMachineForm() {
+  machineEditingId.value = null
+  Object.assign(machineForm, { machine_code: '', machine_name: '', serial_number: '', note: '', status: 'พร้อมใช้งาน' })
+}
+
+function editMachine(machine: FibroscanMachine) {
+  machineEditingId.value = machine.machine_id
+  Object.assign(machineForm, {
+    machine_code: machine.machine_code,
+    machine_name: machine.machine_name,
+    serial_number: machine.serial_number || '',
+    note: machine.note || '',
+    status: machine.status,
+  })
+}
+
+async function saveMachine() {
   error.value = ''; success.value = ''
+  machineSaving.value = true
   try {
-    await api.post('/api/v1/fibroscan-machines', machineForm)
-    Object.assign(machineForm, { machine_code: '', machine_name: '', serial_number: '', note: '' })
-    success.value = 'เพิ่มเครื่องเข้าทะเบียนแล้ว'
+    if (machineEditingId.value) {
+      await api.put(`/api/v1/fibroscan-machines/${machineEditingId.value}`, machineForm)
+      success.value = 'บันทึกข้อมูลเครื่องแล้ว'
+    } else {
+      await api.post('/api/v1/fibroscan-machines', machineForm)
+      success.value = 'เพิ่มเครื่องเข้าทะเบียนแล้ว'
+    }
+    resetMachineForm()
     await load()
-  } catch (cause) { error.value = apiError(cause, 'เพิ่มเครื่องไม่สำเร็จ') }
+  } catch (cause) { error.value = apiError(cause, machineEditingId.value ? 'แก้ไขข้อมูลเครื่องไม่สำเร็จ' : 'เพิ่มเครื่องไม่สำเร็จ') }
+  finally { machineSaving.value = false }
 }
 
 async function changeMachineStatus(machine: FibroscanMachine, status: FibroscanMachineStatus) {
+  error.value = ''; success.value = ''
   try {
     await api.put(`/api/v1/fibroscan-machines/${machine.machine_id}`, {
       machine_code: machine.machine_code, machine_name: machine.machine_name,
       serial_number: machine.serial_number, note: machine.note, status,
     })
+    success.value = `เปลี่ยนสถานะ ${machine.machine_code} เป็น “${status}” แล้ว`
     await load()
-  } catch (cause) { error.value = apiError(cause, 'เปลี่ยนสถานะเครื่องไม่สำเร็จ') }
+  } catch (cause) {
+    error.value = apiError(cause, 'เปลี่ยนสถานะเครื่องไม่สำเร็จ')
+    await load()
+  }
+}
+
+async function deleteMachine(machine: FibroscanMachine) {
+  if (!confirm(`ลบเครื่อง ${machine.machine_code} · ${machine.machine_name} ออกจากทะเบียนหรือไม่?`)) return
+  error.value = ''; success.value = ''; machineDeletingId.value = machine.machine_id
+  try {
+    await api.delete(`/api/v1/fibroscan-machines/${machine.machine_id}`)
+    if (machineEditingId.value === machine.machine_id) resetMachineForm()
+    if (bookingForm.machine_id === String(machine.machine_id)) bookingForm.machine_id = ''
+    if (filters.machine_id === String(machine.machine_id)) filters.machine_id = ''
+    success.value = 'ลบเครื่องออกจากทะเบียนแล้ว'
+    await Promise.all([load(), loadCalendar()])
+  } catch (cause) { error.value = apiError(cause, 'ลบเครื่องไม่สำเร็จ') }
+  finally { machineDeletingId.value = null }
 }
 
 watch([() => bookingForm.reserved_from, () => bookingForm.reserved_until, editingId], scheduleAvailabilityCheck, { immediate: true })
@@ -563,15 +608,16 @@ onBeforeUnmount(() => { if (availabilityTimer) clearTimeout(availabilityTimer) }
 
     <section v-if="canManageMachines" class="content-card section-gap">
       <div class="section-heading"><div><p class="eyebrow eyebrow--red">Equipment registry</p><h2>ทะเบียนเครื่อง FibroScan</h2></div><small class="muted">เครื่องที่ขายออกให้เปลี่ยนเป็น “เลิกใช้งาน” เพื่อเก็บประวัติเดิม</small></div>
-      <form class="equipment-machine-form" @submit.prevent="addMachine">
+      <form class="equipment-machine-form" :class="{ 'is-editing': machineEditingId }" @submit.prevent="saveMachine">
         <label><span>รหัสเครื่อง *</span><input v-model.trim="machineForm.machine_code" required maxlength="50" placeholder="เช่น FIBRO-01"></label>
         <label><span>ชื่อเครื่อง *</span><input v-model.trim="machineForm.machine_name" required maxlength="255" placeholder="เช่น FibroScan Compact 530"></label>
         <label><span>Serial Number</span><input v-model.trim="machineForm.serial_number" maxlength="255"></label>
         <label><span>หมายเหตุ</span><input v-model.trim="machineForm.note" maxlength="5000"></label>
-        <button class="primary-button">เพิ่มเครื่อง</button>
+        <label v-if="machineEditingId"><span>สถานะเครื่อง</span><select v-model="machineForm.status"><option v-for="status in machineStatuses" :key="status">{{ status }}</option></select></label>
+        <div class="equipment-machine-form-actions"><button class="primary-button" :disabled="machineSaving">{{ machineSaving ? 'กำลังบันทึก…' : machineEditingId ? 'บันทึกการแก้ไข' : 'เพิ่มเครื่อง' }}</button><button v-if="machineEditingId" class="secondary-button" type="button" :disabled="machineSaving" @click="resetMachineForm">ยกเลิก</button></div>
       </form>
       <div class="equipment-machine-list">
-        <article v-for="machine in machines" :key="machine.machine_id"><div><strong>{{ machine.machine_code }} · {{ machine.machine_name }}</strong><small>Serial: {{ machine.serial_number || '-' }} · {{ machine.note || 'ไม่มีหมายเหตุ' }}</small></div><select :value="machine.status" @change="changeMachineStatus(machine, ($event.target as HTMLSelectElement).value as FibroscanMachineStatus)"><option v-for="status in machineStatuses" :key="status">{{ status }}</option></select></article>
+        <article v-for="machine in machines" :key="machine.machine_id"><div><strong>{{ machine.machine_code }} · {{ machine.machine_name }}</strong><small>Serial: {{ machine.serial_number || '-' }} · {{ machine.note || 'ไม่มีหมายเหตุ' }}</small></div><div class="equipment-machine-actions"><select :value="machine.status" @change="changeMachineStatus(machine, ($event.target as HTMLSelectElement).value as FibroscanMachineStatus)"><option v-for="status in machineStatuses" :key="status">{{ status }}</option></select><button class="secondary-button" type="button" @click="editMachine(machine)">แก้ไข</button><button class="danger-button" type="button" :disabled="machineDeletingId === machine.machine_id" @click="deleteMachine(machine)">{{ machineDeletingId === machine.machine_id ? 'กำลังลบ…' : 'ลบ' }}</button></div></article>
         <p v-if="!machines.length" class="empty-state">ยังไม่มีเครื่องในทะเบียน กรุณาเพิ่มเครื่องก่อนเริ่มจอง</p>
       </div>
     </section>

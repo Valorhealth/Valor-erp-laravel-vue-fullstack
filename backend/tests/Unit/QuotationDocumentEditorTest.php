@@ -51,9 +51,14 @@ class QuotationDocumentEditorTest extends TestCase
             $table->string('buyer_name');
             $table->string('bplus_customer_code')->nullable();
             $table->text('address_note')->nullable();
+            $table->text('billing_address')->nullable();
+            $table->text('delivery_address')->nullable();
+            $table->boolean('standard_show_billing_address')->default(true);
+            $table->boolean('standard_show_delivery_address')->default(false);
             $table->string('tax_id')->nullable();
             $table->string('created_by');
             $table->string('workflow_type')->default('normal');
+            $table->string('price_vat_mode')->default('in_vat');
             $table->decimal('sale_discount_total')->default(0);
             $table->decimal('total_amount')->default(0);
         });
@@ -64,9 +69,14 @@ class QuotationDocumentEditorTest extends TestCase
             $table->string('buyer_name');
             $table->string('bplus_customer_code')->nullable();
             $table->text('address_note')->nullable();
+            $table->text('billing_address')->nullable();
+            $table->text('delivery_address')->nullable();
+            $table->boolean('standard_show_billing_address')->default(true);
+            $table->boolean('standard_show_delivery_address')->default(false);
             $table->string('tax_id')->nullable();
             $table->string('created_by');
             $table->date('bill_date');
+            $table->string('price_vat_mode')->default('in_vat');
             $table->decimal('sale_discount_total')->default(0);
             $table->decimal('total_amount')->default(0);
             $table->unsignedInteger('quotation_document_version_id')->nullable();
@@ -219,27 +229,39 @@ class QuotationDocumentEditorTest extends TestCase
         $this->quotation->billingRecord()->update([
             'bplus_customer_code' => 'AR-123',
             'address_note' => 'ที่อยู่จากฟอร์ม',
+            'billing_address' => 'ฝ่ายการเงิน อาคาร A',
+            'delivery_address' => 'คลังสินค้า อาคาร B',
+            'standard_show_billing_address' => true,
+            'standard_show_delivery_address' => true,
             'tax_id' => '1234567890123',
         ]);
         $this->quotation->unsetRelation('billingRecord');
         $payload = $this->editor->open($this->quotation, 'standard', 'original')['payload'];
         $this->assertSame('AR-123', $payload['customer']['code']);
         $this->assertSame('ที่อยู่จากฟอร์ม', $payload['customer']['address']);
-        $payload['customer'] = ['code' => 'FORGED', 'address' => 'FORGED', 'tax_id' => 'FORGED'];
+        $this->assertTrue($payload['customer']['show_billing_address']);
+        $this->assertTrue($payload['customer']['show_delivery_address']);
+        $payload['customer']['code'] = 'AR-DOCUMENT';
+        $payload['customer']['tax_id'] = '9999999999999';
+        $payload['customer']['billing_address'] = 'ที่อยู่ออกบิลฉบับเอกสาร';
         $payload['document']['document_note'] = 'หมายเหตุฉบับแก้ไข';
         $payload['document']['confirmation_terms'] = 'เงื่อนไขฉบับแก้ไข';
         $normalized = $this->editor->normalizedPayload($this->quotation, 'standard', 'original', $payload);
         $html = app(DocumentService::class)->quotationEditorHtml($normalized);
 
-        $this->assertSame('AR-123', $normalized['customer']['code']);
-        $this->assertStringContainsString('ที่อยู่จากฟอร์ม', $html);
-        $this->assertStringContainsString('AR-123', $html);
-        $this->assertStringContainsString('1234567890123', $html);
+        $this->assertSame('AR-DOCUMENT', $normalized['customer']['code']);
+        $this->assertSame('ที่อยู่ออกบิลฉบับเอกสาร', $normalized['customer']['billing_address']);
+        $this->assertStringContainsString('ที่อยู่ออกบิล:', $html);
+        $this->assertStringContainsString('ที่อยู่ออกบิลฉบับเอกสาร', $html);
+        $this->assertStringContainsString('ที่อยู่จัดส่ง:', $html);
+        $this->assertStringContainsString('คลังสินค้า อาคาร B', $html);
+        $this->assertStringNotContainsString('<strong>ที่อยู่:</strong> ที่อยู่ออกบิล:', $html);
         $this->assertStringContainsString('data-edit-path="document.document_note"', $html);
         $this->assertStringContainsString('data-edit-path="document.confirmation_terms"', $html);
         $this->assertStringContainsString('หมายเหตุฉบับแก้ไข', $html);
         $this->assertStringNotContainsString('data-edit-path="items.0.pack"', $html);
-        $this->assertStringNotContainsString('FORGED', $html);
+        $this->assertStringContainsString('AR-DOCUMENT', $html);
+        $this->assertStringContainsString('9999999999999', $html);
     }
 
     public function test_approved_download_signs_only_the_quotation_and_keeps_the_power_of_attorney_unsigned(): void
@@ -354,5 +376,25 @@ class QuotationDocumentEditorTest extends TestCase
 
         $this->assertEquals(150, $reopened['items'][0]['unit_price']);
         $this->assertSame('Hospital wording', $reopened['items'][0]['description']);
+    }
+
+    public function test_ex_vat_mode_rebases_the_document_and_adds_vat_to_grand_total(): void
+    {
+        $payload = $this->editor->open($this->quotation, 'standard', 'original')['payload'];
+        $payload['items'][0]['description'] = 'Hospital wording';
+        $this->editor->saveDraft($this->quotation, $this->actor, 'standard', 'original', $payload, 0);
+
+        $this->quotation->billingRecord->forceFill([
+            'price_vat_mode' => 'ex_vat',
+            'total_amount' => 107,
+        ])->save();
+
+        $reopened = $this->editor->open($this->quotation->fresh(), 'standard', 'original')['payload'];
+        $html = app(DocumentService::class)->quotationEditorHtml($reopened);
+
+        $this->assertSame('ex_vat', $reopened['price_vat_mode']);
+        $this->assertSame('Hospital wording', $reopened['items'][0]['description']);
+        $this->assertStringContainsString('7.00', $html);
+        $this->assertStringContainsString('107.00', $html);
     }
 }

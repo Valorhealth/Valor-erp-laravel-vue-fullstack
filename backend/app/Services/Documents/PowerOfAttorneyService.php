@@ -48,6 +48,42 @@ final class PowerOfAttorneyService
         ]);
     }
 
+    /** @param array<string, mixed> $documentPayload */
+    public function saveForQuotationVersion(
+        Quotation $quotation,
+        BillingRecord $bill,
+        QuotationDocumentVersion $version,
+        array $documentPayload,
+    ): QuotationPowerOfAttorneyVersion {
+        $sale = $this->saleFor($quotation);
+        $payload = $this->payloadFromDocument(
+            $quotation,
+            $bill,
+            $documentPayload,
+            $sale,
+            (int) $version->document_version_id,
+            (string) $version->pdf_sha256,
+            (int) $version->revision_no,
+        );
+        $pdf = $this->documents->powerOfAttorneyPdf($payload, '');
+
+        return QuotationPowerOfAttorneyVersion::query()->updateOrCreate(
+            ['document_version_id' => $version->document_version_id],
+            [
+                'qt_id' => $quotation->qt_id,
+                'bill_id' => $bill->bill_id,
+                'authorization_no' => $payload['authorization_no'],
+                'payload' => $payload,
+                'sale_user_id' => $sale->id,
+                'sale_username' => $sale->username,
+                'draft_pdf_base64' => base64_encode($pdf),
+                'draft_pdf_sha256' => hash('sha256', $pdf),
+                'filename' => 'Power_of_Attorney_'.preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) $payload['quotation_no']).'_R'.$version->revision_no.'.pdf',
+                'created_at' => now(),
+            ],
+        );
+    }
+
     public function pdf(QuotationPowerOfAttorneyVersion $authorization, BillingRecord $bill): string
     {
         $draft = base64_decode((string) $authorization->draft_pdf_base64, true);

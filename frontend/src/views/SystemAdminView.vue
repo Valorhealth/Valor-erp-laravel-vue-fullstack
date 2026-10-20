@@ -5,7 +5,6 @@ import { api, downloadFile } from '../api/client'
 import AppShell from '../components/AppShell.vue'
 import CompatDateTimeInput from '../components/CompatDateTimeInput.vue'
 import StatusPill from '../components/StatusPill.vue'
-import QuotationDownloadDialog from '../components/QuotationDownloadDialog.vue'
 import type { BillingRecord, Paginated } from '../types/api'
 import { apiError, money, shortDate, todayIso } from '../utils/format'
 import { preferredRowsPerPage } from '../utils/preferences'
@@ -25,7 +24,6 @@ const saving = ref(false)
 const statusSaving = ref(false)
 const persistedStatus = ref('')
 const selectedExportIds = ref<number[]>([])
-const quotationDownloadBillIds = ref<number[] | null>(null)
 const expandedReadyBillId = ref<number | null>(null)
 
 const statuses = ['ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอลูกค้ายืนยัน', 'รอแอดมินส่งออก', 'รอแก้ไข', 'อนุมัติแล้ว', 'ดำเนินการเสร็จสิ้น', 'ไม่อนุมัติ', 'ยกเลิกบิล']
@@ -126,7 +124,11 @@ async function exportQuotationsPdf() {
     error.value = 'PDF ใบเสนอราคาใช้ได้เฉพาะรายการที่สร้างจากใบเสนอราคา กรุณานำบิลแบบ PO โดยตรงออกจากรายการที่เลือก'
     return
   }
-  quotationDownloadBillIds.value = [...selectedExportIds.value]
+  try {
+    await downloadFile('/api/v1/bills/export-quotations.pdf', `Quotations_${todayIso()}.pdf`, 'post', {
+      bill_ids: selectedExportIds.value,
+    }, true)
+  } catch (cause) { error.value = apiError(cause, 'Export PDF ใบเสนอราคาไม่สำเร็จ') }
 }
 
 async function complete(id: number) {
@@ -319,7 +321,6 @@ onMounted(() => load(1))
         <button class="primary-button span-2" :disabled="saving || selected.status === 'ยกเลิกบิล'">{{ saving ? 'กำลังตรวจสอบและคำนวณ…' : 'บันทึกการแก้ไขทั้งหมด' }}</button>
       </form>
     </section>
-    <QuotationDownloadDialog v-if="quotationDownloadBillIds" :bill-ids="quotationDownloadBillIds" @close="quotationDownloadBillIds = null" />
   </AppShell>
 </template>
 

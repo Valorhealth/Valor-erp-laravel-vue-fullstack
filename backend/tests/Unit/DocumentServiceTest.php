@@ -5,6 +5,7 @@ namespace Tests\Unit;
 use App\Models\BillingRecord;
 use App\Models\BillItem;
 use App\Models\Quotation;
+use App\Models\QuotationDocumentVersion;
 use App\Models\QuotationItem;
 use App\Models\User;
 use App\Services\Documents\DocumentService;
@@ -274,6 +275,9 @@ class DocumentServiceTest extends TestCase
             $bill->bill_id = $id;
             $bill->setRelation('quotation', $quotation);
             $bill->setRelation('items', collect());
+            $bill->setRelation('quotationDocumentVersion', new QuotationDocumentVersion([
+                'template_id' => QuotationTemplateCatalog::STANDARD,
+            ]));
 
             return $bill;
         });

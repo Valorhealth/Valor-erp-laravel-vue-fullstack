@@ -32,6 +32,8 @@ class Quotation extends Model
             'total_amount' => 'decimal:2',
             'sale_discount_total' => 'decimal:2',
             'credit_limit' => 'decimal:2',
+            'standard_show_billing_address' => 'boolean',
+            'standard_show_delivery_address' => 'boolean',
         ];
     }
 
