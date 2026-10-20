@@ -9,7 +9,7 @@ const props = withDefaults(defineProps<{
   required?: boolean
   disabled?: boolean
 }>(), { placeholder: 'พิมพ์เพื่อค้นหา', required: false, disabled: false })
-const emit = defineEmits<{ 'update:modelValue': [value: string | number | null]; change: [] }>()
+const emit = defineEmits<{ 'update:modelValue': [value: string | number | null]; change: []; search: [query: string] }>()
 const input = ref<HTMLInputElement | null>(null)
 const open = ref(false)
 const query = ref('')
@@ -48,7 +48,15 @@ function show() {
   open.value = true
   query.value = ''
   activeIndex.value = 0
+  emit('search', '')
   void nextTick(updatePosition)
+}
+
+function handleInput() {
+  open.value = true
+  activeIndex.value = 0
+  emit('search', query.value)
+  updatePosition()
 }
 
 function choose(option: Choice) {
@@ -90,7 +98,7 @@ onBeforeUnmount(() => {
       :required="required && !modelValue"
       :disabled="disabled"
       @focus="show"
-      @input="open = true; activeIndex = 0; updatePosition()"
+      @input="handleInput"
       @keydown.esc="open = false; query = selected?.label || ''"
       @keydown.down.prevent="activeIndex = Math.min(activeIndex + 1, visible.length - 1)"
       @keydown.up.prevent="activeIndex = Math.max(activeIndex - 1, 0)"

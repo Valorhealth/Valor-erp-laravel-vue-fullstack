@@ -95,6 +95,8 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
 
         Route::get('/reference-data', [ReferenceDataController::class, 'index'])
             ->middleware('ability:create_bill,edit_bill,system_admin,master_data,credit_profiles,approve_bills');
+        Route::get('/reference-data/customers', [ReferenceDataController::class, 'customers'])
+            ->middleware('ability:create_bill,edit_bill,system_admin,master_data,credit_profiles,approve_bills');
         Route::get('/reference-data/locations', [ReferenceDataController::class, 'locations'])
             ->middleware('ability:create_bill,edit_bill');
         Route::post('/receipt-ocr', ReceiptOcrController::class)->middleware(['ability:create_bill', 'throttle:10,1']);

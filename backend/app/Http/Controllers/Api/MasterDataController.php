@@ -212,6 +212,7 @@ class MasterDataController extends Controller
     {
         Cache::forget('reference-data:v3');
         Cache::forget('reference-data:v4');
+        Cache::forget('reference-data:v5');
     }
 
     /** @return array<string, mixed> */

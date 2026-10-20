@@ -139,6 +139,8 @@ const documentMode = ref<"quotation" | "po_direct">("quotation");
 const poScanning = ref(false);
 const poScan = ref<PurchaseOrderScan | null>(null);
 let loadSequence = 0;
+let customerSearchTimer: ReturnType<typeof setTimeout> | null = null;
+let customerSearchSequence = 0;
 const creditFiles = reactive<Record<string, File | null>>({
   affidavit: null,
   vat: null,
@@ -308,6 +310,29 @@ function selectCustomer() {
     form.delivery_address_id = delivery.address_id;
     applyDeliveryAddress();
   }
+}
+function searchCustomers(query: string) {
+  if (!refs.value) return;
+  if (customerSearchTimer) clearTimeout(customerSearchTimer);
+  const needle = query.trim();
+  customerSearchTimer = setTimeout(async () => {
+    const sequence = ++customerSearchSequence;
+    try {
+      const response = await api.get<{ data: ReferenceData["customers"] }>(
+        "/api/v1/reference-data/customers",
+        { params: { search: needle || undefined }, skipGlobalLoading: true },
+      );
+      if (sequence !== customerSearchSequence || !refs.value) return;
+      const selected = refs.value.customers.find(
+        (customer) => customer.ar_code === form.customer,
+      );
+      refs.value.customers = selected && !response.data.data.some(
+        (customer) => customer.ar_code === selected.ar_code,
+      ) ? [selected, ...response.data.data] : response.data.data;
+    } catch {
+      // Keep the last successful result so typing remains usable during a transient request failure.
+    }
+  }, needle === "" ? 0 : 250);
 }
 function addressLabel(address: CustomerAddress): string {
   return `${address.address_name}${address.bplus_address_code ? ` [${address.bplus_address_code}]` : ""} — ${address.full_address}`;
@@ -1159,6 +1184,7 @@ onMounted(load);
             :disabled="manualCustomer"
             placeholder="พิมพ์รหัสหรือชื่อลูกค้า"
             @change="selectCustomer"
+            @search="searchCustomers"
         /></label>
         <label class="check-field"
           ><input v-model="manualCustomer" type="checkbox" />
