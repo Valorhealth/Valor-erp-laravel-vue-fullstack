@@ -212,8 +212,31 @@ final class DocumentService
         $items = collect($payload['items'] ?? [])->map(function (array $item): object {
             $quantity = (float) ($item['quantity'] ?? 0);
             $unitPrice = (float) ($item['unit_price'] ?? 0);
-            $beforeDiscount = round($quantity * $unitPrice, 2);
-            $discount = min(max((float) ($item['discount'] ?? 0), 0), $beforeDiscount);
+            $quantityDisplay = (string) ($item['quantity_display'] ?? '');
+            $unitPriceDisplay = (string) ($item['unit_price_display'] ?? '');
+            $discountDisplay = (string) ($item['discount_display'] ?? '');
+            $quantityLines = $this->numericDisplayLines($quantityDisplay, $quantity);
+            $priceLines = $this->numericDisplayLines($unitPriceDisplay, $unitPrice);
+            $discountLines = $this->numericDisplayLines($discountDisplay, (float) ($item['discount'] ?? 0));
+            $lineCount = max(count($quantityLines), count($priceLines), count($discountLines));
+            $amountLines = [];
+            $beforeDiscount = 0.0;
+            $discount = 0.0;
+            for ($index = 0; $index < $lineCount; $index++) {
+                $lineQuantity = array_key_exists($index, $quantityLines) ? $quantityLines[$index] : (count($quantityLines) === 1 ? $quantityLines[0] : null);
+                $linePrice = array_key_exists($index, $priceLines) ? $priceLines[$index] : (count($priceLines) === 1 ? $priceLines[0] : null);
+                if ($lineQuantity === null || $linePrice === null) {
+                    $amountLines[] = '';
+
+                    continue;
+                }
+                $lineBeforeDiscount = round($lineQuantity * $linePrice, 2);
+                $rawLineDiscount = array_key_exists($index, $discountLines) ? $discountLines[$index] : (count($discountLines) === 1 ? $discountLines[0] : 0);
+                $lineDiscount = min(max($rawLineDiscount ?? 0, 0), $lineBeforeDiscount);
+                $beforeDiscount += $lineBeforeDiscount;
+                $discount += $lineDiscount;
+                $amountLines[] = number_format($lineBeforeDiscount - $lineDiscount, 2);
+            }
 
             return (object) [
                 'main_category' => (string) ($item['sku'] ?? ''),
@@ -222,11 +245,16 @@ final class DocumentService
                 'document_pack' => (string) ($item['pack'] ?? ''),
                 'document_remark' => (string) ($item['remark'] ?? ''),
                 'document_origin_details' => (string) ($item['origin_details'] ?? ''),
+                'document_image' => (string) ($item['image'] ?? ''),
                 'quantity' => $quantity,
+                'quantity_display' => $quantityDisplay,
                 'unit_price' => $unitPrice,
+                'unit_price_display' => $unitPriceDisplay,
                 'sale_discount_unit' => $discount,
+                'discount_display' => $discountDisplay,
                 'line_total_before_discount' => $beforeDiscount,
                 'line_total' => round($beforeDiscount - $discount, 2),
+                'amount_display' => $lineCount > 1 ? implode("\n", $amountLines) : '',
             ];
         });
         $billDiscount = max((float) ($payload['bill_discount'] ?? 0), 0);
@@ -297,6 +325,25 @@ final class DocumentService
             htmlOnly: $htmlOnly,
             overrides: $payload,
         );
+    }
+
+    /** @return array<int, float|null> */
+    private function numericDisplayLines(string $display, float $fallback): array
+    {
+        if (trim($display) === '') {
+            return [$fallback];
+        }
+
+        $lines = preg_split('/\R/u', $display) ?: [];
+
+        return array_map(static function (string $line): ?float {
+            if (trim($line) === '') {
+                return null;
+            }
+            $normalized = preg_replace('/[^0-9.,-]/u', '', $line) ?? '';
+
+            return max((float) str_replace(',', '', $normalized), 0);
+        }, $lines);
     }
 
     public function confirmedQuotationVersionPdf(QuotationDocumentVersion $version, ?BillingRecord $bill = null): string
@@ -380,18 +427,8 @@ final class DocumentService
     public function powerOfAttorneyEditorHtml(array $payload, string $saleSignatureBase64): string
     {
         $payload['_editor'] = true;
-        $html = $this->powerOfAttorneyPdf($payload, $saleSignatureBase64, htmlOnly: true);
-        $assets = [
-            resource_path('assets/fonts/THSarabunNew.ttf') => 'font/ttf',
-            resource_path('assets/images/valorhealth.png') => 'image/png',
-        ];
-        foreach ($assets as $path => $mime) {
-            if (is_file($path)) {
-                $html = str_replace($this->fileUrl($path), 'data:'.$mime.';base64,'.base64_encode((string) file_get_contents($path)), $html);
-            }
-        }
 
-        return $html;
+        return $this->embedEditorAssets($this->powerOfAttorneyPdf($payload, $saleSignatureBase64, htmlOnly: true));
     }
 
     /** @param array<string, mixed> $payload */
@@ -472,6 +509,7 @@ final class DocumentService
         }
         if ($template === PowerOfAttorneyTemplateCatalog::ANANDAMAHIDOL) {
             $certification = '<div class="poa-certification"><div class="poa-certification-title">ขอรับรองว่าเป็นภาพถ่ายและลายมือชื่อของผู้รับมอบอำนาจจริง</div><table class="signatures"><tr><td>'.$grantorOneLine.'</td><td>'.$grantorTwoLine.'</td></tr></table></div>';
+
             return '<div class="poa-page poa-page--small-logo poa-page--anand"><div class="poa-header">'.$logo.'<h1>หนังสือมอบอำนาจ</h1></div><div class="date">วันที่ '.$issueDate.'</div>'.$copy.'<table class="signing-layout-table"><tr><td class="poa-signing-aside"><div class="poa-photo">รูปถ่ายผู้รับมอบอำนาจ</div><div class="poa-seal">ตราประทับบริษัท</div><div class="poa-stamps"><span>5 บาท</span><span>5 บาท</span><span>20 บาท</span></div></td><td class="poa-signing-main">'.$signatureStack.'</td></tr></table>'.$certification.'</div>';
         }
 
@@ -489,18 +527,8 @@ final class DocumentService
     public function quotationEditorHtml(array $payload): string
     {
         $payload['_editor'] = true;
-        $html = $this->quotationEditorPdf($payload, true);
-        $assets = [
-            resource_path('assets/fonts/THSarabunNew.ttf') => 'font/ttf',
-            resource_path('assets/images/valorhealth.png') => 'image/png',
-        ];
-        foreach ($assets as $path => $mime) {
-            if (is_file($path)) {
-                $html = str_replace($this->fileUrl($path), 'data:'.$mime.';base64,'.base64_encode((string) file_get_contents($path)), $html);
-            }
-        }
 
-        return $html;
+        return $this->embedEditorAssets($this->quotationEditorPdf($payload, true));
     }
 
     /** @param Collection<int, BillingRecord> $bills */
@@ -592,13 +620,15 @@ final class DocumentService
                 'sequence' => $index + 1,
                 'sku' => trim((string) ($item->main_category ?? '')),
                 'description' => trim((string) ($item->sub_category ?? '')),
-                'quantity' => $this->quotationQuantity($quantity),
+                'quantity' => trim((string) ($item->quantity_display ?? '')) !== '' ? (string) $item->quantity_display : $this->quotationQuantity($quantity),
                 'unit' => $unit,
                 'pack' => trim((string) ($item->document_pack ?? '')) ?: '1 '.$unit,
-                'unit_price' => number_format($unitPrice, 2),
-                'amount' => number_format($lineTotal, 2),
+                'unit_price' => trim((string) ($item->unit_price_display ?? '')) !== '' ? (string) $item->unit_price_display : number_format($unitPrice, 2),
+                'discount' => trim((string) ($item->discount_display ?? '')) !== '' ? (string) $item->discount_display : number_format((float) ($item->sale_discount_unit ?? 0), 2),
+                'amount' => trim((string) ($item->amount_display ?? '')) !== '' ? (string) $item->amount_display : number_format($lineTotal, 2),
                 'remark' => trim((string) ($item->document_remark ?? '')),
                 'origin_details' => $originDetails,
+                'image' => (string) ($item->document_image ?? ''),
             ];
         }
 
@@ -636,16 +666,18 @@ final class DocumentService
         $watermark = $rejected ? 'ไม่อนุมัติ' : ($copy ? 'สำเนา (COPY)' : '');
         $html = '<!doctype html><html lang="th"><head><meta charset="utf-8"><style>
             @page{size:A4 portrait;margin:26px 58px 76px}
+            .item-description-content{display:block}.item-description-image-wrap{display:block;clear:both;width:100%;margin-top:6px;text-align:center;line-height:0;page-break-inside:avoid}.item-description-image-wrap .item-description-image{display:inline-block;margin:0 auto}
             *{box-sizing:border-box}body{font-family:'.$fontFamily.';font-size:14px;line-height:1.28;color:#111;margin:0}
-            .document-header{height:173px;position:relative}.logo{position:absolute;left:18px;top:6px;width:145px;height:auto}.document-title{position:absolute;left:33%;right:33%;top:107px;text-align:center;font-size:24px;font-weight:bold}.document-meta{position:absolute;right:6px;top:135px;text-align:left;line-height:1.6}.document-meta.no-date{top:143px}
+            .document-header{height:173px;position:relative}.logo{position:absolute;top:6px;width:145px;height:auto}.logo.align-left{left:18px;right:auto;margin-left:0}.logo.align-center{left:50%;right:auto;margin-left:-72px}.logo.align-right{left:auto;right:18px;margin-left:0}.document-title{position:absolute;top:107px;font-size:24px;font-weight:bold}.document-title.align-left{left:6px;right:auto;width:32%;text-align:left}.document-title.align-center{left:33%;right:33%;text-align:center}.document-title.align-right{left:auto;right:6px;width:32%;text-align:right}.document-meta{position:absolute;right:6px;top:135px;text-align:left;line-height:1.6}.document-meta.no-date{top:143px}
             .letter{margin:7px 20px 10px;line-height:1.65}.letter-row{margin:0}.label{display:inline-block;width:42px}.intro{margin:10px 20px 8px;text-align:left}.intro.center{text-align:center}
             table{border-collapse:collapse}.items{width:100%;table-layout:fixed}.items thead{display:table-header-group}.items tr{page-break-inside:avoid}.items th,.items td{border:1px solid #111;padding:4px 5px;vertical-align:top}.items th{text-align:center;font-weight:normal;line-height:1.15}.items td.center{text-align:center}.items td.number{text-align:right;white-space:nowrap}.items .description{line-height:1.28}.items .tall td{height:134px}.items .empty-row{text-align:center;height:58px;vertical-align:middle}
-            .summary{margin-left:auto;border-collapse:collapse}.summary td{border:1px solid #111;padding:3px 6px}.summary .summary-label{text-align:right}.summary .number{text-align:right;white-space:nowrap}.summary .shade{background:#c9c9c9;text-align:left}.amount-words{text-align:center;font-weight:bold;margin:8px 0}.amount-words.left{text-align:left;font-weight:normal}.terms{margin:7px 20px 0;page-break-inside:avoid}.terms-title{font-weight:bold}.terms-line{margin:4px 0}.terms .numbered{padding-left:43px;text-indent:-18px}
+            .summary{margin-left:auto;border-collapse:collapse}.summary td{border:1px solid #111;padding:3px 6px}.summary .summary-label{text-align:right}.summary .number{text-align:right;white-space:nowrap}.summary .shade{background:#c9c9c9;text-align:left}.amount-words{text-align:center;font-weight:bold;margin:8px 0}.amount-words.left{text-align:left;font-weight:normal}.terms{margin:7px 20px 0;page-break-inside:avoid}.terms-title{font-weight:bold}.terms-list{width:100%;margin:0;border-collapse:collapse;table-layout:fixed}.terms-list td{padding:0!important;border:0!important;line-height:1.2;vertical-align:top}.terms-list .term-number{width:18px;white-space:nowrap}.terms-list .term-text{width:auto}.terms-line{margin:0;line-height:1.2}.terms .numbered{padding-left:43px;text-indent:-18px}
             .signature{width:42%;margin:18px 5% 0 auto;text-align:center;page-break-inside:avoid}.signature td{width:100%;padding:0;border:0;text-align:center}.signature-space{display:block;height:45px}.signature-image{display:block;max-width:155px;max-height:48px;margin:4px auto}.acknowledgement{border:1px solid #111;height:78px;padding:45px 9px 6px;text-align:center}.closing-grid{width:86%;margin:24px auto 0;page-break-inside:avoid}.closing-grid td{width:50%;vertical-align:top}.closing-grid .signature{width:100%;margin:0;text-align:center}
             .contact{text-align:center;margin-top:28px;font-size:12px}.footer{position:fixed;bottom:-62px;left:28px;right:28px;height:47px;text-align:center;font-size:9px;color:#444;line-height:1.3}.footer-bar{height:8px;background:#d71920;margin-bottom:4px}.footer-bar span{display:inline-block;height:8px;width:18%;background:#92241f;margin-right:10%}.footer strong{color:#e11;font-size:12px}.footer .company-en{color:#e11;font-weight:bold;font-size:11px}.editor-mode .footer{position:static;height:auto;margin:24px 28px 0}
-            .luangpho{font-size:14px}.luangpho .items .tall td{height:122px}.luangpho .terms{font-size:13px;margin-top:5px}.luangpho .signature{margin-top:4px!important}.luangpho .signature-space{height:24px}.luangpho .contact{margin-top:0}.police-general{font-size:14px}.police-general .letter{margin-top:45px}.charoenkrung{font-size:14px}.charoenkrung .letter{margin-top:18px}.charoenkrung .signature{margin-top:5px!important}.charoenkrung .signature-space{height:24px}.charoenkrung .contact{margin-top:2px}.compact{font-size:12.5px}.compact .items th,.compact .items td{padding:2px 4px}.ramathibodi .items{margin-top:24px}.ramathibodi .terms{margin-top:10px}.siriraj-annual{font-size:14px}.siriraj-annual .document-header{height:72px}.siriraj-annual .document-title{left:55%;right:0;top:12px}.siriraj-annual .letter{margin-top:0;margin-left:6%}.siriraj-annual .intro{margin-top:28px}.siriraj-annual .items td{height:auto;padding-top:5px;padding-bottom:5px}.siriraj-summary{width:58%;margin:16px 7% 0 auto}.siriraj-summary td{border:0;padding:3px 6px}.siriraj-summary .number{text-align:right;white-space:nowrap}.police-price-terms{vertical-align:top!important;line-height:1.65;padding:4px 2px!important}.police-price-terms div{margin-bottom:3px}.police-long-condition{margin:22px 3% 0;line-height:1.65}.charoen-summary-label{display:table;width:100%}.charoen-summary-label span{display:table-cell}.charoen-summary-label .value{text-align:right;white-space:nowrap}.siriraj-legal .document-meta{display:none}.siriraj-legal .items{margin:6px auto;width:91%}.siriraj-legal .closing{margin:48px 8% 0}.siriraj-legal .signature{margin-top:8px}.police-general .signature{margin-top:18px}.police-general .contact{margin-top:18px}.piyamaharajkarun .items{font-size:12.5px}.piyamaharajkarun .items th,.piyamaharajkarun .items td{padding:2px 4px}.piyamaharajkarun-price-condition{margin-left:15%;line-height:1.55}
-            .origin-details{margin-top:18px;white-space:pre-line;line-height:1.28}.items td.shade{background:#c9c9c9}.items .summary-row td{padding-top:1px;padding-bottom:1px}.watermark{position:fixed;top:43%;left:14%;font-size:84px;color:rgba(150,0,0,.14);transform:rotate(-35deg);z-index:-1}
-            [data-edit-path][contenteditable="true"]{border-radius:2px;cursor:text;transition:outline-color .15s,background .15s}[data-edit-path][contenteditable="true"]:hover{outline:1px dashed #60a5fa;background:#eff6ff}[data-edit-path][contenteditable="true"]:focus{outline:2px solid #2563eb;background:#fff;box-shadow:0 0 0 3px rgba(37,99,235,.14)}
+            .luangpho{font-size:14px}.luangpho .items .tall td{height:122px}.luangpho .terms{font-size:13px;margin-top:5px}.luangpho .signature{margin-top:4px!important}.luangpho .signature-space{height:24px}.luangpho .contact{margin-top:0}.police-general{font-size:14px}.police-general .letter{margin-top:45px}.charoenkrung{font-size:14px}.charoenkrung .letter{margin-top:18px}.charoenkrung .signature{margin-top:5px!important}.charoenkrung .signature-space{height:24px}.charoenkrung .contact{margin-top:2px}.compact{font-size:12.5px}.compact .items th,.compact .items td{padding:2px 4px}.ramathibodi .items{margin-top:24px}.ramathibodi .terms{margin-top:10px}.siriraj-annual{font-size:14px}.siriraj-annual .document-header{height:96px}.siriraj-annual .document-title{top:12px}.siriraj-annual .document-title.align-left{left:0;right:auto;width:35%;text-align:left}.siriraj-annual .document-title.align-center{left:33%;right:33%;text-align:center}.siriraj-annual .document-title.align-right{left:55%;right:0;width:auto;text-align:right}.siriraj-annual .letter{margin-top:0;margin-left:6%}.siriraj-annual .intro{margin-top:28px}.siriraj-annual .items td{height:auto;padding-top:5px;padding-bottom:5px}.siriraj-summary{width:58%;margin:16px 7% 0 auto}.siriraj-summary td{border:0;padding:3px 6px}.siriraj-summary .number{text-align:right;white-space:nowrap}.police-price-terms{vertical-align:top!important;line-height:1.65;padding:4px 2px!important}.police-price-terms div{margin-bottom:3px}.police-long-condition{margin:22px 3% 0;line-height:1.65}.charoen-summary-label{display:table;width:100%}.charoen-summary-label span{display:table-cell}.charoen-summary-label .value{text-align:right;white-space:nowrap}.siriraj-legal .document-meta{display:none}.siriraj-legal .items{margin:6px auto;width:91%}.siriraj-legal .closing{margin:48px 8% 0}.siriraj-legal .signature{margin-top:8px}.police-general .signature{margin-top:18px}.police-general .contact{margin-top:18px}.piyamaharajkarun .items{font-size:12.5px}.piyamaharajkarun .items th,.piyamaharajkarun .items td{padding:2px 4px}.piyamaharajkarun-price-condition{margin-left:15%;line-height:1.55}
+            .origin-details{margin-top:18px;white-space:pre-line;line-height:1.28}.item-description-image{display:block;max-width:100%;max-height:115px;margin:6px auto;object-fit:contain}.items td.shade{background:#c9c9c9}.items .summary-row td{padding-top:1px;padding-bottom:1px}.watermark{position:fixed;top:43%;left:14%;font-size:84px;color:rgba(150,0,0,.14);transform:rotate(-35deg);z-index:-1}
+            .preserve-spacing,[data-edit-path]{white-space:pre-wrap}[data-edit-path][contenteditable="true"]{border-radius:2px;cursor:text;transition:outline-color .15s,background .15s}[data-edit-path][contenteditable="true"]:hover{outline:1px dashed #60a5fa;background:#eff6ff}[data-edit-path][contenteditable="true"]:focus{outline:2px solid #2563eb;background:#fff;box-shadow:0 0 0 3px rgba(37,99,235,.14)}
+            .editor-mode .editable-column{position:relative}.editor-mode .column-title{display:block;min-height:18px}.editor-mode .column-resizer{position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:col-resize;background:transparent;z-index:4}.editor-mode .column-resizer:hover{background:#2563eb}.editor-mode .column-actions{position:absolute;top:1px;left:2px;right:6px;z-index:5;display:flex;justify-content:center;gap:2px;padding:1px;background:rgba(239,246,255,.94);opacity:0;transition:opacity .15s}.editor-mode .editable-column:hover .column-actions,.editor-mode .editable-column:focus-within .column-actions{opacity:1}.editor-mode .column-actions button{width:18px;height:17px;padding:0;border:1px solid #93c5fd;border-radius:2px;background:#eff6ff;color:#1d4ed8;font:10px/1 sans-serif;cursor:pointer}.editor-mode .column-actions select{min-width:42px;max-width:74px;height:17px;padding:0;border:1px solid #93c5fd;border-radius:2px;background:#fff;color:#1e3a5f;font:9px sans-serif}.editor-mode .items td{position:relative}.editor-mode .item-image-picker{position:absolute;right:30px;bottom:2px;z-index:3;padding:2px 4px;border-radius:2px;background:rgba(239,246,255,.94);color:#2563eb;font-size:10px;cursor:pointer}.editor-mode .item-image-picker input{display:none}.editor-mode .item-image-remove{position:absolute;right:2px;bottom:2px;z-index:3;padding:2px 4px;border:0;border-radius:2px;background:rgba(254,242,242,.95);color:#b91c1c;font-size:10px;cursor:pointer}
         </style></head><body'.(data_get($context, 'overrides._editor', false) ? ' class="editor-mode"' : '').'>'.($watermark !== '' ? '<div class="watermark">'.e($watermark).'</div>' : '').$body
             .($template === QuotationTemplateCatalog::SIRIRAJ ? '' : $this->hospitalQuotationFooter($template)).'</body></html>';
 
@@ -685,16 +717,19 @@ final class DocumentService
             $termsHtml .= '<div class="terms-line">'.$this->editableField('terms.'.$index, (string) $term, $context).'</div>';
         }
         $termsHtml .= '</div>';
+        $summary = $this->showsSummary($context)
+            ? '<table class="siriraj-summary"><tr><td>'.$this->summaryField($context, 'subtotal_label', 'ราคาสินค้าก่อนรวมภาษีมูลค่าเพิ่ม').'</td><td class="number">'.$this->summaryField($context, 'subtotal_value', number_format($context['subtotal'], 2)).'</td></tr>'
+                .'<tr><td>'.$this->summaryField($context, 'vat_label', 'ภาษีมูลค่าเพิ่ม 7%').'</td><td class="number">'.$this->summaryField($context, 'vat_value', number_format($context['vat'], 2)).'</td></tr>'
+                .'<tr><td>'.$this->summaryField($context, 'total_label', 'ยอดรวมสุทธิ').'</td><td class="number">'.$this->summaryField($context, 'total_value', number_format($context['total'], 2)).'</td></tr></table>'
+                .'<div class="amount-words left" style="margin-left:23%">ตัวอักษร&nbsp;&nbsp;('.$this->summaryField($context, 'amount_words', $this->bahtText->convert($context['total'])).')</div>'
+            : '';
 
         return '<main class="siriraj-annual">'.$this->hospitalQuotationHeader($context, false, false)
             .'<div class="letter"><div class="letter-row"><span class="label">เรื่อง</span> '.$this->hospitalField($context, 'subject', 'ใบเสนอราคาเวชภัณฑ์').'</div>'
             .'<div class="letter-row"><span class="label">เรียน</span> '.$this->hospitalField($context, 'recipient', 'คณบดี คณะแพทยศาสตร์ศิริราชพยาบาล').'</div></div>'
             .'<div class="intro center">'.$this->hospitalField($context, 'intro', 'บริษัท เวเลอร์ เฮลธ์ จำกัด มีความยินดีขอเสนอ ราคาเวชภัณฑ์ ดังต่อไปนี้').'</div>'
             .$this->hospitalItemsTable($headers, $items, false, $context)
-            .'<table class="siriraj-summary"><tr><td>ราคาสินค้าก่อนรวมภาษีมูลค่าเพิ่ม</td><td class="number">'.number_format($context['subtotal'], 2).'</td></tr>'
-            .'<tr><td>ภาษีมูลค่าเพิ่ม 7%</td><td class="number">'.number_format($context['vat'], 2).'</td></tr>'
-            .'<tr><td>ยอดรวมสุทธิ</td><td class="number">'.number_format($context['total'], 2).'</td></tr></table>'
-            .'<div class="amount-words left" style="margin-left:23%">ตัวอักษร&nbsp;&nbsp;('.e($this->bahtText->convert($context['total'])).')</div>'
+            .$summary
             .$termsHtml
             .$this->hospitalSignature($context, 'ผู้เสนอราคา').'</main>';
     }
@@ -710,20 +745,23 @@ final class DocumentService
             ['label' => '<strong>ราคาต่อหน่วย</strong><br>Unit Price', 'width' => 16, 'key' => 'unit_price', 'class' => 'number'],
             ['label' => '<strong>จำนวนเงิน</strong><br>Amount', 'width' => 13, 'key' => 'amount', 'class' => 'number'],
         ];
+        $headers = $this->resolvedTableHeaders($headers, $context);
         $items = $context['items'];
         $table = $this->hospitalItemsTable($headers, $items, true, $context);
         $summaryRows = [
-            'รวมเป็นเงิน / Gross Amount' => $context['gross'],
-            'ส่วนลด / Discount' => $context['discount'],
-            'จำนวนเงินหลังหักส่วนลด / Net Amount' => $context['subtotal'],
-            'จำนวนภาษีมูลค่าเพิ่ม / Value Added Tax 7%' => $context['vat'],
-            'จำนวนเงินรวมทั้งสิ้น (บาท) / Total Amount' => $context['total'],
+            'gross' => ['รวมเป็นเงิน / Gross Amount', $context['gross']],
+            'discount' => ['ส่วนลด / Discount', $context['discount']],
+            'net' => ['จำนวนเงินหลังหักส่วนลด / Net Amount', $context['subtotal']],
+            'vat' => ['จำนวนภาษีมูลค่าเพิ่ม / Value Added Tax 7%', $context['vat']],
+            'total' => ['จำนวนเงินรวมทั้งสิ้น (บาท) / Total Amount', $context['total']],
         ];
         $summary = '';
-        foreach ($summaryRows as $index => $value) {
-            $summary .= '<tr class="summary-row"><td colspan="3"'.($index === 'จำนวนเงินรวมทั้งสิ้น (บาท) / Total Amount' ? ' style="text-align:center"' : '').'>'
-                .($index === 'รวมเป็นเงิน / Gross Amount' ? 'หมายเหตุ<br>:' : ($index === 'จำนวนเงินรวมทั้งสิ้น (บาท) / Total Amount' ? e($this->bahtText->convert($context['total'])) : '&nbsp;'))
-                .'</td><td colspan="2" class="shade">'.e($index).'</td><td class="number">'.number_format((float) $value, 2).'</td></tr>';
+        if ($this->showsSummary($context)) {
+            foreach ($summaryRows as $key => [$label, $value]) {
+                $summary .= '<tr class="summary-row"><td colspan="'.max(count($headers) - 3, 1).'"'.($key === 'total' ? ' style="text-align:center"' : '').'>'
+                    .($key === 'gross' ? 'หมายเหตุ<br>:' : ($key === 'total' ? $this->summaryField($context, 'amount_words', $this->bahtText->convert($context['total'])) : '&nbsp;'))
+                    .'</td><td colspan="'.min(2, max(count($headers) - 2, 1)).'" class="shade">'.$this->summaryField($context, $key.'_label', $label).'</td><td class="number">'.$this->summaryField($context, $key.'_value', number_format((float) $value, 2)).'</td></tr>';
+            }
         }
         $table = str_replace('</tbody></table>', $summary.'</tbody></table>', $table);
 
@@ -752,6 +790,7 @@ final class DocumentService
             ['label' => 'รวม VAT', 'width' => 17, 'key' => 'unit_price', 'class' => 'number'],
             ['label' => 'รวม VAT', 'width' => 17, 'key' => 'amount', 'class' => 'number'],
         ];
+        $headers = $this->resolvedTableHeaders($headers, $context);
 
         $items = array_map(static function (array $item): array {
             $item['origin_details'] = '';
@@ -770,10 +809,14 @@ final class DocumentService
             $leftTerms .= '<div>'.$this->editableField('terms.'.$index, (string) $term, $context).'</div>';
         }
         $table = $this->hospitalItemsTable($headers, $items, false, $context);
-        $summaryRows = '<tr><td colspan="5" rowspan="3" class="police-price-terms">'.$leftTerms.'</td><td>รวมเป็นเงิน</td><td class="number">'.number_format($context['subtotal'], 2).'</td></tr>'
-            .'<tr><td>ภาษีมูลค่าเพิ่ม 7%</td><td class="number">'.number_format($context['vat'], 2).'</td></tr>'
-            .'<tr><td>จำนวนเงินรวม</td><td class="number">'.number_format($context['total'], 2).'</td></tr>';
+        $showSummary = $this->showsSummary($context);
+        $summaryRows = $showSummary
+            ? '<tr><td colspan="'.max(count($headers) - 2, 1).'" rowspan="3" class="police-price-terms">'.$leftTerms.'</td><td>'.$this->summaryField($context, 'subtotal_label', 'รวมเป็นเงิน').'</td><td class="number">'.$this->summaryField($context, 'subtotal_value', number_format($context['subtotal'], 2)).'</td></tr>'
+                .'<tr><td>'.$this->summaryField($context, 'vat_label', 'ภาษีมูลค่าเพิ่ม 7%').'</td><td class="number">'.$this->summaryField($context, 'vat_value', number_format($context['vat'], 2)).'</td></tr>'
+                .'<tr><td>'.$this->summaryField($context, 'total_label', 'จำนวนเงินรวม').'</td><td class="number">'.$this->summaryField($context, 'total_value', number_format($context['total'], 2)).'</td></tr>'
+            : '';
         $table = str_replace('</tbody></table>', $summaryRows.'</tbody></table>', $table);
+        $termsOutsideSummary = $showSummary ? '' : '<div class="police-price-terms">'.$leftTerms.'</div>';
         $longCondition = isset($terms[3])
             ? '<div class="police-long-condition">'.$this->editableField('terms.3', (string) $terms[3], $context).'</div>'
             : '';
@@ -783,7 +826,8 @@ final class DocumentService
             .'<div class="letter-row"><span class="label">เรียน</span> '.$this->hospitalField($context, 'recipient', 'นายแพทย์ใหญ่ (สบ 8) โรงพยาบาลตำรวจ').'</div></div>'
             .'<div class="intro">'.$this->hospitalField($context, 'intro', 'บริษัท เวเลอร์ เฮลธ์ จำกัด มีความยินดีเสนอราคาผลิตภัณฑ์ของ AVANOS ดังรายการต่อไปนี้').'</div>'
             .$table
-            .'<div class="amount-words" style="margin-left:48%">'.e($this->bahtText->convert($context['total'])).'</div>'
+            .$termsOutsideSummary
+            .($showSummary ? '<div class="amount-words" style="margin-left:48%">'.$this->summaryField($context, 'amount_words', $this->bahtText->convert($context['total'])).'</div>' : '')
             .$longCondition
             .$this->hospitalSignature($context, 'ผู้แทนฝ่ายขาย')
             .'<div class="contact">'.$this->hospitalField($context, 'contact', 'ติดต่อสอบถามเพิ่มเติมได้ที่ '.$context['salesperson'].' FAX.02-678-8400').'</div></main>';
@@ -800,12 +844,15 @@ final class DocumentService
             ['label' => 'หน่วยนับ', 'width' => 10, 'key' => 'unit', 'class' => 'center'],
             ['label' => 'ราคาต่อหน่วย<br>(รวมภาษีมูลค่าเพิ่ม)', 'width' => 21, 'key' => 'unit_price', 'class' => 'number'],
         ];
+        $headers = $this->resolvedTableHeaders($headers, $context);
 
         $table = $this->hospitalItemsTable($headers, $context['items'], true, $context);
-        $summaryRows = '<tr><td colspan="5" rowspan="3" style="text-align:center;vertical-align:bottom">'.e($this->bahtText->convert($context['total'])).'</td>'
-            .'<td><div class="charoen-summary-label"><span>ราคาไม่รวมภาษี</span><span class="value">'.number_format($context['subtotal'], 2).'</span></div></td></tr>'
-            .'<tr><td><div class="charoen-summary-label"><span>ภาษีมูลค่าเพิ่ม 7%</span><span class="value">'.number_format($context['vat'], 2).'</span></div></td></tr>'
-            .'<tr><td><div class="charoen-summary-label"><span>จำนวนเงินสุทธิ</span><span class="value">'.number_format($context['total'], 2).'</span></div></td></tr>';
+        $summaryRows = $this->showsSummary($context)
+            ? '<tr><td colspan="'.max(count($headers) - 1, 1).'" rowspan="3" style="text-align:center;vertical-align:bottom">'.$this->summaryField($context, 'amount_words', $this->bahtText->convert($context['total'])).'</td>'
+                .'<td><div class="charoen-summary-label"><span>'.$this->summaryField($context, 'subtotal_label', 'ราคาไม่รวมภาษี').'</span><span class="value">'.$this->summaryField($context, 'subtotal_value', number_format($context['subtotal'], 2)).'</span></div></td></tr>'
+                .'<tr><td><div class="charoen-summary-label"><span>'.$this->summaryField($context, 'vat_label', 'ภาษีมูลค่าเพิ่ม 7%').'</span><span class="value">'.$this->summaryField($context, 'vat_value', number_format($context['vat'], 2)).'</span></div></td></tr>'
+                .'<tr><td><div class="charoen-summary-label"><span>'.$this->summaryField($context, 'total_label', 'จำนวนเงินสุทธิ').'</span><span class="value">'.$this->summaryField($context, 'total_value', number_format($context['total'], 2)).'</span></div></td></tr>'
+            : '';
         $table = str_replace('</tbody></table>', $summaryRows.'</tbody></table>', $table);
 
         return '<main class="charoenkrung">'.$this->hospitalQuotationHeader($context, true, false)
@@ -889,17 +936,20 @@ final class DocumentService
                 .$this->editableField('terms.'.$index, (string) $term, $context).'</div>';
         }
         $termsHtml .= '</div>';
+        $summary = $this->showsSummary($context)
+            ? $this->hospitalSummaryTable([
+                'subtotal' => ['ราคาสินค้าก่อนรวมภาษีมูลค่าเพิ่ม', $context['subtotal']],
+                'vat' => ['ภาษีมูลค่าเพิ่ม 7%', $context['vat']],
+                'total' => ['ยอดรวมสุทธิ', $context['total']],
+            ], 'width:34%', false, $context)
+                .'<div class="amount-words">'.$this->summaryField($context, 'amount_words', $this->bahtText->convert($context['total'])).'</div>'
+            : '';
 
         return '<main class="piyamaharajkarun">'.$this->hospitalQuotationHeader($context, true, true)
             .'<div class="letter"><div class="letter-row"><span class="label">เรื่อง</span> '.$this->hospitalField($context, 'subject', 'ขอเสนอราคาเวชภัณฑ์').'</div>'
             .'<div class="letter-row"><span class="label">เรียน</span> '.$this->hospitalField($context, 'recipient', 'ประธานคณะกรรมการจัดหา โรงพยาบาลศิริราช ปิยมหาราชการุณย์').'</div></div>'
             .$this->hospitalItemsTable($headers, $context['items'], false, $context)
-            .$this->hospitalSummaryTable([
-                'ราคาสินค้าก่อนรวมภาษีมูลค่าเพิ่ม' => $context['subtotal'],
-                'ภาษีมูลค่าเพิ่ม 7%' => $context['vat'],
-                'ยอดรวมสุทธิ' => $context['total'],
-            ], 'width:34%')
-            .'<div class="amount-words">'.e($this->bahtText->convert($context['total'])).'</div>'
+            .$summary
             .$termsHtml
             .$this->hospitalSignature($context, 'ผู้เสนอราคา').'</main>';
     }
@@ -911,9 +961,20 @@ final class DocumentService
      */
     private function hospitalItemsTable(array $headers, array $items, bool $tall = false, array $context = []): string
     {
+        $headers = $this->resolvedTableHeaders($headers, $context);
+        $hasOriginColumn = collect($headers)->contains(fn (array $header): bool => $header['key'] === 'origin_details');
         $head = '';
-        foreach ($headers as $header) {
-            $head .= '<th style="width:'.$header['width'].'%">'.$header['label'].'</th>';
+        foreach ($headers as $index => $header) {
+            $column = [
+                'id' => (string) ($header['id'] ?? $header['key'].'-'.$index),
+                'field' => (string) $header['key'],
+                'label' => (string) $header['label'],
+                'width' => (float) $header['width'],
+                'align' => $header['class'] === 'number' ? 'right' : ($header['class'] === 'center' ? 'center' : 'left'),
+            ];
+            $head .= data_get($context, 'overrides._editor', false)
+                ? $this->editableTableHeader($column, $index, $context)
+                : '<th style="width:'.$header['width'].'%">'.$header['label'].'</th>';
         }
         $rows = '';
         foreach ($items as $index => $item) {
@@ -923,9 +984,12 @@ final class DocumentService
                 $editable = ! in_array($header['key'], ['sequence', 'amount'], true);
                 $content = $editable
                     ? $this->editableField('items.'.$index.'.'.$header['key'], $value, $context)
-                    : e($value);
-                if ($header['key'] === 'description' && ! empty($item['origin_details'])) {
+                    : ($header['key'] === 'amount' ? '<span class="preserve-spacing">'.$this->preservedText($value).'</span>' : e($value));
+                if ($header['key'] === 'description' && ! $hasOriginColumn && ! empty($item['origin_details'])) {
                     $content .= '<div class="origin-details">'.$this->editableField('items.'.$index.'.origin_details', (string) $item['origin_details'], $context).'</div>';
+                }
+                if ($header['key'] === 'description') {
+                    $content = $this->descriptionWithImage($content, (string) ($item['image'] ?? ''), $index, $context);
                 }
                 $rows .= '<td class="'.$header['class'].'">'.$content.'</td>';
             }
@@ -938,21 +1002,120 @@ final class DocumentService
         return '<table class="items"><thead><tr>'.$head.'</tr></thead><tbody>'.$rows.'</tbody></table>';
     }
 
-    /** @param array<string, float|int> $rows */
-    private function hospitalSummaryTable(array $rows, string $style, bool $shaded = false): string
+    /**
+     * @param  array<int, array{label:string,width:int,key:string,class:string}>  $defaults
+     * @param  array<string, mixed>  $context
+     * @return array<int, array{id:string,label:string,width:float,key:string,class:string}>
+     */
+    private function resolvedTableHeaders(array $defaults, array $context): array
+    {
+        $configured = collect((array) data_get($context, 'overrides.table_layout', []));
+        if ($configured->count() < 3) {
+            return array_map(fn (array $header, int $index): array => [
+                ...$header, 'id' => $header['key'].'-'.$index,
+            ], $defaults, array_keys($defaults));
+        }
+
+        return $configured->take(12)->map(fn (mixed $column, int $index): array => [
+            'id' => (string) data_get($column, 'id', 'column-'.$index),
+            'label' => nl2br(e((string) data_get($column, 'label', 'คอลัมน์'))),
+            'width' => max(5, min((float) data_get($column, 'width', 10), 60)),
+            'key' => (string) data_get($column, 'field', 'remark'),
+            'class' => match ((string) data_get($column, 'align', 'left')) {
+                'right' => 'number',
+                'center' => 'center',
+                default => '',
+            },
+        ])->values()->all();
+    }
+
+    /** @param array<string, mixed> $column
+     * @param  array<string, mixed>  $context
+     */
+    private function editableTableHeader(array $column, int $index, array $context): string
+    {
+        $width = max(5, min((float) ($column['width'] ?? 10), 60));
+        $label = preg_replace('#<br\s*/?>#i', "\n", (string) ($column['label'] ?? $column['field'] ?? '')) ?? '';
+        $label = html_entity_decode(strip_tags($label), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $editor = (bool) data_get($context, 'overrides._editor', false);
+        if (! $editor) {
+            return '<th style="width:'.$width.'%">'.nl2br(e($label)).'</th>';
+        }
+
+        $actions = '<span class="column-actions" contenteditable="false">'
+            .'<button type="button" data-column-action="left" data-column-index="'.$index.'" title="เลื่อนไปซ้าย">←</button>'
+            .'<button type="button" data-column-action="add" data-column-index="'.$index.'" title="เพิ่มคอลัมน์">＋</button>'
+            .'<select data-column-field="'.$index.'" title="ชนิดข้อมูล">'.$this->columnFieldOptions((string) ($column['field'] ?? '')).'</select>'
+            .'<button type="button" data-column-action="remove" data-column-index="'.$index.'" title="ลบคอลัมน์">×</button>'
+            .'<button type="button" data-column-action="right" data-column-index="'.$index.'" title="เลื่อนไปขวา">→</button></span>';
+
+        return '<th class="editable-column" data-column-index="'.$index.'" style="width:'.$width.'%">'.$actions
+            .'<span class="column-title" data-edit-path="table_layout.'.$index.'.label" contenteditable="true" spellcheck="false">'.nl2br(e($label)).'</span>'
+            .'<span class="column-resizer" contenteditable="false" data-column-resize="'.$index.'"></span></th>';
+    }
+
+    /** @param array<string, mixed> $context */
+    private function descriptionWithImage(string $description, string $image, int $index, array $context): string
+    {
+        // Explicit blocks keep Dompdf from moving the image ahead of an inline
+        // contenteditable description when a table row contains multiple lines.
+        $html = '<div class="item-description-content">'.$description.'</div>';
+        if ($image !== '') {
+            $html .= '<div class="item-description-image-wrap"><img class="item-description-image" src="'.e($image).'" alt="รูปสินค้า"></div>';
+        }
+        if ((bool) data_get($context, 'overrides._editor', false)) {
+            $html .= '<label class="item-image-picker" contenteditable="false">'.($image === '' ? '＋ เพิ่มรูปสินค้า' : 'เปลี่ยนรูปสินค้า')
+                .'<input type="file" accept="image/png,image/jpeg,image/webp" data-item-image-index="'.$index.'"></label>'
+                .($image !== '' ? '<button type="button" class="item-image-remove" data-item-image-remove="'.$index.'" contenteditable="false">ลบรูป</button>' : '');
+        }
+
+        return $html;
+    }
+
+    private function columnFieldOptions(string $selected): string
+    {
+        $fields = [
+            'sequence' => 'ลำดับ', 'sku' => 'รหัส', 'description' => 'รายการ/รูป', 'quantity' => 'จำนวน', 'unit' => 'หน่วย',
+            'pack' => 'บรรจุ', 'unit_price' => 'ราคา', 'discount' => 'ส่วนลด', 'amount' => 'รวมเงิน', 'remark' => 'หมายเหตุ', 'origin_details' => 'ผู้ผลิต',
+        ];
+
+        return collect($fields)->map(fn (string $label, string $value): string => '<option value="'.$value.'"'.($selected === $value ? ' selected' : '').'>'.e($label).'</option>')->implode('');
+    }
+
+    /** @param array<string, array{0:string,1:float|int}> $rows
+     * @param  array<string, mixed>  $context
+     */
+    private function hospitalSummaryTable(array $rows, string $style, bool $shaded = false, array $context = []): string
     {
         $html = '<table class="summary" style="'.$style.'">';
-        foreach ($rows as $label => $value) {
-            $html .= '<tr><td class="summary-label'.($shaded ? ' shade' : '').'">'.e($label).'</td><td class="number">'.number_format((float) $value, 2).'</td></tr>';
+        foreach ($rows as $key => [$label, $value]) {
+            $html .= '<tr><td class="summary-label'.($shaded ? ' shade' : '').'">'.$this->summaryField($context, $key.'_label', $label).'</td><td class="number">'.$this->summaryField($context, $key.'_value', number_format((float) $value, 2)).'</td></tr>';
         }
 
         return $html.'</table>';
     }
 
     /** @param array<string, mixed> $context */
+    private function summaryField(array $context, string $key, string $default): string
+    {
+        $value = trim((string) data_get($context, 'overrides.document.summary_'.$key, ''));
+
+        return $this->editableField('document.summary_'.$key, $value !== '' ? $value : $default, $context);
+    }
+
+    /** @param array<string, mixed> $context */
+    private function showsSummary(array $context): bool
+    {
+        return (bool) data_get($context, 'overrides.layout.show_summary', true);
+    }
+
+    /** @param array<string, mixed> $context */
     private function hospitalQuotationHeader(array $context, bool $showNumber, bool $showDate): string
     {
-        $logo = $context['logoUrl'] !== '' ? '<img class="logo" src="'.e($context['logoUrl']).'" alt="Valor Health">' : '';
+        $logoAlignment = in_array(data_get($context, 'overrides.layout.logo_alignment'), ['left', 'center', 'right'], true)
+            ? (string) data_get($context, 'overrides.layout.logo_alignment')
+            : 'left';
+        $logo = $context['logoUrl'] !== '' ? '<img class="logo align-'.e($logoAlignment).'" src="'.e($context['logoUrl']).'" alt="Valor Health">' : '';
         $meta = [];
         if ($showNumber) {
             $meta[] = 'เลขที่ '.$this->editableField('document.number', (string) $context['documentNo'], $context);
@@ -961,7 +1124,11 @@ final class DocumentService
             $meta[] = 'วันที่ '.e($context['date']);
         }
 
-        return '<header class="document-header">'.$logo.'<div class="document-title">ใบเสนอราคา</div>'
+        $titleAlignment = in_array(data_get($context, 'overrides.layout.title_alignment'), ['left', 'center', 'right'], true)
+            ? (string) data_get($context, 'overrides.layout.title_alignment')
+            : 'center';
+
+        return '<header class="document-header">'.$logo.'<div class="document-title align-'.e($titleAlignment).'">ใบเสนอราคา</div>'
             .($meta === [] ? '' : '<div class="document-meta'.(! $showDate ? ' no-date' : '').'">'.implode('<br>', $meta).'</div>')
             .'</header>';
     }
@@ -991,14 +1158,73 @@ final class DocumentService
         return $this->editableField('document.'.$key, $this->hospitalText($context, $key, $default), $context);
     }
 
+    /** @param array<string, mixed> $payload
+     * @param  array<string, mixed>  $context
+     * @return array{0: string, 1: string}
+     */
+    private function flexibleQuotationTable(Collection $items, array $payload, array $context): array
+    {
+        $columns = collect((array) ($payload['table_layout'] ?? []))->take(12)->values();
+        if ($columns->isEmpty()) {
+            $columns = collect([['field' => 'description', 'label' => 'รายการ', 'width' => 100, 'align' => 'left']]);
+        }
+
+        $header = '<tr>'.$columns->map(fn (mixed $column, int $index): string => $this->editableTableHeader((array) $column, $index, $context))->implode('').'</tr>';
+
+        $rows = '';
+        foreach ($items->values() as $index => $item) {
+            $rows .= '<tr>';
+            foreach ($columns as $column) {
+                $column = (array) $column;
+                $field = (string) ($column['field'] ?? '');
+                $align = in_array((string) ($column['align'] ?? ''), ['left', 'center', 'right'], true) ? (string) $column['align'] : 'left';
+                $value = match ($field) {
+                    'sku' => (string) $item->main_category,
+                    'sequence' => (string) ($index + 1),
+                    'description' => (string) $item->sub_category,
+                    'quantity' => trim((string) ($item->quantity_display ?? '')) !== '' ? (string) $item->quantity_display : number_format((float) $item->quantity, 0),
+                    'unit' => (string) $item->unit_type,
+                    'pack' => (string) ($item->document_pack ?? ''),
+                    'unit_price' => trim((string) ($item->unit_price_display ?? '')) !== '' ? (string) $item->unit_price_display : number_format((float) $item->unit_price, 2),
+                    'discount' => trim((string) ($item->discount_display ?? '')) !== '' ? (string) $item->discount_display : number_format((float) ($item->sale_discount_unit ?? 0), 2),
+                    'amount' => trim((string) ($item->amount_display ?? '')) !== '' ? (string) $item->amount_display : number_format((float) ($item->line_total ?? 0), 2),
+                    'remark' => (string) ($item->document_remark ?? ''),
+                    'origin_details' => (string) ($item->document_origin_details ?? ''),
+                    default => '',
+                };
+                if ($field === 'amount') {
+                    $content = '<span class="preserve-spacing">'.$this->preservedText($value).'</span>';
+                } elseif ($field === 'sequence') {
+                    $content = e($value);
+                } else {
+                    $content = $this->editableField('items.'.$index.'.'.$field, $value, $context);
+                }
+                if ($field === 'description') {
+                    $content = $this->descriptionWithImage($content, (string) ($item->document_image ?? ''), $index, $context);
+                }
+                $rows .= '<td style="text-align:'.$align.'">'.$content.'</td>';
+            }
+            $rows .= '</tr>';
+        }
+        return [$header, $rows];
+    }
+
     /** @param array<string, mixed> $context */
     private function editableField(string $path, string $value, array $context): string
     {
         if (! data_get($context, 'overrides._editor', false)) {
-            return e($value);
+            return '<span class="preserve-spacing">'.$this->preservedText($value).'</span>';
         }
 
-        return '<span data-edit-path="'.e($path).'" contenteditable="true" spellcheck="false">'.e($value).'</span>';
+        return '<span data-edit-path="'.e($path).'" contenteditable="true" spellcheck="false">'.$this->preservedText($value).'</span>';
+    }
+
+    private function preservedText(string $value): string
+    {
+        $escaped = e(str_replace(["\r\n", "\r", "\t"], ["\n", "\n", '    '], $value));
+        $escaped = preg_replace_callback('/ {2,}/', static fn (array $match): string => str_repeat('&nbsp;', strlen($match[0])), $escaped) ?? $escaped;
+
+        return nl2br($escaped, false);
     }
 
     /**
@@ -1008,13 +1234,15 @@ final class DocumentService
     private function hospitalTerms(array $context, array $defaults, string $style = '', bool $numbered = false, string $title = 'หมายเหตุ'): string
     {
         $terms = $this->resolvedHospitalTerms($context, $defaults);
-        $lines = '';
+        $rows = '';
         foreach (array_values($terms) as $index => $term) {
-            $prefix = $numbered ? ($index + 1).'. ' : '- ';
-            $lines .= '<div class="terms-line">'.e($prefix).$this->editableField('terms.'.$index, (string) $term, $context).'</div>';
+            $prefix = $numbered ? ($index + 1).'.' : '-';
+            $rows .= '<tr><td class="term-number">'.e($prefix).'</td><td class="term-text">'
+                .$this->editableField('terms.'.$index, (string) $term, $context).'</td></tr>';
         }
 
-        return '<div class="terms"'.($style !== '' ? ' style="'.$style.'"' : '').'><div class="terms-title">'.e($title).'</div>'.$lines.'</div>';
+        return '<div class="terms"'.($style !== '' ? ' style="'.$style.'"' : '').'><div class="terms-title">'.e($title)
+            .'</div><table class="terms-list"><tbody>'.$rows.'</tbody></table></div>';
     }
 
     /**
@@ -1034,8 +1262,8 @@ final class DocumentService
         }
 
         foreach (array_values($overrides) as $index => $term) {
-            $value = trim((string) $term);
-            if ($value !== '') {
+            $value = (string) $term;
+            if (trim($value) !== '') {
                 $terms[$index] = $value;
             }
         }
@@ -1117,10 +1345,6 @@ final class DocumentService
             $lineDiscount += $discount;
             $rows .= '<tr><td>'.$this->editableField('items.'.$index.'.sku', (string) $item->main_category, $editorContext).'</td><td>'.$this->editableField('items.'.$index.'.description', (string) $item->sub_category, $editorContext).'</td><td class="num">'.$this->editableField('items.'.$index.'.quantity', number_format((float) $item->quantity), $editorContext).'</td><td class="num">'.$this->editableField('items.'.$index.'.unit_price', number_format((float) $item->unit_price, 2), $editorContext).'</td><td class="num">'.$this->editableField('items.'.$index.'.discount', number_format($discount, 2), $editorContext).'</td><td class="num">'.number_format($lineTotal, 2).'</td></tr>';
         }
-        for ($index = $items->count(); $index < 4; $index++) {
-            $rows .= '<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>';
-        }
-
         $watermark = $rejected ? 'ไม่อนุมัติ' : ($canceled ? 'ยกเลิกเอกสาร' : ($copy ? 'สำเนา (COPY)' : ''));
         $watermarkClass = $canceled ? ' canceled' : '';
         $rejectionCross = $rejected
@@ -1128,6 +1352,10 @@ final class DocumentService
             : '';
         $isQuotation = $title === 'ใบเสนอราคา';
         $isStandardEditor = $isQuotation && data_get($editorPayload, 'template') === QuotationTemplateCatalog::STANDARD;
+        $itemsHeader = '<tr><th style="width:13%"><strong>รหัสสินค้า</strong><br>Product ID</th><th style="width:35%"><strong>รายการ</strong><br>Description</th><th style="width:8%"><strong>จำนวน</strong><br>Quantity</th><th style="width:13%"><strong>ราคาต่อหน่วย</strong><br>Unit Price</th><th style="width:11%"><strong>ส่วนลด</strong><br>Discount</th><th style="width:20%"><strong>จำนวนเงิน</strong><br>Amount (Baht)</th></tr>';
+        if ($isStandardEditor) {
+            [$itemsHeader, $rows] = $this->flexibleQuotationTable($items, $editorPayload, $editorContext);
+        }
         $addressHeading = $isStandardEditor ? '' : '<strong>ที่อยู่:</strong> ';
         $customerAddressHtml = nl2br(e($customerAddress));
         $customerCodeHtml = e($customerCode);
@@ -1150,12 +1378,23 @@ final class DocumentService
         $documentBranch = $isQuotation
             ? 'สำนักงานใหญ่<br>สาขา '.e($department)
             : 'สาขาที่ออกใบกำกับภาษี<br>สาขา '.e($department);
-        $leftDocumentText = $isQuotation
+        $showConfirmationTerms = ! $isStandardEditor || (bool) data_get($editorPayload, 'layout.show_confirmation_terms', true);
+        $showDocumentNote = ! $isStandardEditor || (bool) data_get($editorPayload, 'layout.show_document_note', true);
+        $legacyShowSignatures = (bool) data_get($editorPayload, 'layout.show_signatures', true);
+        $showCompanySignature = ! $isStandardEditor || (bool) data_get($editorPayload, 'layout.show_company_signature', $legacyShowSignatures);
+        $showCustomerSignature = ! $isStandardEditor || (bool) data_get($editorPayload, 'layout.show_customer_signature', $legacyShowSignatures);
+        $confirmationTermsHtml = $showConfirmationTerms
             ? '<div class="received">เงื่อนไขการยืนยัน: '.($editorPayload
                 ? $this->editableField('document.confirmation_terms', (string) data_get($editorPayload, 'document.confirmation_terms', 'ลูกค้าลงนามในเอกสารนี้ หรือออก PO ที่อ้างอิงใบเสนอราคา'), $editorContext)
-                : 'ลูกค้าลงนามในเอกสารนี้ หรือออก PO ที่อ้างอิงใบเสนอราคา').'</div><div class="document-note"><strong>หมายเหตุ:</strong> '.($editorPayload
+                : 'ลูกค้าลงนามในเอกสารนี้ หรือออก PO ที่อ้างอิงใบเสนอราคา').'</div>'
+            : '';
+        $documentNoteHtml = $showDocumentNote
+            ? '<div class="document-note"><strong>หมายเหตุ:</strong> '.($editorPayload
                 ? $this->editableField('document.document_note', (string) data_get($editorPayload, 'document.document_note', 'กรุณาตรวจสอบรายการ ราคา เงื่อนไขชำระเงิน และกำหนดส่งก่อนยืนยัน'), $editorContext)
                 : 'กรุณาตรวจสอบรายการ ราคา เงื่อนไขชำระเงิน และกำหนดส่งก่อนยืนยัน').'</div>'
+            : '';
+        $leftDocumentText = $isQuotation
+            ? $confirmationTermsHtml.$documentNoteHtml
             : '<div class="received">○ ได้รับสินค้าตามรายการนี้ในสภาพสมบูรณ์และจำนวนครบถ้วน</div><div class="document-note"><strong>หมายเหตุ:</strong> เป็นการยกเลิกใบกำกับภาษีอย่างย่อ<br>และออกใบกำกับภาษีเต็มรูปแบบแทน</div>';
         $customerNoteHtml = e($note);
         if ($isStandardEditor) {
@@ -1168,8 +1407,15 @@ final class DocumentService
             }
             $customerNoteHtml = implode(' | ', array_filter($noteParts, fn (string $part): bool => trim(strip_tags($part)) !== '')) ?: '-';
         }
+        $showCustomerDetails = ! $isStandardEditor || (bool) data_get($editorPayload, 'layout.show_customer_details', true);
+        $customerDetailsHtml = $showCustomerDetails
+            ? '<table class="customer"><tr>'
+                .'<td class="customer-left"><div class="customer-line"><strong>ชื่อลูกค้า:</strong> '.$this->editableField('document.recipient', $customerName, $editorContext).'</div><div class="customer-line">'.$addressHeading.$customerAddressHtml.'</div><div><strong>เลขที่ผู้เสียภาษี:</strong> '.$customerTaxIdHtml.'</div><div><strong>หมายเหตุ:</strong> '.$customerNoteHtml.'</div></td>'
+                .'<td class="customer-right"><div class="customer-line"><strong>รหัสลูกค้า:</strong> '.$customerCodeHtml.'</div><div style="height:35px"></div><div><strong>พนักงานขาย:</strong> '.$this->editableField('document.salesperson', $salesperson, $editorContext).'</div></td>'
+                .'</tr></table>'
+            : '';
         $signatureHtml = '';
-        if ($title === 'ใบเสนอราคา') {
+        if ($title === 'ใบเสนอราคา' && ($showCompanySignature || $showCustomerSignature)) {
             $signatureImage = ! empty($approvalEvidence['signature_image'])
                 ? '<img class="signature-image" src="data:image/png;base64,'.e($approvalEvidence['signature_image']).'" alt="ลายเซ็นผู้อนุมัติ"><br>'
                 : '';
@@ -1185,42 +1431,71 @@ final class DocumentService
             } else {
                 $customerAcceptance = '<span class="signature-line">ลงชื่อ __________________________________</span><br>ผู้มีอำนาจของลูกค้า / ผู้ยืนยันคำสั่งซื้อ<br>ชื่อ __________________ วันที่ __________________';
             }
-            $signatureHtml = '<table class="signature-table"><tr><td>'.$companyApproval.'</td><td>'.$customerAcceptance.'</td></tr></table><div class="signature-note">หลักฐานอิเล็กทรอนิกส์ผูกกับ Revision และค่า SHA-256 โปรดตรวจสอบรายละเอียดจากใบรับรองการอนุมัติในระบบ</div>';
+            // Customer signs on the left; the company's authorized signer stays
+            // on the right. A single visible box keeps its half-page position.
+            $signatureCells = ($showCustomerSignature ? '<td>'.$customerAcceptance.'</td>' : '')
+                .($showCompanySignature ? '<td>'.$companyApproval.'</td>' : '');
+            $signaturePositionClass = $showCompanySignature && ! $showCustomerSignature
+                ? ' company-signature-only'
+                : ($showCustomerSignature && ! $showCompanySignature ? ' customer-signature-only' : '');
+            $signatureHtml = '<table class="signature-table'.$signaturePositionClass.'"><tr>'.$signatureCells.'</tr></table>';
         }
-        $logo = $logoUrl ? '<div class="logo-wrap"><img class="logo" src="'.e($logoUrl).'" alt="Valor Health"></div>' : '';
+        $logoAlignment = in_array(data_get($editorPayload, 'layout.logo_alignment'), ['left', 'center', 'right'], true)
+            ? (string) data_get($editorPayload, 'layout.logo_alignment')
+            : 'left';
+        $logo = $logoUrl ? '<div class="logo-wrap align-'.e($logoAlignment).'"><img class="logo" src="'.e($logoUrl).'" alt="Valor Health"></div>' : '';
+        $showSummary = ! $isStandardEditor || (bool) data_get($editorPayload, 'layout.show_summary', true);
+        $titleAlignment = in_array(data_get($editorPayload, 'layout.title_alignment'), ['left', 'center', 'right'], true)
+            ? (string) data_get($editorPayload, 'layout.title_alignment')
+            : 'right';
+        $headerTitle = '<div class="header-title align-'.e($titleAlignment).'"><div class="document-title">'
+            .($isStandardEditor ? $this->editableField('document.title', (string) data_get($editorPayload, 'document.title', $title), $editorContext) : e($title))
+            .'<br><span>'.($isStandardEditor ? $this->editableField('document.english_title', (string) data_get($editorPayload, 'document.english_title', $englishTitle), $editorContext) : e($englishTitle)).'</span></div></div>';
+        $amountWordsHtml = $showSummary
+            ? '<div class="words">-'.$this->summaryField($editorContext, 'amount_words', $this->bahtText->convert($total)).'-</div>'
+            : '';
+        $summaryHtml = $showSummary
+            ? '<td class="after-right"><table class="summary"><tr><td class="label">'.$this->summaryField($editorContext, 'subtotal_label', 'มูลค่าราคารวมทั้งสิ้น (Total Amount)').'</td><td class="value">'.$this->summaryField($editorContext, 'subtotal_value', number_format($subtotal, 2)).'</td></tr><tr><td class="label">'.$this->summaryField($editorContext, 'discount_label', 'รวมส่วนลดทั้งหมด (Total Discount)').'</td><td class="value">'.$this->summaryField($editorContext, 'discount_value', number_format($lineDiscount + $billDiscount, 2)).'</td></tr><tr><td class="label">'.$this->summaryField($editorContext, 'vat_label', 'จำนวนภาษีมูลค่าเพิ่ม (VAT)').'</td><td class="value">'.$this->summaryField($editorContext, 'vat_value', number_format($vat, 2)).'</td></tr><tr><td class="label">'.$this->summaryField($editorContext, 'total_label', 'จำนวนเงินรวมทั้งสิ้น (Grand Total)').'</td><td class="value">'.$this->summaryField($editorContext, 'total_value', number_format($total, 2)).'</td></tr></table></td>'
+            : '';
+        $standardContact = trim((string) data_get($editorPayload, 'document.contact', ''));
+        if ($standardContact === '') {
+            $standardContact = 'ติดต่อสอบถามเพิ่มเติมได้ที่ คุณ'.$salesperson.' FAX.02-678-8400 E-Mail : valorhealth@valorhealth.co.th';
+        }
+        $footerHtml = $isQuotation
+            ? '<footer class="footer standard-footer"><div class="footer-contact">'
+                .($isStandardEditor ? $this->editableField('document.contact', $standardContact, $editorContext) : e($standardContact))
+                .'</div><div class="footer-rule"><span></span></div>'
+                .'<div><strong>บริษัท เวเลอร์ เฮลธ์ จำกัด</strong> 2/22 ตึกไอยราทาวเวอร์ชั้น 10 ถนนจันทน์ แขวงทุ่งวัดดอน เขตสาทร กรุงเทพฯ 10120 โทร.02-678-5150</div>'
+                .'<div><strong>Valor Health Co., Ltd.</strong> 2/22 IYARA Tower 10 Fl., Chan Road, Tungwatdon, Sathorn, Bangkok 10120, Thailand Tel.+662-678-5150</div>'
+                .'<div>Tax ID.0105558041179&nbsp;&nbsp;/&nbsp;&nbsp;Email: valorhealth@valorhealth.co.th</div></footer>'
+            : '<div class="footer tax-footer">เอกสารนี้ได้จัดทำและส่งข้อมูลให้แก่กรมสรรพากรด้วยวิธีการทางอิเล็กทรอนิกส์<br>ทางบริษัทฯ ขอสงวนสิทธิ์ในการแก้ไข เปลี่ยนแปลง หรือยกเลิกเอกสารฉบับนี้ ภายใน 7 วัน นับจากวันที่ระบุในเอกสาร</div>';
         $html = '<!doctype html><html lang="th"><head><meta charset="utf-8"><style>
             @page{margin:24px 27px 30px}
+            .item-description-content{display:block}.item-description-image-wrap{display:block;clear:both;width:100%;margin-top:6px;text-align:center;line-height:0;page-break-inside:avoid}.item-description-image-wrap .item-description-image{display:inline-block;margin:0 auto}
             body{font-family:'.$fontFamily.';font-size:16px;line-height:1.18;color:#222}
-            .logo-wrap{text-align:center;margin:0 0 10px}.logo{display:inline-block;width:135px;height:auto}
-            table{border-spacing:0}.header{width:100%;border-collapse:collapse}.header td{vertical-align:top}.header .company-cell{width:49%}.header .title-cell{width:25%;text-align:center}.header .document-cell{width:26%;text-align:right}
+            .header-stage{position:relative;height:92px;width:100%;margin:0 0 4px}.logo-wrap,.header-title{position:absolute;top:0;width:32%;box-sizing:border-box}.logo-wrap.align-left,.header-title.align-left{left:0;text-align:left}.logo-wrap.align-center,.header-title.align-center{left:34%;text-align:center}.logo-wrap.align-right,.header-title.align-right{right:0;text-align:right}.logo{display:inline-block;width:135px;height:auto}
+            table{border-spacing:0}.header{width:100%;border-collapse:collapse}.header td{vertical-align:top}.header .company-cell{width:70%}.header .document-cell{width:30%;text-align:right}
             .company{font-size:17px;font-weight:bold}.header-line{margin-bottom:3px}.document-title{font-size:21px;font-weight:bold;line-height:1.25;margin:0}.document-title span{font-size:18px;font-weight:normal}
             .customer{width:100%;border-collapse:collapse;border:1px solid #222;margin-top:10px}.customer td{vertical-align:top;padding:6px 7px}.customer-left{width:66%;border-right:1px solid #222}.customer-right{width:34%}.customer-line{min-height:19px;margin-bottom:2px}
-            .items{width:100%;border-collapse:collapse;margin-top:10px;table-layout:fixed}.items th,.items td{border:1px solid #222;padding:4px 5px;font-size:15px;vertical-align:top}.items th{text-align:center;font-weight:normal;height:43px;vertical-align:middle}.items th strong{font-weight:bold}.items td:nth-child(1){width:13%}.items td:nth-child(2){width:35%}.items td:nth-child(3){width:8%}.items td:nth-child(4){width:13%}.items td:nth-child(5){width:11%}.items td:nth-child(6){width:20%}.num{text-align:right}.empty{height:24px}
+            .items{width:100%;border-collapse:collapse;margin-top:10px;table-layout:fixed}.items th,.items td{border:1px solid #222;padding:4px 5px;font-size:15px;vertical-align:top;overflow-wrap:anywhere}.items th{text-align:center;font-weight:normal;height:43px;vertical-align:middle;white-space:pre-line}.items th strong{font-weight:bold}.num{text-align:right}.empty{height:24px}.item-description-image{display:block;max-width:100%;max-height:115px;margin:6px auto;object-fit:contain}
             .after-items{width:100%;border-collapse:collapse;margin-top:-1px;table-layout:fixed}.after-items>tbody>tr>td{padding:0;vertical-align:top}.after-left{width:56%;padding:7px 10px 0 5px!important}.after-right{width:44%}.words{text-align:center;font-weight:bold;margin-bottom:12px}.received{margin:0 0 18px}.document-note{line-height:1.25}
             .summary{width:100%;border-collapse:collapse}.summary td{border:1px solid #222;padding:5px 6px;height:29px;vertical-align:middle}.summary .label{width:64%}.summary .value{width:36%;text-align:right}
-            .footer{text-align:center;color:#e3202f;font-size:14px;line-height:1.3;margin-top:16px}.watermark{position:fixed;top:43%;left:12%;font-size:86px;color:rgba(100,100,100,.16);transform:rotate(-35deg);z-index:-1}.watermark.canceled{color:rgba(220,0,0,.18)}
+            .footer{text-align:center;font-size:12px;line-height:1.35;margin-top:22px;page-break-inside:avoid}.standard-footer{color:#333}.standard-footer .footer-contact{font-size:13px;margin-bottom:5px}.footer-rule{height:7px;margin:0 0 5px;background:#666;text-align:left}.footer-rule span{display:block;width:19%;height:7px;background:#d71920}.standard-footer strong{font-weight:bold}.tax-footer{color:#e3202f;font-size:14px}.watermark{position:fixed;top:43%;left:12%;font-size:86px;color:rgba(100,100,100,.16);transform:rotate(-35deg);z-index:-1}.watermark.canceled{color:rgba(220,0,0,.18)}
             .rejection-cross{position:fixed;top:49%;left:8%;width:84%;border-top:14px solid rgba(220,0,0,.14);z-index:-2}.rejection-cross--forward{transform:rotate(35deg)}.rejection-cross--backward{transform:rotate(-35deg)}
-            .signature-table{width:100%;border-collapse:collapse;margin-top:13px;table-layout:fixed}.signature-table td{width:50%;border:1px solid #222;padding:8px;text-align:center;vertical-align:middle;height:66px}.signature-line{line-height:2}.hash{font-size:9px;word-break:break-all}.signature-note{text-align:center;font-size:11px;margin-top:4px;color:#555}
+            .signature-table{width:100%;border-collapse:collapse;margin-top:13px;table-layout:fixed}.signature-table td{width:50%;border:1px solid #222;padding:8px;text-align:center;vertical-align:middle;height:66px}.signature-table.company-signature-only,.signature-table.customer-signature-only{width:50%}.signature-table.company-signature-only{margin-left:auto;margin-right:0}.signature-table.customer-signature-only{margin-left:0;margin-right:auto}.signature-table.company-signature-only td,.signature-table.customer-signature-only td{width:100%}.signature-line{line-height:2}.hash{font-size:9px;word-break:break-all}
             .signature-image{display:inline-block;max-width:150px;max-height:55px;object-fit:contain;margin:3px auto}
-            [data-edit-path][contenteditable="true"]{border-radius:2px;cursor:text}[data-edit-path][contenteditable="true"]:hover{outline:1px dashed #60a5fa;background:#eff6ff}[data-edit-path][contenteditable="true"]:focus{outline:2px solid #2563eb;background:#fff}
-        </style></head><body>'.$rejectionCross.($watermark ? '<div class="watermark'.$watermarkClass.'">'.e($watermark).'</div>' : '').$logo.'
+            .preserve-spacing,[data-edit-path]{white-space:pre-wrap}[data-edit-path][contenteditable="true"]{border-radius:2px;cursor:text}[data-edit-path][contenteditable="true"]:hover{outline:1px dashed #60a5fa;background:#eff6ff}[data-edit-path][contenteditable="true"]:focus{outline:2px solid #2563eb;background:#fff}
+            .editor-mode .editable-column{position:relative}.editor-mode .column-title{display:block;min-height:18px}.editor-mode .column-resizer{position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:col-resize;background:transparent;z-index:4}.editor-mode .column-resizer:hover{background:#2563eb}.editor-mode .column-actions{position:absolute;top:1px;left:2px;right:6px;z-index:5;display:flex;justify-content:center;gap:2px;padding:1px;background:rgba(239,246,255,.94);opacity:0;transition:opacity .15s}.editor-mode .editable-column:hover .column-actions,.editor-mode .editable-column:focus-within .column-actions{opacity:1}.editor-mode .column-actions button{width:18px;height:17px;padding:0;border:1px solid #93c5fd;border-radius:2px;background:#eff6ff;color:#1d4ed8;font:10px/1 sans-serif;cursor:pointer}.editor-mode .column-actions select{min-width:42px;max-width:74px;height:17px;padding:0;border:1px solid #93c5fd;border-radius:2px;background:#fff;color:#1e3a5f;font:9px sans-serif}.editor-mode .items td{position:relative}.editor-mode .item-image-picker{position:absolute;right:30px;bottom:2px;z-index:3;padding:2px 4px;border-radius:2px;background:rgba(239,246,255,.94);color:#2563eb;font-size:10px;cursor:pointer}.editor-mode .item-image-picker input{display:none}.editor-mode .item-image-remove{position:absolute;right:2px;bottom:2px;z-index:3;padding:2px 4px;border:0;border-radius:2px;background:rgba(254,242,242,.95);color:#b91c1c;font-size:10px;cursor:pointer}
+        </style></head><body'.(data_get($editorPayload, '_editor', false) ? ' class="editor-mode"' : '').'>'.$rejectionCross.($watermark ? '<div class="watermark'.$watermarkClass.'">'.e($watermark).'</div>' : '').'<div class="header-stage">'.$logo.$headerTitle.'</div>
         <table class="header"><tr>
             <td class="company-cell"><div class="company header-line">'.($isStandardEditor ? $this->editableField('document.company_name', (string) data_get($editorPayload, 'document.company_name', 'บริษัท เวเลอร์ เฮลธ์ จำกัด (สำนักงานใหญ่)'), $editorContext) : 'บริษัท เวเลอร์ เฮลธ์ จำกัด (สำนักงานใหญ่)').'</div><div class="header-line">'.($isStandardEditor ? $this->editableField('document.company_address', (string) data_get($editorPayload, 'document.company_address', ''), $editorContext) : '2/22 อาคารไอยรา ถ.จันทน์ แขวงทุ่งวัดดอน เขตสาทร จ.กรุงเทพมหานคร 10120').'</div><div class="header-line">'.($isStandardEditor ? $this->editableField('document.company_contact', (string) data_get($editorPayload, 'document.company_contact', ''), $editorContext) : 'โทรศัพท์ +66-655219785').'</div><div>'.($isStandardEditor ? $this->editableField('document.company_tax_id', (string) data_get($editorPayload, 'document.company_tax_id', ''), $editorContext) : 'เลขผู้เสียภาษี 0105558041179').'</div></td>
-            <td class="title-cell"><div class="document-title">'.($isStandardEditor ? $this->editableField('document.title', (string) data_get($editorPayload, 'document.title', $title), $editorContext) : e($title)).'<br><span>'.($isStandardEditor ? $this->editableField('document.english_title', (string) data_get($editorPayload, 'document.english_title', $englishTitle), $editorContext) : e($englishTitle)).'</span></div></td>
             <td class="document-cell">'.($isStandardEditor ? $this->editableField('document.branch', (string) data_get($editorPayload, 'document.branch', 'สำนักงานใหญ่ สาขา'), $editorContext) : $documentBranch).'<br><br>เลขที่ '.$this->editableField('document.number', $documentNo, $editorContext).'<br>วันที่ '.$this->editableField('document.date', (string) data_get($editorPayload, 'document.date', $date), $editorContext).'</td>
         </tr></table>
-        <table class="customer"><tr>
-            <td class="customer-left"><div class="customer-line"><strong>ชื่อลูกค้า:</strong> '.$this->editableField('document.recipient', $customerName, $editorContext).'</div><div class="customer-line">'.$addressHeading.$customerAddressHtml.'</div><div><strong>เลขที่ผู้เสียภาษี:</strong> '.$customerTaxIdHtml.'</div><div><strong>หมายเหตุ:</strong> '.$customerNoteHtml.'</div></td>
-            <td class="customer-right"><div class="customer-line"><strong>รหัสลูกค้า:</strong> '.$customerCodeHtml.'</div><div style="height:35px"></div><div><strong>พนักงานขาย:</strong> '.$this->editableField('document.salesperson', $salesperson, $editorContext).'</div></td>
-        </tr></table>
-        <table class="items"><thead><tr><th style="width:13%"><strong>รหัสสินค้า</strong><br>Product ID</th><th style="width:35%"><strong>รายการ</strong><br>Description</th><th style="width:8%"><strong>จำนวน</strong><br>Quantity</th><th style="width:13%"><strong>ราคาต่อหน่วย</strong><br>Unit Price</th><th style="width:11%"><strong>ส่วนลด</strong><br>Discount</th><th style="width:20%"><strong>จำนวนเงิน</strong><br>Amount (Baht)</th></tr></thead><tbody>'.$rows.'</tbody></table>
-        <table class="after-items"><tr><td class="after-left"><div class="words">-'.e($this->bahtText->convert($total)).'-</div>'.$leftDocumentText.'</td><td class="after-right">
-            <table class="summary"><tr><td class="label">มูลค่าราคารวมทั้งสิ้น (Total Amount)</td><td class="value">'.number_format($subtotal, 2).'</td></tr><tr><td class="label">รวมส่วนลดทั้งหมด (Total Discount)</td><td class="value">'.number_format($lineDiscount + $billDiscount, 2).'</td></tr><tr><td class="label">จำนวนภาษีมูลค่าเพิ่ม (VAT)</td><td class="value">'.number_format($vat, 2).'</td></tr><tr><td class="label">จำนวนเงินรวมทั้งสิ้น (Grand Total)</td><td class="value">'.number_format($total, 2).'</td></tr></table>
-        </td></tr></table>
+        '.$customerDetailsHtml.'
+        <table class="items"><thead>'.$itemsHeader.'</thead><tbody>'.$rows.'</tbody></table>
+        <table class="after-items"><tr><td class="after-left"'.($showSummary ? '' : ' style="width:100%"').'>'.$amountWordsHtml.$leftDocumentText.'</td>'.$summaryHtml.'</tr></table>
         '.$signatureHtml.'
-        <div class="footer">'.($isQuotation
-            ? 'ใบเสนอราคานี้ไม่ใช่ใบกำกับภาษี และใช้ตามเงื่อนไข/ระยะเวลาที่ระบุในเอกสาร'
-            : 'เอกสารนี้ได้จัดทำและส่งข้อมูลให้แก่กรมสรรพากรด้วยวิธีการทางอิเล็กทรอนิกส์<br>ทางบริษัทฯ ขอสงวนสิทธิ์ในการแก้ไข เปลี่ยนแปลง หรือยกเลิกเอกสารฉบับนี้ ภายใน 7 วัน นับจากวันที่ระบุในเอกสาร').'</div>
+        '.$footerHtml.'
         </body></html>';
 
         return $htmlOnly ? $html : $this->dompdfOutput($html);
@@ -1294,6 +1569,28 @@ final class DocumentService
         // Keeping the Windows drive directly after that prefix produces C:/...
         // instead of the invalid /C:/... path created by file:///C:/....
         return 'file://'.$normalized;
+    }
+
+    private function embedEditorAssets(string $html): string
+    {
+        $assets = [
+            resource_path('assets/fonts/THSarabunNew.ttf') => 'font/ttf',
+            resource_path('assets/images/valorhealth.png') => 'image/png',
+        ];
+
+        foreach ($assets as $path => $mime) {
+            if (! is_file($path)) {
+                continue;
+            }
+
+            $fileUrl = $this->fileUrl($path);
+            $dataUrl = 'data:'.$mime.';base64,'.base64_encode((string) file_get_contents($path));
+            // The HTML renderer escapes "&" in Windows paths (for example
+            // "Web with PHP&SQL") before this editor-only asset embedding step.
+            $html = str_replace([$fileUrl, e($fileUrl)], $dataUrl, $html);
+        }
+
+        return $html;
     }
 
     private function pdfDownloadName(string $prefix, string $customerName, string $date): string

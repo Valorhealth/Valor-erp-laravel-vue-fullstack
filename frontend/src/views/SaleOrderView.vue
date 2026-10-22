@@ -376,20 +376,13 @@ function selectProduct(item: SaleItemForm) {
     Object.assign(item, {
       main_category: product.sku_code,
       sub_category: product.sku_name,
-      unit_type:
-        product.units?.find((unit) => unit.pivot?.is_default)?.unit_name ||
-        product.units?.[0]?.unit_name ||
-        "ชิ้น",
+      unit_type: refs.value?.units.includes("ชิ้น")
+        ? "ชิ้น"
+        : refs.value?.units[0] || "ชิ้น",
     });
 }
-function unitsFor(item: SaleItemForm): string[] {
-  const product = refs.value?.products.find(
-    (entry) => entry.sku_code === (item.product || item.main_category),
-  );
-  return (
-    product?.units?.map((unit) => unit.unit_name) ||
-    refs.value?.units || ["ชิ้น"]
-  );
+function unitsFor(): string[] {
+  return refs.value?.units || ["ชิ้น"];
 }
 function selectProvince() {
   form.district = "";
@@ -474,7 +467,9 @@ function applyPurchaseOrder(result: PurchaseOrderScan) {
       customer_product_name: item.source_name,
       unit_type: refs.value?.units.includes(item.unit)
         ? item.unit
-        : refs.value?.units[0] || "ชิ้น",
+        : refs.value?.units.includes("ชิ้น")
+          ? "ชิ้น"
+          : refs.value?.units[0] || "ชิ้น",
       quantity: Math.max(1, Number(item.quantity || 1)),
       unit_price: Math.max(0, Number(item.unit_price || 0)),
       sale_discount_unit: Math.max(0, Number(item.discount || 0)),
@@ -1270,7 +1265,7 @@ onMounted(load);
             <label
               ><span>หน่วย</span
               ><select v-model="item.unit_type">
-                <option v-for="unit in unitsFor(item)" :key="unit">
+                <option v-for="unit in unitsFor()" :key="unit">
                   {{ unit }}
                 </option>
               </select></label
@@ -1478,7 +1473,7 @@ onMounted(load);
           ><span>ประเภทการจัดส่ง *</span
           ><select v-model="form.shipping_type" required>
             <option value="">-- เลือก --</option>
-            <option v-for="shipping in refs?.shipping_types" :key="shipping">
+            <option v-for="shipping in refs?.shipping_types" :key="shipping" :value="shipping">
               {{ shipping }}
             </option>
           </select></label

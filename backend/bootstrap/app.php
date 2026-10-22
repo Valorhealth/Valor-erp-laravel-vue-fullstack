@@ -16,6 +16,11 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->trustProxies(at: '*');
         $middleware->redirectGuestsTo(null);
+        // Document text is layout data: leading spaces, repeated spaces and tabs must
+        // survive the request so the editor preview and generated PDF remain identical.
+        $middleware->trimStrings(except: [
+            fn (Request $request): bool => $request->is('api/v1/quotations/*/document-editor/*'),
+        ]);
         $middleware->alias([
             'ability' => EnsureRoleAbility::class,
             'audit' => AuditRequest::class,

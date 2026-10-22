@@ -114,6 +114,11 @@ function translateTextNode(node: Text): void {
   trackedTextNodes.add(node)
   const translated = translateUiText(current)
   if (translated !== current) {
+    // An <option> without an explicit value uses its visible text as the
+    // submitted value. Preserve the original domain value before translating
+    // the label, otherwise English UI text breaks Thai-backed enums.
+    const option = node.parentElement?.closest('option')
+    if (option && !option.hasAttribute('value')) option.value = option.value
     renderedText.set(node, translated)
     node.data = translated
   }

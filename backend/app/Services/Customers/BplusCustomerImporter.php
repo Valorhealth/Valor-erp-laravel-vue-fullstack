@@ -11,7 +11,7 @@ use RuntimeException;
 final class BplusCustomerImporter
 {
     private const REQUIRED_HEADERS = [
-        'AR_CODE', 'AR_NAME', 'ADDB_COMPANY', 'ADDB_BRANCH', 'ADDB_TAX_ID',
+        'AR_CODE', 'AR_NAME', 'ARS_CRE_LIM', 'ARCD_TERM', 'ADDB_COMPANY', 'ADDB_BRANCH', 'ADDB_TAX_ID',
         'ADDB_ADDB_1', 'ADDB_ADDB_2', 'ADDB_ADDB_3', 'ADDB_SUB_DISTRICT',
         'ADDB_DISTRICT', 'ADDB_PROVINCE', 'ADDB_POST', 'ADDB_PHONE',
     ];
@@ -36,6 +36,7 @@ final class BplusCustomerImporter
         $filter = new class implements IReadFilter
         {
             private int $start = 1;
+
             private int $end = 1;
 
             public function rows(int $start, int $end): void
@@ -81,6 +82,7 @@ final class BplusCustomerImporter
                 $name = $get('AR_NAME');
                 if ($code === '' || $name === '') {
                     $skipped++;
+
                     continue;
                 }
 
@@ -97,6 +99,8 @@ final class BplusCustomerImporter
                 $customers[$code] = [
                     'ar_code' => $code,
                     'ar_name' => $name,
+                    'credit_limit' => $this->nonNegativeDecimal($values[$headers['ARS_CRE_LIM']] ?? null),
+                    'credit_term' => $this->nonNegativeInteger($values[$headers['ARCD_TERM']] ?? null),
                     'tax_id' => $this->nullable($get('ADDB_TAX_ID')),
                     'billing_address' => $this->nullable($fullAddress),
                     'delivery_address' => $this->nullable($fullAddress),
@@ -120,12 +124,13 @@ final class BplusCustomerImporter
             'skipped_rows' => $skipped,
             'customers_written' => 0,
             'addresses_written' => 0,
+            'credit_profiles_written' => 0,
         ];
         if ($dryRun) {
             return $summary;
         }
 
-        DB::transaction(function () use ($customers, &$summary): void {
+        DB::transaction(function () use ($customers, $path, &$summary): void {
             $now = now();
             foreach (array_chunk(array_values($customers), 500) as $chunk) {
                 $customerRows = array_map(fn (array $item): array => [
@@ -144,6 +149,21 @@ final class BplusCustomerImporter
                     $customerRows,
                     ['ar_code'],
                     ['ar_name', 'tax_id', 'billing_address', 'delivery_address', 'province', 'district', 'sub_district', 'zipcode'],
+                );
+
+                $creditRows = array_map(fn (array $item): array => [
+                    'ar_code' => $item['ar_code'],
+                    'ar_name' => $item['ar_name'],
+                    'credit_limit' => $item['credit_limit'],
+                    'credit_term' => $item['credit_term'],
+                    'credit_outstanding' => 0,
+                    'source_file' => basename($path),
+                    'updated_at' => $now,
+                ], $chunk);
+                DB::table('customer_credit_profiles')->upsert(
+                    $creditRows,
+                    ['ar_code'],
+                    ['ar_name', 'credit_limit', 'credit_term', 'source_file', 'updated_at'],
                 );
 
                 $ids = DB::table('customers')
@@ -186,6 +206,7 @@ final class BplusCustomerImporter
                 }
                 $summary['customers_written'] += count($customerRows);
                 $summary['addresses_written'] += count($addressRows);
+                $summary['credit_profiles_written'] += count($creditRows);
             }
         }, 3);
 
@@ -250,5 +271,19 @@ final class BplusCustomerImporter
     private function nullable(string $value): ?string
     {
         return $value === '' || $value === '-' ? null : $value;
+    }
+
+    private function nonNegativeDecimal(mixed $value): float
+    {
+        if (is_string($value)) {
+            $value = str_replace([',', ' '], '', trim($value));
+        }
+
+        return max(is_numeric($value) ? (float) $value : 0, 0);
+    }
+
+    private function nonNegativeInteger(mixed $value): int
+    {
+        return (int) floor($this->nonNegativeDecimal($value));
     }
 }

@@ -121,18 +121,13 @@ function selectProduct(index: number, code: string) {
   if (product && item) {
     item.main_category = product.sku_code;
     item.sub_category = product.sku_name;
-    item.unit_type =
-      product.units?.find((unit) => unit.pivot?.is_default)?.unit_name ||
-      product.units?.[0]?.unit_name ||
-      "ชิ้น";
+    item.unit_type = refs.value?.units.includes("ชิ้น")
+      ? "ชิ้น"
+      : refs.value?.units[0] || "ชิ้น";
   }
 }
-function unitsForProduct(code: string | null): string[] {
-  const product = refs.value?.products.find((entry) => entry.sku_code === code);
-  return (
-    product?.units?.map((unit) => unit.unit_name) ||
-    refs.value?.units || ["ชิ้น"]
-  );
+function unitsForProduct(): string[] {
+  return refs.value?.units || ["ชิ้น"];
 }
 function selectBillProvince() {
   if (!bill.value) return;
@@ -161,7 +156,9 @@ function addDraftItem() {
     main_category: "",
     sub_category: "",
     customer_product_name: "",
-    unit_type: refs.value?.units[0] || "",
+    unit_type: refs.value?.units.includes("ชิ้น")
+      ? "ชิ้น"
+      : refs.value?.units[0] || "",
     quantity: 1,
     unit_price: "0",
     sale_discount_unit: "0",
@@ -380,9 +377,9 @@ onMounted(async () => {
         ><label
           ><span>ประเภทจัดส่ง</span
           ><select v-model="bill.shipping_type" required>
-            <option>ส่งปกติ</option>
-            <option>ส่งเร็ว</option>
-            <option>ส่งด่วน</option>
+            <option value="ส่งปกติ">ส่งปกติ</option>
+            <option value="ส่งเร็ว">ส่งเร็ว</option>
+            <option value="ส่งด่วน">ส่งด่วน</option>
           </select></label
         >
         <fieldset class="span-2">
@@ -441,7 +438,7 @@ onMounted(async () => {
               ><span>หน่วย</span
               ><select v-model="item.unit_type">
                 <option
-                  v-for="unit in unitsForProduct(item.main_category)"
+                  v-for="unit in unitsForProduct()"
                   :key="unit"
                 >
                   {{ unit }}

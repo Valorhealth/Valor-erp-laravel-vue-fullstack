@@ -21,6 +21,86 @@ use Tests\TestCase;
 class DocumentServiceTest extends TestCase
 {
     #[Test]
+    public function it_keeps_a_product_image_below_its_description(): void
+    {
+        $service = new DocumentService(new ThaiBahtText);
+        $method = new \ReflectionMethod($service, 'descriptionWithImage');
+        $html = $method->invoke(
+            $service,
+            '<span>ชื่อสินค้า</span>',
+            'data:image/png;base64,AAAA',
+            0,
+            ['overrides' => ['_editor' => false]],
+        );
+
+        $descriptionPosition = strpos($html, 'item-description-content');
+        $imagePosition = strpos($html, 'item-description-image-wrap');
+
+        $this->assertIsInt($descriptionPosition);
+        $this->assertIsInt($imagePosition);
+        $this->assertLessThan($imagePosition, $descriptionPosition);
+        $this->assertStringContainsString('<div class="item-description-content"><span>ชื่อสินค้า</span></div>', $html);
+    }
+
+    #[Test]
+    public function it_preserves_multiline_quantities_and_calculates_matching_amount_lines(): void
+    {
+        $payload = [
+            'template' => QuotationTemplateCatalog::STANDARD,
+            'mode' => 'original',
+            'document' => ['number' => 'QT-ML', 'date' => '2026-10-22', 'recipient' => 'ลูกค้าทดสอบ', 'salesperson' => 'ฝ่ายขาย'],
+            'customer' => ['show_billing_address' => false, 'show_delivery_address' => false],
+            'items' => [[
+                'sku' => 'FIBRO', 'description' => "กรุงเทพ\nสุราษฎร์ธานี", 'quantity' => 2, 'quantity_display' => "1\n1",
+                'unit' => "ครั้ง/วัน\nครั้ง/วัน", 'pack' => '', 'unit_price' => 50000, 'unit_price_display' => "50,000\n85,000",
+                'discount' => 0, 'discount_display' => "0\n0", 'remark' => '', 'origin_details' => '', 'image' => '',
+            ]],
+            'table_layout' => [
+                ['id' => 'description', 'field' => 'description', 'label' => 'รายการ', 'width' => 40, 'align' => 'left'],
+                ['id' => 'quantity', 'field' => 'quantity', 'label' => 'จำนวน', 'width' => 20, 'align' => 'right'],
+                ['id' => 'unit-price', 'field' => 'unit_price', 'label' => 'ราคา', 'width' => 20, 'align' => 'right'],
+                ['id' => 'amount', 'field' => 'amount', 'label' => 'รวม', 'width' => 20, 'align' => 'right'],
+            ],
+            'layout' => ['show_summary' => false, 'show_customer_details' => false],
+            'terms' => [], 'bill_discount' => 0,
+        ];
+
+        $html = (new DocumentService(new ThaiBahtText))->quotationEditorPdf($payload, true);
+
+        $this->assertStringContainsString("1<br>\n1", $html);
+        $this->assertStringContainsString("50,000<br>\n85,000", $html);
+        $this->assertStringContainsString("50,000.00<br>\n85,000.00", $html);
+    }
+
+    #[Test]
+    public function it_keeps_alignment_lines_blank_instead_of_rendering_extra_zero_amounts(): void
+    {
+        $payload = [
+            'template' => QuotationTemplateCatalog::STANDARD,
+            'mode' => 'original',
+            'document' => ['number' => 'QT-BLANK', 'date' => '2026-10-22', 'recipient' => 'ลูกค้าทดสอบ', 'salesperson' => 'ฝ่ายขาย'],
+            'customer' => ['show_billing_address' => false, 'show_delivery_address' => false],
+            'items' => [[
+                'sku' => 'FIBRO', 'description' => "หัวข้อ\n\nกรุงเทพ", 'quantity' => 1, 'quantity_display' => "\n\n1\n",
+                'unit' => 'ครั้ง/วัน', 'pack' => '', 'unit_price' => 50000, 'unit_price_display' => '50,000',
+                'discount' => 0, 'remark' => '', 'origin_details' => '', 'image' => '',
+            ]],
+            'table_layout' => [
+                ['id' => 'description', 'field' => 'description', 'label' => 'รายการ', 'width' => 40, 'align' => 'left'],
+                ['id' => 'quantity', 'field' => 'quantity', 'label' => 'จำนวน', 'width' => 20, 'align' => 'right'],
+                ['id' => 'unit-price', 'field' => 'unit_price', 'label' => 'ราคา', 'width' => 20, 'align' => 'right'],
+                ['id' => 'amount', 'field' => 'amount', 'label' => 'รวม', 'width' => 20, 'align' => 'right'],
+            ],
+            'layout' => ['show_summary' => false, 'show_customer_details' => false],
+            'terms' => [], 'bill_discount' => 0,
+        ];
+
+        $html = (new DocumentService(new ThaiBahtText))->quotationEditorPdf($payload, true);
+        $this->assertStringContainsString("<br>\n<br>\n50,000.00<br>\n", $html);
+        $this->assertStringNotContainsString(">0.00<br>\n", $html);
+    }
+
+    #[Test]
     public function it_generates_a_quotation_pdf_without_querying_the_database(): void
     {
         $quotation = new Quotation([
@@ -100,13 +180,14 @@ class DocumentServiceTest extends TestCase
             'document' => [
                 'number' => 'AV-CUSTOM-001/R2',
                 'date' => '2026-10-14',
-                'subject' => 'หัวข้อที่แก้ไขจากหน้าเอกสาร',
+                'subject' => "หัวข้อที่แก้ไขจากหน้าเอกสาร\n        บริษัท เวเลอร์ เฮลธ์ จำกัด",
                 'recipient' => 'ผู้อำนวยการโรงพยาบาลตัวอย่าง',
                 'intro' => 'ข้อความเกริ่นนำฉบับแก้ไข',
                 'salesperson' => 'P\'Editor Sale',
                 'signature_role' => 'ผู้เสนอราคา',
                 'contact' => 'ติดต่อ 02-000-0000',
             ],
+            'layout' => ['title_alignment' => 'right', 'logo_alignment' => 'left'],
             'items' => [[
                 'row_key' => '1', 'sku' => 'SKU-EDIT', 'description' => 'ชื่อสินค้าฉบับโรงพยาบาล',
                 'quantity' => 2, 'unit' => 'กล่อง', 'pack' => '10 ชิ้น/กล่อง', 'unit_price' => 535,
@@ -129,11 +210,142 @@ class DocumentServiceTest extends TestCase
         $this->assertStringContainsString('data-edit-path="items.0.description"', $editorHtml);
         $this->assertStringContainsString('data-edit-path="terms.0"', $editorHtml);
         $this->assertStringContainsString('contenteditable="true"', $editorHtml);
+        $this->assertStringNotContainsString('<tr class="empty">', $html);
+        $this->assertStringNotContainsString('<tr class="empty">', $editorHtml);
+        $this->assertStringContainsString('.preserve-spacing,[data-edit-path]{white-space:pre-wrap}', $html);
+        $this->assertStringContainsString('document-title align-right', $html);
         $this->assertStringContainsString('<body class="editor-mode">', $editorHtml);
         $this->assertStringContainsString('.editor-mode .footer{position:static', $editorHtml);
         $this->assertStringContainsString('bottom:-62px', $html);
         $this->assertStringStartsWith('%PDF-', $pdf);
         $this->assertGreaterThan(5000, strlen($pdf));
+    }
+
+    #[Test]
+    public function it_preserves_indentation_and_supports_right_aligned_document_titles(): void
+    {
+        $payload = [
+            'template' => QuotationTemplateCatalog::POLICE_GENERAL,
+            'mode' => 'original',
+            'layout' => ['title_alignment' => 'right', 'logo_alignment' => 'left'],
+            'document' => [
+                'number' => 'AV-LAYOUT-001',
+                'date' => '2026-10-22',
+                'subject' => "เรียน ผู้อำนวยการ\n      บริษัท เวเลอร์ เฮลธ์ จำกัด",
+                'recipient' => 'ผู้อำนวยการโรงพยาบาลตัวอย่าง',
+                'salesperson' => 'ฝ่ายขาย',
+            ],
+            'items' => [[
+                'row_key' => '1', 'sku' => 'SKU-1', 'description' => 'สินค้าทดสอบ',
+                'quantity' => 1, 'unit' => 'ชิ้น', 'pack' => '', 'unit_price' => 100,
+                'discount' => 0, 'remark' => '', 'origin_details' => '', 'image' => '',
+            ]],
+            'bill_discount' => 0,
+            'terms' => [],
+        ];
+
+        $html = (new DocumentService(new ThaiBahtText))->quotationEditorPdf($payload, true);
+
+        $this->assertStringContainsString('.preserve-spacing,[data-edit-path]{white-space:pre-wrap}', $html);
+        $this->assertStringContainsString('document-title align-right', $html);
+        $this->assertStringContainsString('เรียน ผู้อำนวยการ<br>', $html);
+        $this->assertStringContainsString(str_repeat('&nbsp;', 6).'บริษัท เวเลอร์ เฮลธ์ จำกัด', $html);
+        $this->assertStringContainsString('logo align-left', $html);
+
+        $previewHtml = (new DocumentService(new ThaiBahtText))->quotationEditorPdf($payload, true);
+        $this->assertStringContainsString('class="preserve-spacing"', $previewHtml);
+    }
+
+    #[Test]
+    public function it_can_hide_the_price_summary_without_hiding_hospital_terms(): void
+    {
+        $payload = [
+            'template' => QuotationTemplateCatalog::POLICE_GENERAL,
+            'mode' => 'original',
+            'layout' => ['show_summary' => false],
+            'document' => ['number' => 'AV-HIDE-SUMMARY', 'date' => '2026-10-22', 'salesperson' => 'ฝ่ายขาย'],
+            'items' => [[
+                'row_key' => '1', 'sku' => 'SKU-1', 'description' => 'บริการ FibroScan',
+                'quantity' => 1, 'unit' => 'ครั้ง', 'pack' => '', 'unit_price' => 50000,
+                'discount' => 0, 'remark' => '', 'origin_details' => '', 'image' => '',
+            ]],
+            'terms' => ['กำหนดยืนยันราคา 60 วัน'],
+            'bill_discount' => 0,
+        ];
+
+        $documents = new DocumentService(new ThaiBahtText);
+        $html = $documents->quotationEditorPdf($payload, true);
+
+        $this->assertStringContainsString('กำหนดยืนยันราคา 60 วัน', $html);
+        $this->assertStringNotContainsString('data-edit-path="document.summary_total_label"', $html);
+        $this->assertStringNotContainsString('จำนวนเงินรวม', $html);
+
+        $standardPayload = [
+            ...$payload,
+            'template' => QuotationTemplateCatalog::STANDARD,
+            'document' => [
+                ...$payload['document'],
+                'recipient' => 'ลูกค้าทดสอบ',
+                'company_name' => 'บริษัททดสอบการซิงก์ Preview',
+                'contact' => 'SYNC-PREVIEW-MARKER',
+                'confirmation_terms' => 'เงื่อนไขยังคงอยู่',
+                'document_note' => 'หมายเหตุยังคงอยู่',
+            ],
+            'customer' => [
+                'code' => 'AR-TEST', 'billing_address' => 'กรุงเทพฯ', 'delivery_address' => '',
+                'show_billing_address' => true, 'show_delivery_address' => false, 'tax_id' => '-',
+            ],
+        ];
+        $standardHtml = $documents->quotationEditorPdf($standardPayload, true);
+        $standardEditorHtml = $documents->quotationEditorHtml($standardPayload);
+
+        $this->assertStringNotContainsString('<table class="summary">', $standardHtml);
+        $this->assertStringNotContainsString('<tr class="empty">', $standardHtml);
+        $this->assertStringNotContainsString('<tr class="empty">', $standardEditorHtml);
+        $this->assertStringContainsString('เงื่อนไขยังคงอยู่', $standardHtml);
+        $this->assertStringContainsString('บริษัททดสอบการซิงก์ Preview', $standardHtml);
+        $this->assertStringContainsString('SYNC-PREVIEW-MARKER', $standardHtml);
+        $this->assertStringContainsString('บริษัททดสอบการซิงก์ Preview', $standardEditorHtml);
+        $this->assertStringContainsString('SYNC-PREVIEW-MARKER', $standardEditorHtml);
+        $this->assertStringContainsString('<img class="logo" src="data:image/png;base64,', $standardEditorHtml);
+        $this->assertStringNotContainsString('.editor-mode .editable-column{position:relative;padding:', $standardEditorHtml);
+        $this->assertStringContainsString('หมายเหตุยังคงอยู่', $standardHtml);
+        $this->assertStringContainsString('class="footer standard-footer"', $standardHtml);
+        $this->assertStringContainsString('Valor Health Co., Ltd.', $standardHtml);
+        $this->assertStringContainsString('Tax ID.0105558041179', $standardHtml);
+        $this->assertLessThan(
+            strpos($standardHtml, 'ผู้มีอำนาจอนุมัติของบริษัท'),
+            strpos($standardHtml, 'ผู้มีอำนาจของลูกค้า / ผู้ยืนยันคำสั่งซื้อ'),
+        );
+        $this->assertStringNotContainsString('หลักฐานอิเล็กทรอนิกส์ผูกกับ Revision', $standardHtml);
+        $this->assertStringNotContainsString('ใบเสนอราคานี้ไม่ใช่ใบกำกับภาษี', $standardHtml);
+
+        $standardPayload['layout']['show_customer_details'] = false;
+        $standardPayload['layout']['show_confirmation_terms'] = false;
+        $standardPayload['layout']['show_document_note'] = false;
+        $standardPayload['layout']['show_signatures'] = false;
+        $withoutCustomerDetails = $documents->quotationEditorPdf($standardPayload, true);
+        $this->assertStringNotContainsString('<table class="customer">', $withoutCustomerDetails);
+        $this->assertStringNotContainsString('เงื่อนไขการยืนยัน:', $withoutCustomerDetails);
+        $this->assertStringNotContainsString('<strong>หมายเหตุ:</strong>', $withoutCustomerDetails);
+        $this->assertStringNotContainsString('class="signature-table"', $withoutCustomerDetails);
+        $this->assertStringContainsString('บริการ FibroScan', $withoutCustomerDetails);
+        $this->assertStringContainsString('class="footer standard-footer"', $withoutCustomerDetails);
+
+        $standardPayload['layout']['show_signatures'] = true;
+        $standardPayload['layout']['show_company_signature'] = true;
+        $standardPayload['layout']['show_customer_signature'] = false;
+        $companySignatureOnly = $documents->quotationEditorPdf($standardPayload, true);
+        $this->assertStringContainsString('ผู้มีอำนาจอนุมัติของบริษัท', $companySignatureOnly);
+        $this->assertStringNotContainsString('ผู้มีอำนาจของลูกค้า / ผู้ยืนยันคำสั่งซื้อ', $companySignatureOnly);
+        $this->assertStringContainsString('signature-table company-signature-only', $companySignatureOnly);
+
+        $standardPayload['layout']['show_company_signature'] = false;
+        $standardPayload['layout']['show_customer_signature'] = true;
+        $customerSignatureOnly = $documents->quotationEditorPdf($standardPayload, true);
+        $this->assertStringContainsString('signature-table customer-signature-only', $customerSignatureOnly);
+        $this->assertStringContainsString('ผู้มีอำนาจของลูกค้า / ผู้ยืนยันคำสั่งซื้อ', $customerSignatureOnly);
+        $this->assertStringNotContainsString('ผู้มีอำนาจอนุมัติของบริษัท', $customerSignatureOnly);
     }
 
     #[Test]

@@ -10,17 +10,15 @@ final class ProductUnitValidator
     /** @param array<int, array<string, mixed>> $items */
     public function validate(array $items): void
     {
-        $allowed = DB::table('master_product_units as assignment')
-            ->join('product_units as unit', 'unit.unit_id', '=', 'assignment.unit_id')
-            ->whereIn('assignment.sku_code', collect($items)->pluck('main_category')->filter()->unique())
-            ->get(['assignment.sku_code', 'unit.unit_name'])
-            ->mapWithKeys(fn ($row): array => [$row->sku_code."\0".$row->unit_name => true]);
+        $allowed = DB::table('product_units')
+            ->pluck('unit_name')
+            ->mapWithKeys(fn (string $unit): array => [trim($unit) => true]);
 
         $errors = [];
         foreach ($items as $index => $item) {
-            $pair = trim((string) ($item['main_category'] ?? ''))."\0".trim((string) ($item['unit_type'] ?? ''));
-            if (! $allowed->has($pair)) {
-                $errors["items.{$index}.unit_type"] = ['หน่วยสินค้านี้ไม่ได้ถูกกำหนดไว้สำหรับ SKU ที่เลือก'];
+            $unit = trim((string) ($item['unit_type'] ?? ''));
+            if ($unit === '' || ! $allowed->has($unit)) {
+                $errors["items.{$index}.unit_type"] = ['ไม่พบหน่วยนี้ในระบบ กรุณาติดต่อ Admin เพื่อเพิ่มหน่วยก่อนบันทึก'];
             }
         }
         if ($errors !== []) {

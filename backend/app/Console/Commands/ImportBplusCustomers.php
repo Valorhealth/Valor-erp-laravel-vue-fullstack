@@ -10,7 +10,7 @@ final class ImportBplusCustomers extends Command
 {
     protected $signature = 'bplus:import-customers {file : Absolute path to the Bplus XLSX file} {--dry-run : Validate and summarize without writing}';
 
-    protected $description = 'นำเข้าหรืออัปเดตรายชื่อลูกหนี้และที่อยู่จากไฟล์ Bplus';
+    protected $description = 'นำเข้าหรืออัปเดตรายชื่อลูกหนี้ ที่อยู่ วงเงิน และเครดิตเทอมจากไฟล์ Bplus';
 
     public function handle(BplusCustomerImporter $importer): int
     {
@@ -29,6 +29,7 @@ final class ImportBplusCustomers extends Command
             ['แถวที่ข้าม', $summary['skipped_rows']],
             ['ลูกค้าที่เขียน', $summary['customers_written']],
             ['ที่อยู่ที่เขียน', $summary['addresses_written']],
+            ['วงเงิน/เครดิตเทอมที่เขียน', $summary['credit_profiles_written']],
         ]);
         $this->info($this->option('dry-run') ? 'ตรวจสอบไฟล์สำเร็จ ยังไม่ได้เขียนฐานข้อมูล' : 'นำเข้าข้อมูลลูกหนี้สำเร็จ');
 

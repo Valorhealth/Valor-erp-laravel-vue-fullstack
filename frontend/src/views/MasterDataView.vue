@@ -58,8 +58,6 @@ const productForm = reactive({
   sku_code: "",
   sku_name: "",
   sku_e_name: "",
-  unit_ids: [] as number[],
-  default_unit_id: 0,
 });
 const unitForm = reactive({ unit_name: "" });
 const editingSku = ref("");
@@ -218,9 +216,7 @@ async function addProduct() {
         productForm,
       );
     else await api.post("/api/v1/master-data/products", productForm);
-    message.value = editingSku.value
-      ? "แก้ไขสินค้าและหน่วยแล้ว"
-      : "เพิ่มสินค้าแล้ว";
+    message.value = editingSku.value ? "แก้ไขสินค้าแล้ว" : "เพิ่มสินค้าแล้ว";
     clearProductForm();
     await load("products");
   } catch (cause) {
@@ -233,37 +229,14 @@ function clearProductForm() {
     sku_code: "",
     sku_name: "",
     sku_e_name: "",
-    unit_ids: [] as number[],
-    default_unit_id: 0,
   });
-  applyDefaultUnit();
-}
-function applyDefaultUnit() {
-  const piece =
-    units.value.find((unit) => unit.unit_name === "ชิ้น") || units.value[0];
-  if (piece && !productForm.unit_ids.length) {
-    productForm.unit_ids = [piece.unit_id];
-    productForm.default_unit_id = piece.unit_id;
-  }
 }
 function editProduct(product: Product) {
   editingSku.value = product.sku_code;
   productForm.sku_code = product.sku_code;
   productForm.sku_name = product.sku_name;
   productForm.sku_e_name = product.sku_e_name || "";
-  productForm.unit_ids = (product.units || []).map((unit) => unit.unit_id);
-  productForm.default_unit_id =
-    product.units?.find((unit) => unit.pivot?.is_default)?.unit_id ||
-    productForm.unit_ids[0] ||
-    0;
   window.scrollTo({ top: 0, behavior: "smooth" });
-}
-function toggleProductUnit(unitId: number, checked: boolean) {
-  productForm.unit_ids = checked
-    ? [...new Set([...productForm.unit_ids, unitId])]
-    : productForm.unit_ids.filter((id) => id !== unitId);
-  if (!productForm.unit_ids.includes(productForm.default_unit_id))
-    productForm.default_unit_id = productForm.unit_ids[0] || 0;
 }
 async function addUnit() {
   try {
@@ -271,7 +244,6 @@ async function addUnit() {
     unitForm.unit_name = "";
     message.value = "เพิ่มหน่วยสินค้าแล้ว";
     await load("units");
-    applyDefaultUnit();
   } catch (cause) {
     error.value = apiError(cause);
   }
@@ -303,7 +275,6 @@ async function remove(
 
 onMounted(async () => {
   await searchAll();
-  applyDefaultUnit();
 });
 </script>
 
@@ -631,34 +602,8 @@ onMounted(async () => {
         <label
           ><span>ชื่ออังกฤษ</span><input v-model="productForm.sku_e_name"
         /></label>
-        <fieldset class="span-2 unit-picker">
-          <legend>หน่วยที่ใช้กับสินค้านี้ *</legend>
-          <label v-for="unit in units" :key="unit.unit_id"
-            ><input
-              type="checkbox"
-              :checked="productForm.unit_ids.includes(unit.unit_id)"
-              @change="
-                toggleProductUnit(
-                  unit.unit_id,
-                  ($event.target as HTMLInputElement).checked,
-                )
-              "
-            /><span>{{ unit.unit_name }}</span
-            ><input
-              v-model.number="productForm.default_unit_id"
-              type="radio"
-              name="default-unit"
-              :value="unit.unit_id"
-              :disabled="!productForm.unit_ids.includes(unit.unit_id)"
-            /><small>ค่าเริ่มต้น</small></label
-          >
-        </fieldset>
-        <button
-          class="primary-button"
-          :disabled="
-            !productForm.unit_ids.length || !productForm.default_unit_id
-          "
-        >
+        <p class="span-2 muted">สินค้าทุกชิ้นใช้รายการหน่วยส่วนกลางร่วมกัน และเริ่มต้นด้วยหน่วย “ชิ้น”</p>
+        <button class="primary-button">
           {{ editingSku ? "บันทึกการแก้ไข" : "บันทึกสินค้า" }}
         </button>
       </form>
@@ -670,7 +615,6 @@ onMounted(async () => {
                 <th>SKU</th>
                 <th>ชื่อไทย</th>
                 <th>ชื่ออังกฤษ</th>
-                <th>หน่วยสินค้า</th>
                 <th></th>
               </tr>
             </thead>
@@ -680,18 +624,8 @@ onMounted(async () => {
                 <td>{{ row.sku_name }}</td>
                 <td>{{ row.sku_e_name || "-" }}</td>
                 <td>
-                  <span
-                    v-for="unit in row.units"
-                    :key="unit.unit_id"
-                    class="unit-chip"
-                    :class="{ default: unit.pivot?.is_default }"
-                    >{{ unit.unit_name
-                    }}{{ unit.pivot?.is_default ? " (เริ่มต้น)" : "" }}</span
-                  >
-                </td>
-                <td>
                   <button class="secondary-button" @click="editProduct(row)">
-                    จัดการหน่วย
+                    แก้ไขสินค้า
                   </button>
                 </td>
               </tr>
@@ -741,14 +675,12 @@ onMounted(async () => {
             <thead>
               <tr>
                 <th>ชื่อหน่วย</th>
-                <th>จำนวนสินค้าที่ใช้</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="unit in units" :key="unit.unit_id">
                 <td class="strong">{{ unit.unit_name }}</td>
-                <td>{{ unit.products_count || 0 }}</td>
                 <td>
                   <button class="danger-link" @click="removeUnit(unit)">
                     ลบ

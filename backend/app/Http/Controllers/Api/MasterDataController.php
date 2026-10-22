@@ -10,8 +10,8 @@ use App\Models\ProductUnit;
 use App\Models\Salesman;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -130,20 +130,15 @@ class MasterDataController extends Controller
             'sku_code' => ['required', 'string', 'max:255', Rule::unique('master_products', 'sku_code')],
             'sku_name' => ['required', 'string', 'max:255'],
             'sku_e_name' => ['nullable', 'string', 'max:255'],
-            'unit_ids' => ['nullable', 'array', 'min:1'],
-            'unit_ids.*' => ['integer', 'distinct', 'exists:product_units,unit_id'],
-            'default_unit_id' => ['nullable', 'integer', 'exists:product_units,unit_id'],
         ]);
         $product = DB::transaction(function () use ($data): MasterProduct {
-            $unitIds = collect($data['unit_ids'] ?? [ProductUnit::query()->where('unit_name', 'ชิ้น')->value('unit_id')])->filter()->map(fn ($id) => (int) $id)->unique()->values();
-            $defaultUnitId = (int) ($data['default_unit_id'] ?? $unitIds->first());
-            if (! $unitIds->contains($defaultUnitId)) {
-                throw ValidationException::withMessages(['default_unit_id' => 'หน่วยเริ่มต้นต้องอยู่ในรายการหน่วยของสินค้านี้']);
-            }
             $product = MasterProduct::query()->create(collect($data)->only(['sku_code', 'sku_name', 'sku_e_name'])->all());
-            $product->units()->sync($unitIds->mapWithKeys(fn (int $id): array => [$id => ['is_default' => $id === $defaultUnitId]])->all());
+            $pieceId = ProductUnit::query()->where('unit_name', 'ชิ้น')->value('unit_id');
+            if ($pieceId) {
+                $product->units()->syncWithoutDetaching([$pieceId => ['is_default' => true]]);
+            }
 
-            return $product->load('units');
+            return $product;
         });
         $this->forgetReferenceDataCache();
 
@@ -155,23 +150,11 @@ class MasterDataController extends Controller
         $data = $request->validate([
             'sku_name' => ['required', 'string', 'max:255'],
             'sku_e_name' => ['nullable', 'string', 'max:255'],
-            'unit_ids' => ['required', 'array', 'min:1'],
-            'unit_ids.*' => ['integer', 'distinct', 'exists:product_units,unit_id'],
-            'default_unit_id' => ['required', 'integer', 'exists:product_units,unit_id'],
         ]);
-        $unitIds = collect($data['unit_ids'])->map(fn ($id) => (int) $id)->unique()->values();
-        $defaultUnitId = (int) $data['default_unit_id'];
-        if (! $unitIds->contains($defaultUnitId)) {
-            throw ValidationException::withMessages(['default_unit_id' => 'หน่วยเริ่มต้นต้องอยู่ในรายการหน่วยของสินค้านี้']);
-        }
-
-        DB::transaction(function () use ($product, $data, $unitIds, $defaultUnitId): void {
-            $product->update(collect($data)->only(['sku_name', 'sku_e_name'])->all());
-            $product->units()->sync($unitIds->mapWithKeys(fn (int $id): array => [$id => ['is_default' => $id === $defaultUnitId]])->all());
-        });
+        $product->update(collect($data)->only(['sku_name', 'sku_e_name'])->all());
         $this->forgetReferenceDataCache();
 
-        return response()->json(['data' => $product->fresh()->load('units')]);
+        return response()->json(['data' => $product->fresh()]);
     }
 
     public function units(): JsonResponse
@@ -194,15 +177,18 @@ class MasterDataController extends Controller
 
     public function destroyUnit(ProductUnit $unit): JsonResponse
     {
-        if ($unit->products()->exists()) {
-            throw ValidationException::withMessages(['unit' => 'หน่วยนี้ยังผูกกับสินค้าอยู่ กรุณาถอดหน่วยออกจากสินค้าทุกชิ้นก่อนลบ']);
+        if ($unit->unit_name === 'ชิ้น') {
+            throw ValidationException::withMessages(['unit' => 'หน่วย “ชิ้น” เป็นหน่วยเริ่มต้นของระบบ จึงไม่สามารถลบได้']);
         }
         $usedHistorically = DB::table('bill_items')->where('unit_type', $unit->unit_name)->exists()
             || DB::table('quotation_items')->where('unit_type', $unit->unit_name)->exists();
         if ($usedHistorically) {
             throw ValidationException::withMessages(['unit' => 'หน่วยนี้ถูกใช้ในเอกสารแล้ว จึงลบไม่ได้ กรุณาถอดออกจากสินค้าที่ไม่ใช้แทน']);
         }
-        $unit->delete();
+        DB::transaction(function () use ($unit): void {
+            $unit->products()->detach();
+            $unit->delete();
+        });
         $this->forgetReferenceDataCache();
 
         return response()->json(status: 204);

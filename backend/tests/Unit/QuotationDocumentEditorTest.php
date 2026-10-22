@@ -264,6 +264,87 @@ class QuotationDocumentEditorTest extends TestCase
         $this->assertStringContainsString('9999999999999', $html);
     }
 
+    public function test_standard_quotation_keeps_a_flexible_table_layout_and_product_image(): void
+    {
+        $payload = $this->editor->open($this->quotation, 'standard', 'original')['payload'];
+        $payload['table_layout'] = [
+            ['id' => 'product-code', 'field' => 'sku', 'label' => 'รหัส', 'width' => 25, 'align' => 'center'],
+            ['id' => 'product-name', 'field' => 'description', 'label' => "รายละเอียดและรูปสินค้า\nDescription", 'width' => 55, 'align' => 'left'],
+            ['id' => 'total', 'field' => 'amount', 'label' => 'รวมเงิน', 'width' => 20, 'align' => 'right'],
+        ];
+        $payload['items'][0]['description'] = 'FibroScan Test Product';
+        $payload['items'][0]['image'] = 'data:image/png;base64,'.base64_encode(base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9SVK4AAAAASUVORK5CYII='));
+
+        $normalized = $this->editor->normalizedPayload($this->quotation, 'standard', 'original', $payload);
+        $html = app(DocumentService::class)->quotationEditorHtml($normalized);
+        $pdfHtml = app(DocumentService::class)->quotationEditorPdf($normalized, true);
+
+        $this->assertSame(['sku', 'description', 'amount'], array_column($normalized['table_layout'], 'field'));
+        $this->assertStringContainsString('รายละเอียดและรูปสินค้า', $html);
+        $this->assertStringContainsString('data:image/png;base64,', $html);
+        $this->assertStringContainsString('item-description-image', $pdfHtml);
+        $this->assertStringContainsString('item-description-content', $pdfHtml);
+        $this->assertStringContainsString('item-description-image-wrap', $pdfHtml);
+        $this->assertLessThan(
+            strpos($pdfHtml, 'item-description-image-wrap'),
+            strpos($pdfHtml, 'item-description-content'),
+        );
+        $this->assertStringNotContainsString('data-column-action=', $pdfHtml);
+        $this->assertStringNotContainsString('data-item-image-index=', $pdfHtml);
+        $this->assertStringContainsString('data-edit-path="items.0.description"', $html);
+        $this->assertStringContainsString('data-edit-path="document.summary_subtotal_label"', $html);
+        $this->assertStringContainsString('data-edit-path="document.summary_total_value"', $html);
+        $this->assertStringNotContainsString('data-edit-path="items.0.amount"', $html);
+
+        $payload['layout']['show_summary'] = false;
+        $withoutSummary = $this->editor->normalizedPayload($this->quotation, 'standard', 'original', $payload);
+        $withoutSummaryHtml = app(DocumentService::class)->quotationEditorHtml($withoutSummary);
+
+        $this->assertFalse($withoutSummary['layout']['show_summary']);
+        $this->assertStringNotContainsString('data-edit-path="document.summary_total_label"', $withoutSummaryHtml);
+        $this->assertStringNotContainsString('<table class="summary">', $withoutSummaryHtml);
+        $this->assertStringContainsString('data-edit-path="document.document_note"', $withoutSummaryHtml);
+
+        $payload['layout']['show_customer_details'] = false;
+        $withoutCustomer = $this->editor->normalizedPayload($this->quotation, 'standard', 'original', $payload);
+        $this->assertFalse($withoutCustomer['layout']['show_customer_details']);
+        $this->assertStringNotContainsString('<table class="customer">', app(DocumentService::class)->quotationEditorHtml($withoutCustomer));
+    }
+
+    public function test_editable_text_preserves_leading_internal_and_tab_indentation_through_preview_and_pdf(): void
+    {
+        $payload = $this->editor->open($this->quotation, 'standard', 'original')['payload'];
+        $payload['document']['intro'] = "เรียน ผู้อำนวยการ\n    บริษัท เวเลอร์  เฮลธ์ จำกัด";
+        $payload['document']['document_note'] = "\tหมายเหตุที่เยื้อง";
+        $payload['items'][0]['description'] = '  สินค้า  ทดสอบ';
+        $payload['terms'][0] = '    เงื่อนไข  ทดสอบ';
+
+        $normalized = $this->editor->normalizedPayload($this->quotation, 'standard', 'original', $payload);
+        $previewHtml = app(DocumentService::class)->quotationEditorHtml($normalized);
+        $pdfHtml = app(DocumentService::class)->quotationEditorPdf($normalized, true);
+
+        $this->assertSame($payload['document']['intro'], $normalized['document']['intro']);
+        $this->assertSame('    หมายเหตุที่เยื้อง', $normalized['document']['document_note']);
+        $this->assertSame($payload['items'][0]['description'], $normalized['items'][0]['description']);
+        $this->assertSame($payload['terms'][0], $normalized['terms'][0]);
+        $this->assertStringContainsString(str_repeat('&nbsp;', 4).'บริษัท เวเลอร์'.str_repeat('&nbsp;', 2).'เฮลธ์ จำกัด', $previewHtml);
+        $this->assertStringContainsString(str_repeat('&nbsp;', 4).'หมายเหตุที่เยื้อง', $pdfHtml);
+        $this->assertStringContainsString(str_repeat('&nbsp;', 2).'สินค้า'.str_repeat('&nbsp;', 2).'ทดสอบ', $pdfHtml);
+    }
+
+    public function test_hospital_template_exposes_its_table_inside_the_document_editor(): void
+    {
+        $payload = $this->editor->open($this->quotation, QuotationTemplateCatalog::RAMATHIBODI, 'original')['payload'];
+        $html = app(DocumentService::class)->quotationEditorHtml($payload);
+
+        $this->assertSame(['sequence', 'sku', 'description', 'unit', 'unit_price', 'remark'], array_column($payload['table_layout'], 'field'));
+        $this->assertStringContainsString('data-edit-path="table_layout.0.label"', $html);
+        $this->assertStringContainsString('data-column-resize="0"', $html);
+        $this->assertStringContainsString('data-column-action="add"', $html);
+        $this->assertStringContainsString('data-column-field="0"', $html);
+        $this->assertStringContainsString('data-item-image-index="0"', $html);
+    }
+
     public function test_approved_download_signs_only_the_quotation_and_keeps_the_power_of_attorney_unsigned(): void
     {
         $payload = $this->editor->open($this->quotation, QuotationTemplateCatalog::LUANGPHO_THAWEESAK, 'original')['payload'];

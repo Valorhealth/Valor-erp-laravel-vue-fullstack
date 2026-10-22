@@ -12,12 +12,23 @@ type EditorItem = {
   sku: string
   description: string
   quantity: number
+  quantity_display?: string
   unit: string
   pack: string
   unit_price: number
+  unit_price_display?: string
   discount: number
+  discount_display?: string
   remark: string
   origin_details: string
+  image: string
+}
+type TableColumn = {
+  id: string
+  field: 'sequence' | 'sku' | 'description' | 'quantity' | 'unit' | 'pack' | 'unit_price' | 'discount' | 'amount' | 'remark' | 'origin_details'
+  label: string
+  width: number
+  align: 'left' | 'center' | 'right'
 }
 type EditorPayload = {
   template: string
@@ -52,6 +63,17 @@ type EditorPayload = {
     tax_id: string
   }
   items: EditorItem[]
+  table_layout: TableColumn[]
+  layout: {
+    show_summary: boolean
+    show_customer_details: boolean
+    show_confirmation_terms: boolean
+    show_document_note: boolean
+    show_company_signature: boolean
+    show_customer_signature: boolean
+    title_alignment: 'left' | 'center' | 'right'
+    logo_alignment: 'left' | 'center' | 'right'
+  }
   bill_discount: number
   power_of_attorney: {
     enabled: boolean
@@ -141,6 +163,9 @@ let htmlRequestSequence = 0
 let authorizationRequestSequence = 0
 let authorizationHtmlRequestSequence = 0
 let changeSequence = 0
+const AUTO_SAVE_DELAY_MS = 2_500
+const AUTO_PREVIEW_DELAY_MS = 3_500
+const CHANGE_HISTORY_DELAY_MS = 900
 
 const templateNames: Record<string, string> = {
   standard: 'ใบเสนอราคามาตรฐาน', siriraj: 'รพ.ศิริราช', 'luangpho-thaweesak': 'รพ.หลวงพ่อทวีศักดิ์',
@@ -186,7 +211,7 @@ function addItem() {
   const product = products.value.find((option) => option.sku_code === productToAdd.value)
   if (!product) { error.value = 'กรุณาค้นหาและเลือกสินค้าจาก Master Product ก่อนเพิ่มรายการ'; return }
   checkpoint()
-  payload.value.items.push({ row_key: `new-${Date.now()}-${Math.random().toString(36).slice(2)}`, sku: product.sku_code, description: product.sku_name, quantity: 1, unit: 'ชิ้น', pack: '1 ชิ้น', unit_price: 0, discount: 0, remark: '', origin_details: '' })
+  payload.value.items.push({ row_key: `new-${Date.now()}-${Math.random().toString(36).slice(2)}`, sku: product.sku_code, description: product.sku_name, quantity: 1, unit: 'ชิ้น', pack: '1 ชิ้น', unit_price: 0, discount: 0, remark: '', origin_details: '', image: '' })
   productToAdd.value = ''
   nextTick(refreshExactEditor)
 }
@@ -196,6 +221,46 @@ function removeItem(index: number) {
 }
 function addTerm() { if (payload.value && payload.value.terms.length < 30) { checkpoint(); payload.value.terms.push('เงื่อนไขเพิ่มเติม'); nextTick(refreshExactEditor) } }
 function removeTerm(index: number) { if (payload.value) { checkpoint(); payload.value.terms.splice(index, 1); nextTick(refreshExactEditor) } }
+function toggleSummary() {
+  if (!payload.value) return
+  checkpoint()
+  payload.value.layout.show_summary = !payload.value.layout.show_summary
+  changed()
+  nextTick(refreshExactEditor)
+}
+function toggleCustomerDetails() {
+  if (!payload.value) return
+  checkpoint()
+  payload.value.layout.show_customer_details = !payload.value.layout.show_customer_details
+  changed()
+  nextTick(refreshExactEditor)
+}
+function toggleDocumentSection(section: 'show_confirmation_terms' | 'show_document_note' | 'show_company_signature' | 'show_customer_signature') {
+  if (!payload.value) return
+  checkpoint()
+  payload.value.layout[section] = !payload.value.layout[section]
+  changed()
+  nextTick(refreshExactEditor)
+}
+function toggleTitleAlignment() {
+  if (!payload.value) return
+  checkpoint()
+  const positions: EditorPayload['layout']['title_alignment'][] = ['left', 'center', 'right']
+  payload.value.layout.title_alignment = positions[(positions.indexOf(payload.value.layout.title_alignment) + 1) % positions.length]
+  changed()
+  nextTick(refreshExactEditor)
+}
+function toggleLogoAlignment() {
+  if (!payload.value) return
+  checkpoint()
+  const positions: EditorPayload['layout']['logo_alignment'][] = ['left', 'center', 'right']
+  payload.value.layout.logo_alignment = positions[(positions.indexOf(payload.value.layout.logo_alignment) + 1) % positions.length]
+  changed()
+  nextTick(refreshExactEditor)
+}
+function alignmentLabel(position: 'left' | 'center' | 'right') {
+  return ({ left: 'ซ้าย', center: 'กลาง', right: 'ขวา' } as const)[position]
+}
 function changed() {
   if (ignoreChanges || locked.value || !payload.value) return
   changeSequence += 1
@@ -203,19 +268,24 @@ function changed() {
   if (saveTimer !== null) window.clearTimeout(saveTimer)
   if (previewTimer !== null) window.clearTimeout(previewTimer)
   if (historyTimer !== null) window.clearTimeout(historyTimer)
-  saveTimer = window.setTimeout(saveDraft, 850)
+  saveTimer = window.setTimeout(() => {
+    saveTimer = null
+    void saveDraft()
+  }, AUTO_SAVE_DELAY_MS)
   previewTimer = window.setTimeout(async () => {
+    previewTimer = null
     await Promise.all([refreshPreview(), refreshAuthorizationPreview()])
-  }, 1_100)
-  historyTimer = window.setTimeout(checkpoint, 450)
+  }, AUTO_PREVIEW_DELAY_MS)
+  historyTimer = window.setTimeout(checkpoint, CHANGE_HISTORY_DELAY_MS)
 }
 async function saveDraft() {
   if (!payload.value || locked.value || saving.value) return
   const savingSequence = changeSequence
+  const payloadSnapshot = clonePayload(payload.value)
   saving.value = true; error.value = ''
   try {
     const response = await api.put<{ data: { lock_version: number; saved_at: string } }>(`/api/v1/quotations/${quotationId}/document-editor/draft`, {
-      template, mode, lock_version: lockVersion.value, payload: payload.value,
+      template, mode, lock_version: lockVersion.value, payload: payloadSnapshot,
     })
     lockVersion.value = response.data.data.lock_version
     saveMessage.value = `บันทึกอัตโนมัติแล้ว ${new Date(response.data.data.saved_at).toLocaleTimeString('th-TH')}`
@@ -224,31 +294,46 @@ async function saveDraft() {
     saving.value = false
     if (changeSequence > savingSequence) {
       if (saveTimer !== null) window.clearTimeout(saveTimer)
-      saveTimer = window.setTimeout(saveDraft, 350)
+      saveTimer = window.setTimeout(() => {
+        saveTimer = null
+        void saveDraft()
+      }, AUTO_SAVE_DELAY_MS)
     }
   }
 }
 async function refreshPreview() {
   if (!payload.value) return
   const sequence = ++requestSequence
+  const payloadSnapshot = clonePayload(payload.value)
   previewing.value = true
   try {
     if (locked.value && !approvedVersionId.value) throw new Error('รูปแบบนี้ไม่ใช่ใบเสนอราคาฉบับที่ส่งอนุมัติ กรุณาเปิดรูปแบบที่ยืนยันไว้')
     const response = locked.value
-      ? await api.get<Blob>(`/api/v1/quotations/${quotationId}/document-versions/${approvedVersionId.value}/pdf`, { responseType: 'blob' })
-      : await api.post<Blob>(`/api/v1/quotations/${quotationId}/document-editor/preview`, { template, mode, payload: payload.value }, { responseType: 'blob' })
+      ? await api.get<Blob>(`/api/v1/quotations/${quotationId}/document-versions/${approvedVersionId.value}/pdf`, { responseType: 'blob', timeout: 120_000 })
+      : await api.post<Blob>(`/api/v1/quotations/${quotationId}/document-editor/preview`, { template, mode, payload: payloadSnapshot }, { responseType: 'blob', timeout: 120_000 })
     if (sequence !== requestSequence) return
     const nextUrl = URL.createObjectURL(response.data)
     if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
     previewUrl.value = nextUrl
-  } catch (cause) { if (sequence === requestSequence) error.value = apiError(cause, 'สร้างตัวอย่าง PDF ไม่สำเร็จ') }
+  } catch (cause) { if (sequence === requestSequence) error.value = await previewError(cause) }
   finally { if (sequence === requestSequence) previewing.value = false }
+}
+async function previewError(cause: unknown): Promise<string> {
+  const data = (cause as { response?: { data?: unknown } })?.response?.data
+  if (data instanceof Blob) {
+    try {
+      const decoded = JSON.parse(await data.text()) as { message?: string; errors?: Record<string, string[]> }
+      return (decoded.errors ? Object.values(decoded.errors).flat()[0] : undefined) || decoded.message || 'สร้างตัวอย่าง PDF ไม่สำเร็จ'
+    } catch { /* Non-JSON responses use the standard fallback below. */ }
+  }
+  return apiError(cause, 'สร้างตัวอย่าง PDF ไม่สำเร็จ')
 }
 async function refreshExactEditor() {
   if (!payload.value || locked.value) return
   const sequence = ++htmlRequestSequence
+  const payloadSnapshot = clonePayload(payload.value)
   try {
-    const response = await api.post<string>(`/api/v1/quotations/${quotationId}/document-editor/preview.html`, { template, mode, payload: payload.value }, { responseType: 'text' })
+    const response = await api.post<string>(`/api/v1/quotations/${quotationId}/document-editor/preview.html`, { template, mode, payload: payloadSnapshot }, { responseType: 'text' })
     if (sequence === htmlRequestSequence) exactHtml.value = response.data
   } catch (cause) {
     if (sequence === htmlRequestSequence) error.value = apiError(cause, 'สร้างเอกสารแก้ไขตาม Template ไม่สำเร็จ')
@@ -306,9 +391,14 @@ async function toggleAuthorization() {
 }
 function updateFromExactPath(path: string, rawValue: string) {
   if (!payload.value) return
+  const editableText = rawValue
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n[ \t]*\n+/g, '\n')
+    .replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, '')
   const parts = path.split('.')
   if (parts[0] === 'document' && parts[1] && parts[1] in payload.value.document) {
-    ;(payload.value.document as unknown as Record<string, string>)[parts[1]] = rawValue.trim()
+    ;(payload.value.document as unknown as Record<string, string>)[parts[1]] = editableText
     return
   }
   if (parts[0] === 'customer' && parts[1] && ['code', 'billing_address', 'delivery_address', 'tax_id'].includes(parts[1])) {
@@ -316,18 +406,58 @@ function updateFromExactPath(path: string, rawValue: string) {
     return
   }
   if (parts[0] === 'terms' && /^\d+$/.test(parts[1] || '')) {
-    const index = Number(parts[1]); if (payload.value.terms[index] !== undefined) payload.value.terms[index] = rawValue.trim()
+    const index = Number(parts[1]); if (payload.value.terms[index] !== undefined) payload.value.terms[index] = editableText
+    return
+  }
+  if (parts[0] === 'table_layout' && /^\d+$/.test(parts[1] || '') && parts[2] === 'label') {
+    const column = payload.value.table_layout[Number(parts[1])]
+    if (column) column.label = rawValue.trim().slice(0, 255)
     return
   }
   if (parts[0] === 'items' && /^\d+$/.test(parts[1] || '') && parts[2]) {
     const item = payload.value.items[Number(parts[1])]
     if (!item || !['sku', 'description', 'quantity', 'unit', 'pack', 'unit_price', 'discount', 'remark', 'origin_details'].includes(parts[2])) return
     if (parts[2] === 'quantity' || parts[2] === 'unit_price' || parts[2] === 'discount') {
-      ;(item as unknown as Record<string, string | number>)[parts[2]] = Math.max(Number(rawValue.replace(/,/g, '')) || 0, 0)
+      const lines = editableText.split('\n').map(value => Math.max(Number(value.replace(/[^0-9.,-]/g, '').replace(/,/g, '')) || 0, 0))
+      const displayKey = `${parts[2]}_display`
+      ;(item as unknown as Record<string, string | number>)[displayKey] = editableText
+      ;(item as unknown as Record<string, string | number>)[parts[2]] = parts[2] === 'quantity'
+        ? lines.reduce((sum, value) => sum + value, 0)
+        : (lines[0] || 0)
     } else {
-      ;(item as unknown as Record<string, string>)[parts[2]] = rawValue.trim()
+      ;(item as unknown as Record<string, string>)[parts[2]] = ['description', 'remark', 'origin_details'].includes(parts[2]) ? editableText : editableText.trim()
     }
   }
+}
+function mutateColumns(action: string, index: number) {
+  if (!payload.value || index < 0 || index >= payload.value.table_layout.length) return
+  const columns = payload.value.table_layout
+  checkpoint()
+  if (action === 'left' && index > 0) [columns[index - 1], columns[index]] = [columns[index], columns[index - 1]]
+  if (action === 'right' && index < columns.length - 1) [columns[index + 1], columns[index]] = [columns[index], columns[index + 1]]
+  if (action === 'remove' && columns.length > 3) columns.splice(index, 1)
+  if (action === 'add' && columns.length < 12) columns.splice(index + 1, 0, { id: `remark-${Date.now()}`, field: 'remark', label: 'หมายเหตุ', width: 12, align: 'left' })
+  nextTick(() => { changed(); refreshExactEditor() })
+}
+function setColumnField(index: number, field: TableColumn['field']) {
+  const column = payload.value?.table_layout[index]
+  if (!column) return
+  checkpoint(); column.field = field
+  nextTick(() => { changed(); refreshExactEditor() })
+}
+function setItemImage(index: number, file?: File) {
+  const item = payload.value?.items[index]
+  if (!item || !file) return
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 1_500_000) {
+    error.value = 'รูปสินค้าต้องเป็น PNG, JPEG หรือ WebP และมีขนาดไม่เกิน 1.5 MB'
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => {
+    if (typeof reader.result !== 'string') return
+    checkpoint(); item.image = reader.result; changed(); refreshExactEditor()
+  }
+  reader.readAsDataURL(file)
 }
 function bindExactEditor() {
   if (locked.value) return
@@ -336,8 +466,75 @@ function bindExactEditor() {
   const resize = () => { if (exactFrame.value) exactFrame.value.style.height = `${Math.max(doc.documentElement.scrollHeight, 1123)}px` }
   doc.querySelectorAll<HTMLElement>('[data-edit-path]').forEach((element) => {
     element.addEventListener('focus', checkpoint)
-    element.addEventListener('input', () => updateFromExactPath(element.dataset.editPath || '', element.innerText || element.textContent || ''))
-    element.addEventListener('blur', () => { updateFromExactPath(element.dataset.editPath || '', element.innerText || element.textContent || ''); window.setTimeout(refreshExactEditor, 0) })
+    element.addEventListener('keydown', (event) => {
+      if (event.key !== 'Tab') return
+      event.preventDefault()
+      const selection = doc.getSelection()
+      if (!selection || selection.rangeCount === 0) return
+      const range = selection.getRangeAt(0)
+      range.deleteContents()
+      const indentation = doc.createTextNode('    ')
+      range.insertNode(indentation)
+      range.setStartAfter(indentation)
+      range.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(range)
+      element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '    ' }))
+    })
+    element.addEventListener('input', () => {
+      const path = element.dataset.editPath || ''
+      updateFromExactPath(path, element.innerText || element.textContent || '')
+      changed()
+    })
+    element.addEventListener('blur', () => {
+      const path = element.dataset.editPath || ''
+      updateFromExactPath(path, element.innerText || element.textContent || '')
+    })
+  })
+  doc.querySelectorAll<HTMLButtonElement>('[data-column-action]').forEach((button) => {
+    button.addEventListener('click', () => mutateColumns(button.dataset.columnAction || '', Number(button.dataset.columnIndex)))
+  })
+  doc.querySelectorAll<HTMLSelectElement>('[data-column-field]').forEach((select) => {
+    select.addEventListener('change', () => setColumnField(Number(select.dataset.columnField), select.value as TableColumn['field']))
+  })
+  doc.querySelectorAll<HTMLInputElement>('[data-item-image-index]').forEach((input) => {
+    input.addEventListener('change', () => setItemImage(Number(input.dataset.itemImageIndex), input.files?.[0]))
+  })
+  doc.querySelectorAll<HTMLButtonElement>('[data-item-image-remove]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const item = payload.value?.items[Number(button.dataset.itemImageRemove)]
+      if (!item) return
+      checkpoint(); item.image = ''; changed(); refreshExactEditor()
+    })
+  })
+  doc.querySelectorAll<HTMLElement>('[data-column-resize]').forEach((handle) => {
+    handle.addEventListener('pointerdown', (event) => {
+      const index = Number(handle.dataset.columnResize)
+      const columns = payload.value?.table_layout
+      const table = handle.closest('table')
+      if (!columns || !table || index < 0 || index >= columns.length - 1) return
+      event.preventDefault(); checkpoint()
+      const startX = event.clientX
+      const first = columns[index].width
+      const second = columns[index + 1].width
+      const onMove = (move: PointerEvent) => {
+        const delta = ((move.clientX - startX) / Math.max(table.getBoundingClientRect().width, 1)) * 100
+        const nextFirst = Math.max(5, Math.min(first + second - 5, first + delta))
+        columns[index].width = Number(nextFirst.toFixed(2))
+        columns[index + 1].width = Number((first + second - nextFirst).toFixed(2))
+        const header = handle.closest('th') as HTMLElement | null
+        const nextHeader = header?.nextElementSibling as HTMLElement | null
+        if (header) header.style.width = `${columns[index].width}%`
+        if (nextHeader) nextHeader.style.width = `${columns[index + 1].width}%`
+      }
+      const onUp = () => {
+        doc.removeEventListener('pointermove', onMove)
+        doc.removeEventListener('pointerup', onUp)
+        changed(); refreshExactEditor()
+      }
+      doc.addEventListener('pointermove', onMove)
+      doc.addEventListener('pointerup', onUp)
+    })
   })
   resize()
 }
@@ -377,7 +574,7 @@ async function confirmDocument() {
     await load()
     await downloadFile(`/api/v1/quotations/${quotationId}/document-versions/${version.document_version_id}/pdf`, version.filename, 'get', undefined, true)
     saveMessage.value = `ยืนยันและจัดเก็บ Revision ${version.revision_no} แล้ว`
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : apiError(cause, 'ยืนยันใบเสนอราคาไม่สำเร็จ') }
+  } catch (cause) { error.value = apiError(cause, 'ยืนยันใบเสนอราคาไม่สำเร็จ') }
   finally { confirming.value = false }
 }
 async function submitHelpRequest() {
@@ -491,15 +688,22 @@ onBeforeRouteLeave(async () => {
     <div v-if="loading" class="content-card">กำลังเตรียมเอกสาร…</div>
     <div v-else-if="payload" class="quotation-editor-grid">
       <section class="canvas-scroll" :class="{ 'mobile-hidden': mobilePane !== 'edit' }">
-        <div v-if="locked" class="exact-editor"><iframe v-if="previewUrl" :src="previewUrl" title="ใบเสนอราคาฉบับที่ยืนยัน"></iframe><div v-else class="exact-editor-loading">กำลังโหลด PDF ฉบับที่ยืนยัน…</div></div>
+        <div v-if="locked" class="exact-editor"><iframe v-if="previewUrl" :key="previewUrl" :src="previewUrl" title="ใบเสนอราคาฉบับที่ยืนยัน"></iframe><div v-else class="exact-editor-loading">กำลังโหลด PDF ฉบับที่ยืนยัน…</div></div>
         <div v-else-if="exactHtml" class="exact-editor">
-          <div class="exact-editor-controls"><label>เลขที่เอกสาร<input v-model="payload.document.number" @change="refreshExactEditor"></label><label>วันที่เอกสาร<input v-model="payload.document.date" type="date" @change="refreshExactEditor"></label><label>สินค้าใหม่<SearchableSelect v-model="productToAdd" :options="products.map(product => ({ value: product.sku_code, label: `${product.sku_code} | ${product.sku_name}` }))" placeholder="พิมพ์รหัสหรือชื่อสินค้า" /></label><button class="add-row" type="button" @click="addItem">＋ เพิ่มสินค้า</button><button class="add-row" type="button" :disabled="payload.items.length <= 1" @click="removeItem(payload.items.length - 1)">− ลบสินค้าท้ายสุด</button><button class="add-row" type="button" @click="addTerm">＋ เพิ่มหมายเหตุ</button><button class="add-row" type="button" :disabled="!payload.terms.length" @click="removeTerm(payload.terms.length - 1)">− ลบหมายเหตุท้ายสุด</button><small>คลิกข้อความที่มีกรอบสีฟ้าบนเอกสารเพื่อแก้ไขตรงตำแหน่งจริง</small></div>
+          <div class="exact-editor-controls">
+            <label>เลขที่เอกสาร<input v-model="payload.document.number" @change="refreshExactEditor"></label><label>วันที่เอกสาร<input v-model="payload.document.date" type="date" @change="refreshExactEditor"></label><label>สินค้าใหม่<SearchableSelect v-model="productToAdd" :options="products.map(product => ({ value: product.sku_code, label: `${product.sku_code} | ${product.sku_name}` }))" placeholder="พิมพ์รหัสหรือชื่อสินค้า" /></label>
+            <button class="add-row" type="button" @click="addItem">＋ เพิ่มสินค้า</button><button class="add-row" type="button" :disabled="payload.items.length <= 1" @click="removeItem(payload.items.length - 1)">− ลบสินค้าท้ายสุด</button><button class="add-row" type="button" @click="addTerm">＋ เพิ่มหมายเหตุ</button><button class="add-row" type="button" :disabled="!payload.terms.length" @click="removeTerm(payload.terms.length - 1)">− ลบหมายเหตุท้ายสุด</button>
+            <button class="add-row" type="button" @click="toggleLogoAlignment">โลโก้: {{ alignmentLabel(payload.layout.logo_alignment) }}</button><button class="add-row" type="button" @click="toggleTitleAlignment">หัวข้อ: {{ alignmentLabel(payload.layout.title_alignment) }}</button><button class="add-row" type="button" @click="toggleCustomerDetails">{{ payload.layout.show_customer_details ? '− ซ่อนตารางข้อมูลลูกค้า' : '＋ แสดงตารางข้อมูลลูกค้า' }}</button>
+            <button class="add-row" type="button" @click="toggleDocumentSection('show_confirmation_terms')">{{ payload.layout.show_confirmation_terms ? '− ซ่อนเงื่อนไขการยืนยัน' : '＋ แสดงเงื่อนไขการยืนยัน' }}</button><button class="add-row" type="button" @click="toggleDocumentSection('show_document_note')">{{ payload.layout.show_document_note ? '− ซ่อนหมายเหตุ' : '＋ แสดงหมายเหตุ' }}</button>
+            <button class="add-row" type="button" @click="toggleDocumentSection('show_company_signature')">{{ payload.layout.show_company_signature ? '− ซ่อนลายเซ็นผู้มีอำนาจบริษัท' : '＋ แสดงลายเซ็นผู้มีอำนาจบริษัท' }}</button><button class="add-row" type="button" @click="toggleDocumentSection('show_customer_signature')">{{ payload.layout.show_customer_signature ? '− ซ่อนลายเซ็นผู้มีอำนาจลูกค้า' : '＋ แสดงลายเซ็นผู้มีอำนาจลูกค้า' }}</button>
+            <button class="add-row summary-toggle" type="button" @click="toggleSummary">{{ payload.layout.show_summary ? '− ซ่อนตารางสรุปราคา' : '＋ แสดงตารางสรุปราคา' }}</button><small>รองรับการเว้นวรรคหลายช่อง การกด Tab และการขึ้นบรรทัดใหม่ · คลิกข้อความที่มีกรอบสีฟ้าบนเอกสารเพื่อแก้ไขตรงตำแหน่งจริง</small>
+          </div>
           <iframe ref="exactFrame" :srcdoc="exactHtml" title="เอกสารใบเสนอราคาแบบแก้ไขตรง Template" sandbox="allow-same-origin" @load="bindExactEditor"></iframe>
         </div>
         <div v-else class="exact-editor-loading">กำลังสร้างหน้าแก้ไขจาก Template เดียวกับ PDF…</div>
       </section>
 
-      <aside class="preview-panel" :class="{ 'mobile-hidden': mobilePane !== 'preview' }"><div class="preview-heading"><div><strong>{{ locked ? 'PDF ฉบับที่ยืนยัน' : 'PDF จริง' }}</strong><small>{{ locked ? `สถานะ ${documentStatus} · ไม่สามารถแก้ไขต้นฉบับหลังส่งอนุมัติ` : 'อัปเดตอัตโนมัติหลังหยุดพิมพ์' }}</small></div><span v-if="previewing" class="preview-loading">{{ locked ? 'กำลังโหลด…' : 'กำลังสร้าง…' }}</span></div><iframe v-if="previewUrl" :src="previewUrl" title="ตัวอย่างใบเสนอราคา PDF"></iframe><div v-else class="preview-empty">{{ error || 'กำลังสร้างตัวอย่าง PDF…' }}</div>
+      <aside class="preview-panel" :class="{ 'mobile-hidden': mobilePane !== 'preview' }"><div class="preview-heading"><div><strong>{{ locked ? 'PDF ฉบับที่ยืนยัน' : 'PDF จริง' }}</strong><small>{{ locked ? `สถานะ ${documentStatus} · ไม่สามารถแก้ไขต้นฉบับหลังส่งอนุมัติ` : 'อัปเดตอัตโนมัติหลังหยุดพิมพ์' }}</small></div><span v-if="previewing" class="preview-loading">{{ locked ? 'กำลังโหลด…' : 'กำลังสร้าง…' }}</span></div><iframe v-if="previewUrl" :key="previewUrl" :src="previewUrl" title="ตัวอย่างใบเสนอราคา PDF"></iframe><div v-else class="preview-empty">{{ error || 'กำลังสร้างตัวอย่าง PDF…' }}</div>
         <details v-if="versions.length" class="version-history"><summary>เอกสารที่ยืนยันแล้ว ({{ versions.length }})</summary><div v-for="version in versions" :key="version.document_version_id" class="version-row"><span><b>Revision {{ version.revision_no }}{{ version.document_version_id === approvedVersionId ? ' · ฉบับปัจจุบัน' : ' · ฉบับก่อนหน้า' }}</b><small>{{ new Date(version.created_at).toLocaleString('th-TH') }} · {{ version.confirmed_by }}</small></span><button class="secondary-button" @click="downloadFile(`/api/v1/quotations/${quotationId}/document-versions/${version.document_version_id}/pdf`, version.filename)">ดาวน์โหลด</button></div></details>
       </aside>
     </div>
@@ -511,7 +715,7 @@ onBeforeRouteLeave(async () => {
           <div v-if="authorizationExactHtml" class="exact-editor"><div class="exact-editor-controls"><label>เลขที่หนังสือ<input v-model="payload.power_of_attorney.authorization_no" @change="refreshAuthorizationEditor"></label><label>วันที่ออกหนังสือ<input v-model="payload.power_of_attorney.issue_date" type="date" @change="refreshAuthorizationEditor"></label><small>คลิกข้อความที่มีกรอบสีฟ้าบนหนังสือมอบอำนาจเพื่อแก้ไขตรงตำแหน่งจริง</small></div><iframe ref="authorizationFrame" :srcdoc="authorizationExactHtml" title="หนังสือมอบอำนาจแบบแก้ไขตรง Template" sandbox="allow-same-origin" @load="bindAuthorizationEditor"></iframe></div>
           <div v-else class="exact-editor-loading">กำลังสร้างหน้าแก้ไขหนังสือมอบอำนาจ…</div>
         </section>
-        <aside class="preview-panel authorization-preview"><div class="preview-heading"><div><strong>PDF หนังสือมอบอำนาจจริง</strong><small>อัปเดตอัตโนมัติหลังหยุดพิมพ์</small></div><span v-if="authorizationPreviewing" class="preview-loading">กำลังสร้าง…</span></div><iframe v-if="authorizationPreviewUrl" :src="authorizationPreviewUrl" title="ตัวอย่างหนังสือมอบอำนาจ PDF"></iframe><div v-else class="preview-empty">กำลังสร้างตัวอย่าง PDF…</div></aside>
+        <aside class="preview-panel authorization-preview"><div class="preview-heading"><div><strong>PDF หนังสือมอบอำนาจจริง</strong><small>อัปเดตอัตโนมัติหลังหยุดพิมพ์</small></div><span v-if="authorizationPreviewing" class="preview-loading">กำลังสร้าง…</span></div><iframe v-if="authorizationPreviewUrl" :key="authorizationPreviewUrl" :src="authorizationPreviewUrl" title="ตัวอย่างหนังสือมอบอำนาจ PDF"></iframe><div v-else class="preview-empty">กำลังสร้างตัวอย่าง PDF…</div></aside>
       </div>
     </section>
   </AppShell>

@@ -58,14 +58,17 @@ class ProductUnitManagementTest extends TestCase
         $this->assertTrue(Schema::hasColumn('users', 'salesman_id'));
     }
 
-    public function test_validator_rejects_a_unit_not_assigned_to_the_product(): void
+    public function test_validator_accepts_every_global_unit_and_rejects_unknown_units(): void
     {
         $validator = app(ProductUnitValidator::class);
         $validator->validate([['main_category' => 'SKU-1', 'unit_type' => 'ชิ้น']]);
         $this->addToAssertionCount(1);
 
         DB::table('product_units')->insert(['unit_name' => 'ลัง', 'created_at' => now(), 'updated_at' => now()]);
-        $this->expectException(ValidationException::class);
         $validator->validate([['main_category' => 'SKU-1', 'unit_type' => 'ลัง']]);
+        $this->addToAssertionCount(1);
+
+        $this->expectException(ValidationException::class);
+        $validator->validate([['main_category' => 'SKU-1', 'unit_type' => 'หน่วยที่ไม่มีในระบบ']]);
     }
 }

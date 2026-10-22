@@ -5,6 +5,15 @@ use Illuminate\Http\Request;
 
 define('LARAVEL_START', microtime(true));
 
+// Document PDF rendering embeds the Thai font and can legitimately take
+// longer than PHP's 30-second default when Supabase has to establish a fresh
+// pooled connection first. Limit the extension to authenticated document
+// operations instead of raising the execution time for the whole application.
+$requestPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+if (preg_match('#/api/v1/quotations/[^/]+/(?:document-editor/(?:preview|confirm)|document-versions/)#', $requestPath) === 1) {
+    set_time_limit(120);
+}
+
 // Determine if the application is in maintenance mode...
 if (file_exists($maintenance = __DIR__.'/../storage/framework/maintenance.php')) {
     require $maintenance;

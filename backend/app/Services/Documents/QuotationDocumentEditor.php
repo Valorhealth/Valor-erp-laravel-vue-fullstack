@@ -3,7 +3,6 @@
 namespace App\Services\Documents;
 
 use App\Models\BillingRecord;
-use App\Models\MasterProduct;
 use App\Models\Quotation;
 use App\Models\QuotationDocumentDraft;
 use App\Models\QuotationDocumentVersion;
@@ -138,7 +137,9 @@ final class QuotationDocumentEditor
             if ($bill && $bill->status !== 'ฉบับร่าง' && $mode === 'original') {
                 throw ValidationException::withMessages(['status' => 'ใบเสนอราคาต้นฉบับส่งอนุมัติแล้ว ไม่สามารถยืนยันฉบับใหม่ทับรายการเดิม']);
             }
+            $canManageDocuments = RoleAccess::canUser($actor, 'document_center', 'system_admin');
             if ($mode === 'original'
+                && ! $canManageDocuments
                 && ($quotation->creator_user_id
                     ? (int) $quotation->creator_user_id !== (int) $actor->id
                     : $quotation->created_by !== $actor->username)) {
@@ -225,10 +226,17 @@ final class QuotationDocumentEditor
             $price = round((float) $item['unit_price'], 2);
             $discount = round((float) $item['discount'], 2);
             $before = round($quantity * $price, 2);
-            if ($sku === '' || $quantity < 1 || floor($quantity) !== $quantity || $discount > $before) {
-                throw ValidationException::withMessages(['items' => 'กรุณาเลือกรหัสสินค้า ระบุจำนวนเต็มมากกว่า 0 และตรวจส่วนลดไม่ให้เกินราคา']);
-            }
             $old = $billItem ?? $quotationItem;
+            $rowNumber = $index + 1;
+            if ($sku === '' && ! $old) {
+                throw ValidationException::withMessages(["items.{$index}.sku" => "รายการที่ {$rowNumber}: กรุณาเลือกสินค้าจาก Master Product"]);
+            }
+            if ($quantity < 1 || floor($quantity) !== $quantity) {
+                throw ValidationException::withMessages(["items.{$index}.quantity" => "รายการที่ {$rowNumber}: จำนวนต้องเป็นจำนวนเต็มมากกว่า 0"]);
+            }
+            if ($discount > $before) {
+                throw ValidationException::withMessages(["items.{$index}.discount" => "รายการที่ {$rowNumber}: ส่วนลดต้องไม่เกินราคารวมของรายการ"]);
+            }
             $unit = trim((string) $item['unit']) ?: 'ชิ้น';
             $changes = $changes || ! $old || $sku !== (string) $old->main_category
                 || $quantity !== (float) $old->quantity || $price !== (float) $old->unit_price
@@ -247,19 +255,12 @@ final class QuotationDocumentEditor
         if (! $bill || $bill->status !== 'ฉบับร่าง') {
             throw ValidationException::withMessages(['items' => 'แก้จำนวน ราคา ส่วนลด หรือเพิ่ม/ลบสินค้าได้เฉพาะใบเสนอราคาที่เป็น Draft ก่อนส่งอนุมัติ']);
         }
-        $codes = collect($rows)->filter(fn (array $row): bool => ! $row['billItem'] || (string) $row['billItem']->main_category !== $row['sku'])
-            ->pluck('sku')->unique()->all();
-        $products = MasterProduct::query()->whereIn('sku_code', $codes)->get(['sku_code', 'sku_name'])->keyBy('sku_code');
-        if ($products->count() !== count($codes)) {
-            throw ValidationException::withMessages(['items' => 'มีรหัสสินค้าไม่อยู่ใน Master Product กรุณาเลือกสินค้าจากรายการ']);
-        }
         $keepBill = [];
         $keepQuotation = [];
         foreach ($rows as $index => $row) {
             $item = $row['item'];
-            $product = $products->get($row['sku']);
             $line = [
-                'main_category' => $row['sku'], 'sub_category' => $product?->sku_name ?? $row['billItem']?->sub_category ?? $row['quotationItem']?->sub_category,
+                'main_category' => $row['sku'], 'sub_category' => $item['description'],
                 'unit_type' => $row['unit'], 'quantity' => (int) $row['quantity'],
                 'unit_price' => $row['price'], 'sale_discount_unit' => $row['discount'],
                 'line_total_before_discount' => $row['before'],
@@ -313,7 +314,7 @@ final class QuotationDocumentEditor
         $date = ($quotation->workflow_type === 'customer_po_direct' ? $quotation->qt_date : ($source->bill_date ?? $quotation->qt_date))?->format('Y-m-d') ?? now()->format('Y-m-d');
         $creatorId = $quotation->creator_user_id ?? $source->creator_user_id;
         $salesUser = $creatorId ? User::query()->find($creatorId, [
-            'first_name', 'last_name', 'username', 'phone', 'job_title', 'representative_address',
+            'first_name', 'last_name', 'username', 'email', 'phone', 'job_title', 'representative_address',
             'national_id', 'national_id_issued_at', 'national_id_expires_at',
         ]) : null;
         $salesperson = trim((string) ($salesUser?->first_name ?? '').' '.(string) ($salesUser?->last_name ?? ''))
@@ -333,6 +334,11 @@ final class QuotationDocumentEditor
             : ($template === QuotationTemplateCatalog::RAMATHIBODI && $phone !== '' ? 'โทร.'.$phone : '');
         if ($template === QuotationTemplateCatalog::SIRIRAJ_PIYAMAHARAJKARUN) {
             $contact = 'ชื่อผู้แทน และ Client '.$salesperson.($phone !== '' ? ' เบอร์ติดต่อ '.$phone : '');
+        } elseif ($template === QuotationTemplateCatalog::STANDARD) {
+            $email = trim((string) ($salesUser?->email ?? '')) ?: 'valorhealth@valorhealth.co.th';
+            $contact = 'ติดต่อสอบถามเพิ่มเติมได้ที่ คุณ'.$salesperson
+                .($phone !== '' ? ' โทร. '.$phone : '')
+                .', FAX.02-678-8400 E-Mail : '.$email;
         }
 
         return [
@@ -359,6 +365,19 @@ final class QuotationDocumentEditor
                 'contact' => $contact,
                 'confirmation_terms' => 'ลูกค้าลงนามในเอกสารนี้ หรือออก PO ที่อ้างอิงใบเสนอราคา',
                 'document_note' => 'กรุณาตรวจสอบรายการ ราคา เงื่อนไขชำระเงิน และกำหนดส่งก่อนยืนยัน',
+                'summary_gross_label' => '',
+                'summary_gross_value' => '',
+                'summary_discount_label' => '',
+                'summary_discount_value' => '',
+                'summary_net_label' => '',
+                'summary_net_value' => '',
+                'summary_subtotal_label' => '',
+                'summary_subtotal_value' => '',
+                'summary_vat_label' => '',
+                'summary_vat_value' => '',
+                'summary_total_label' => '',
+                'summary_total_value' => '',
+                'summary_amount_words' => '',
             ],
             'customer' => [
                 'code' => (string) ($source->bplus_customer_code ?? ''),
@@ -374,13 +393,29 @@ final class QuotationDocumentEditor
                 'sku' => (string) ($item->main_category ?? ''),
                 'description' => (string) ($item->customer_product_name ?: $item->sub_category),
                 'quantity' => (float) ($item->quantity ?? 0),
+                'quantity_display' => '',
                 'unit' => (string) ($item->unit_type ?? 'ชิ้น'),
                 'pack' => '1 '.((string) ($item->unit_type ?? 'ชิ้น')),
                 'unit_price' => (float) ($item->unit_price ?? 0),
+                'unit_price_display' => '',
                 'discount' => (float) ($item->sale_discount_unit ?? 0),
+                'discount_display' => '',
                 'remark' => '',
                 'origin_details' => $this->templates->exampleOriginDetails($template, (string) ($item->main_category ?? '')),
+                'image' => '',
             ])->all(),
+            'table_layout' => $this->defaultTableLayout($template),
+            'layout' => [
+                'show_summary' => true,
+                'show_customer_details' => true,
+                'show_confirmation_terms' => true,
+                'show_document_note' => true,
+                'show_signatures' => true,
+                'show_company_signature' => true,
+                'show_customer_signature' => true,
+                'title_alignment' => in_array($template, [QuotationTemplateCatalog::STANDARD, QuotationTemplateCatalog::SIRIRAJ], true) ? 'right' : 'center',
+                'logo_alignment' => 'left',
+            ],
             'bill_discount' => (float) ($source->sale_discount_total ?? 0),
             'commercial_baseline' => $quotation->billingRecord ? $this->commercialBaseline($quotation->billingRecord) : '',
             'power_of_attorney' => [
@@ -439,8 +474,14 @@ final class QuotationDocumentEditor
             'number', 'date', 'title', 'english_title', 'company_name', 'company_address', 'company_contact', 'company_tax_id', 'branch',
             'subject', 'recipient', 'intro', 'salesperson', 'signature_role', 'contact',
             'confirmation_terms', 'document_note',
+            'summary_gross_label', 'summary_gross_value', 'summary_discount_label', 'summary_discount_value',
+            'summary_net_label', 'summary_net_value', 'summary_subtotal_label', 'summary_subtotal_value',
+            'summary_vat_label', 'summary_vat_value', 'summary_total_label', 'summary_total_value', 'summary_amount_words',
         ]));
         if ($template === QuotationTemplateCatalog::RAMATHIBODI && trim((string) ($document['contact'] ?? '')) === '') {
+            $document['contact'] = (string) $defaults['document']['contact'];
+        }
+        if ($template === QuotationTemplateCatalog::STANDARD && trim((string) ($document['contact'] ?? '')) === '') {
             $document['contact'] = (string) $defaults['document']['contact'];
         }
         $items = collect($payload['items'] ?? $defaults['items'])->take(100)->values()->map(function (mixed $row, int $index) use ($template): array {
@@ -454,20 +495,26 @@ final class QuotationDocumentEditor
             return [
                 'row_key' => mb_substr((string) ($row['row_key'] ?? 'row-'.($index + 1)), 0, 100),
                 'sku' => $sku,
-                'description' => mb_substr(trim((string) ($row['description'] ?? '')), 0, 2000),
+                'description' => $this->normalizedEditableText($row['description'] ?? '', 2000),
                 'quantity' => max(0, min((float) ($row['quantity'] ?? 0), 1_000_000)),
+                'quantity_display' => $this->normalizedEditableText($row['quantity_display'] ?? '', 2000),
                 'unit' => mb_substr(trim((string) ($row['unit'] ?? '')), 0, 255),
                 'pack' => mb_substr(trim((string) ($row['pack'] ?? '')), 0, 255),
                 'unit_price' => max(0, min((float) ($row['unit_price'] ?? 0), 999_999_999)),
+                'unit_price_display' => $this->normalizedEditableText($row['unit_price_display'] ?? '', 2000),
                 'discount' => max(0, min((float) ($row['discount'] ?? 0), 999_999_999)),
-                'remark' => mb_substr(trim((string) ($row['remark'] ?? '')), 0, 1000),
-                'origin_details' => $originDetails,
+                'discount_display' => $this->normalizedEditableText($row['discount_display'] ?? '', 2000),
+                'remark' => $this->normalizedEditableText($row['remark'] ?? '', 1000),
+                'origin_details' => $this->normalizedEditableText($originDetails, 2000),
+                'image' => $this->normalizedItemImage($row['image'] ?? ''),
             ];
         })->all();
+        $tableLayout = $this->normalizedTableLayout((array) ($payload['table_layout'] ?? $defaults['table_layout']));
+        $layoutInput = (array) ($payload['layout'] ?? []);
         $providedTerms = collect($payload['terms'] ?? [])
             ->take(30)
-            ->map(fn (mixed $term): string => mb_substr(trim((string) $term), 0, 2000))
-            ->filter()
+            ->map(fn (mixed $term): string => $this->normalizedEditableText($term, 2000))
+            ->filter(fn (string $term): bool => trim($term) !== '')
             ->values()
             ->all();
         $terms = array_values($defaults['terms']);
@@ -476,8 +523,10 @@ final class QuotationDocumentEditor
         }
 
         foreach ($document as $key => $value) {
-            $document[$key] = mb_substr(trim((string) $value), 0, $key === 'intro' ? 5000 : 2000);
+            $document[$key] = $this->normalizedEditableText($value, $key === 'intro' ? 5000 : 2000);
         }
+        $document['number'] = $this->normalizedDocumentNumber((string) $document['number'], (string) $defaults['document']['number']);
+        $document['date'] = $this->normalizedDocumentDate((string) $document['date'], (string) $defaults['document']['date']);
 
         $authorizationInput = (array) ($payload['power_of_attorney'] ?? []);
         $authorizationTemplate = (new PowerOfAttorneyTemplateCatalog)->normalize(
@@ -488,9 +537,14 @@ final class QuotationDocumentEditor
         $customer = $defaults['customer'];
         if ($template === QuotationTemplateCatalog::STANDARD) {
             $customerInput = (array) ($payload['customer'] ?? []);
-            foreach (['code', 'billing_address', 'delivery_address', 'tax_id'] as $field) {
+            foreach (['code', 'address', 'billing_address', 'delivery_address', 'tax_id'] as $field) {
                 if (array_key_exists($field, $customerInput)) {
-                    $customer[$field] = mb_substr(trim((string) $customerInput[$field]), 0, $field === 'billing_address' || $field === 'delivery_address' ? 5000 : 255);
+                    $customer[$field] = mb_substr(trim((string) $customerInput[$field]), 0, in_array($field, ['address', 'billing_address', 'delivery_address'], true) ? 5000 : 255);
+                }
+            }
+            foreach (['show_billing_address', 'show_delivery_address'] as $field) {
+                if (array_key_exists($field, $customerInput)) {
+                    $customer[$field] = (bool) $customerInput[$field];
                 }
             }
         }
@@ -504,6 +558,36 @@ final class QuotationDocumentEditor
             'document' => $document,
             'customer' => $customer,
             'items' => $items,
+            'table_layout' => $tableLayout,
+            'layout' => [
+                'show_summary' => array_key_exists('show_summary', $layoutInput)
+                    ? (bool) $layoutInput['show_summary']
+                    : true,
+                'show_customer_details' => array_key_exists('show_customer_details', $layoutInput)
+                    ? (bool) $layoutInput['show_customer_details']
+                    : true,
+                'show_confirmation_terms' => array_key_exists('show_confirmation_terms', $layoutInput)
+                    ? (bool) $layoutInput['show_confirmation_terms']
+                    : true,
+                'show_document_note' => array_key_exists('show_document_note', $layoutInput)
+                    ? (bool) $layoutInput['show_document_note']
+                    : true,
+                'show_signatures' => array_key_exists('show_signatures', $layoutInput)
+                    ? (bool) $layoutInput['show_signatures']
+                    : true,
+                'show_company_signature' => array_key_exists('show_company_signature', $layoutInput)
+                    ? (bool) $layoutInput['show_company_signature']
+                    : (bool) ($layoutInput['show_signatures'] ?? true),
+                'show_customer_signature' => array_key_exists('show_customer_signature', $layoutInput)
+                    ? (bool) $layoutInput['show_customer_signature']
+                    : (bool) ($layoutInput['show_signatures'] ?? true),
+                'title_alignment' => in_array(($layoutInput['title_alignment'] ?? null), ['left', 'center', 'right'], true)
+                    ? (string) $layoutInput['title_alignment']
+                    : (string) $defaults['layout']['title_alignment'],
+                'logo_alignment' => in_array(($layoutInput['logo_alignment'] ?? null), ['left', 'center', 'right'], true)
+                    ? (string) $layoutInput['logo_alignment']
+                    : (string) $defaults['layout']['logo_alignment'],
+            ],
             'bill_discount' => max(0, min((float) ($payload['bill_discount'] ?? $defaults['bill_discount']), 999_999_999)),
             'commercial_baseline' => (string) ($payload['commercial_baseline'] ?? $defaults['commercial_baseline']),
             'power_of_attorney' => [
@@ -552,6 +636,39 @@ final class QuotationDocumentEditor
         return $date && $date->format('Y-m-d') === $value ? $value : $fallback;
     }
 
+    private function normalizedEditableText(mixed $value, int $maximumLength): string
+    {
+        $text = str_replace(["\r\n", "\r", "\u{00A0}", "\t"], ["\n", "\n", ' ', '    '], (string) $value);
+        // Browsers may serialize an empty contenteditable line as "\n \n".
+        // Normalize those invisible whitespace-only lines so HTML preview and
+        // Dompdf receive exactly the same visible line structure.
+        $text = preg_replace('/\n[ \t]*\n+/u', "\n", $text) ?? $text;
+        $text = preg_replace('/\A(?:[ \t]*\n)+|(?:\n[ \t]*)+\z/u', '', $text) ?? $text;
+
+        return mb_substr($text, 0, $maximumLength);
+    }
+
+    private function normalizedDocumentNumber(string $value, string $fallback): string
+    {
+        $number = trim((string) preg_replace('/^เลขที่\s*/u', '', trim($value)));
+
+        return $number !== '' ? mb_substr($number, 0, 2000) : $fallback;
+    }
+
+    private function normalizedDocumentDate(string $value, string $fallback): string
+    {
+        $value = trim((string) preg_replace('/^วันที่\s*/u', '', trim($value)));
+        $value = str_replace('/', '-', $value);
+        foreach (['!Y-m-d', '!d-m-Y'] as $format) {
+            $date = \DateTimeImmutable::createFromFormat($format, $value);
+            if ($date !== false && $date->format(substr($format, 1)) === $value) {
+                return $date->format('Y-m-d');
+            }
+        }
+
+        return $fallback;
+    }
+
     private function normalizedOptionalDate(string $value): string
     {
         if ($value === '') {
@@ -560,6 +677,86 @@ final class QuotationDocumentEditor
         $date = \DateTimeImmutable::createFromFormat('!Y-m-d', $value);
 
         return $date && $date->format('Y-m-d') === $value ? $value : '';
+    }
+
+    /** @param array<int, mixed> $columns
+     * @return array<int, array{id: string, field: string, label: string, width: float, align: string}>
+     */
+    private function normalizedTableLayout(array $columns): array
+    {
+        $allowedFields = ['sequence', 'sku', 'description', 'quantity', 'unit', 'pack', 'unit_price', 'discount', 'amount', 'remark', 'origin_details'];
+        $allowedAlignments = ['left', 'center', 'right'];
+        $normalized = collect($columns)->take(12)->map(function (mixed $column, int $index) use ($allowedFields, $allowedAlignments): ?array {
+            $column = (array) $column;
+            $field = (string) ($column['field'] ?? '');
+            if (! in_array($field, $allowedFields, true)) {
+                return null;
+            }
+
+            return [
+                'id' => mb_substr(preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($column['id'] ?? $field.'-'.$index)) ?: $field.'-'.$index, 0, 64),
+                'field' => $field,
+                'label' => mb_substr(trim((string) ($column['label'] ?? $field)), 0, 255),
+                'width' => max(5, min((float) ($column['width'] ?? 10), 60)),
+                'align' => in_array((string) ($column['align'] ?? ''), $allowedAlignments, true) ? (string) $column['align'] : 'left',
+            ];
+        })->filter()->values()->all();
+
+        return $normalized !== [] ? $normalized : [['id' => 'description', 'field' => 'description', 'label' => 'รายการ', 'width' => 100, 'align' => 'left']];
+    }
+
+    private function normalizedItemImage(mixed $value): string
+    {
+        $value = trim((string) $value);
+        if ($value === '' || strlen($value) > 2_000_000 || preg_match('#^data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$#', $value) !== 1) {
+            return '';
+        }
+
+        $encoded = substr($value, strpos($value, ',') + 1);
+        $decoded = base64_decode($encoded, true);
+
+        return $decoded !== false && strlen($decoded) <= 1_500_000 ? $value : '';
+    }
+
+    /** @return array<int, array{id: string, field: string, label: string, width: float, align: string}> */
+    private function defaultTableLayout(string $template): array
+    {
+        $layouts = [
+            QuotationTemplateCatalog::SIRIRAJ => [
+                ['sequence', 'ลำดับ', 8, 'center'], ['sku', 'รหัสเวชภัณฑ์', 14, 'center'], ['description', 'ชื่อเวชภัณฑ์', 34, 'left'],
+                ['pack', 'จำนวนและขนาดบรรจุ', 18, 'center'], ['unit_price', 'ราคาต่อหน่วย / บาท รวมภาษี', 26, 'right'],
+            ],
+            QuotationTemplateCatalog::LUANGPHO_THAWEESAK => [
+                ['sku', "รหัสสินค้า\nPcode", 11, 'center'], ['description', "รายการ\nDescription", 34, 'left'], ['unit', "หน่วย\nUOM", 8, 'center'],
+                ['quantity', "จำนวน\nQuantity", 18, 'right'], ['unit_price', "ราคาต่อหน่วย\nUnit Price", 16, 'right'], ['amount', "จำนวนเงิน\nAmount", 13, 'right'],
+            ],
+            QuotationTemplateCatalog::POLICE_GENERAL => [
+                ['sequence', 'ลำดับ', 9, 'center'], ['sku', 'รหัสสินค้า', 11, 'center'], ['description', 'รายการ', 31, 'left'], ['quantity', 'จำนวน', 7, 'center'],
+                ['unit', 'หน่วย', 8, 'center'], ['unit_price', 'รวม VAT', 17, 'right'], ['amount', 'รวม VAT', 17, 'right'],
+            ],
+            QuotationTemplateCatalog::CHAROENKRUNG_PRACHARAK => [
+                ['sequence', 'ลำดับ', 6, 'center'], ['sku', 'รหัสสินค้า', 12, 'center'], ['description', 'รายการครุภัณฑ์', 42, 'left'],
+                ['quantity', 'จำนวน', 9, 'center'], ['unit', 'หน่วยนับ', 10, 'center'], ['unit_price', "ราคาต่อหน่วย\n(รวมภาษีมูลค่าเพิ่ม)", 21, 'right'],
+            ],
+            QuotationTemplateCatalog::RAMATHIBODI => [
+                ['sequence', 'ลำดับ', 7, 'center'], ['sku', 'รหัสสินค้า', 12, 'center'], ['description', 'รายละเอียด', 42, 'left'],
+                ['unit', 'ลักษณะนาม', 10, 'center'], ['unit_price', "ราคาที่เสนอ\n(ราคารวม VAT 7% แล้ว)", 19, 'right'], ['remark', 'หมายเหตุ', 10, 'center'],
+            ],
+            QuotationTemplateCatalog::SIRIRAJ_PIYAMAHARAJKARUN => [
+                ['sequence', 'ลำดับที่', 7, 'center'], ['sku', 'รหัส SAP', 13, 'center'], ['description', 'รายการเวชภัณฑ์', 33, 'left'], ['quantity', 'จำนวน', 7, 'center'],
+                ['unit', "หน่วย\nสั่งซื้อ", 9, 'center'], ['pack', 'ขนาดบรรจุ', 10, 'center'], ['unit_price', "ราคาต่อ\nหน่วยรวม", 11, 'right'], ['amount', "จำนวน\nเงินรวม", 10, 'right'],
+            ],
+            QuotationTemplateCatalog::STANDARD => [
+                ['sku', "รหัสสินค้า\nProduct ID", 13, 'left'], ['description', "รายการ\nDescription", 35, 'left'], ['quantity', "จำนวน\nQuantity", 8, 'right'],
+                ['unit_price', "ราคาต่อหน่วย\nUnit Price", 13, 'right'], ['discount', "ส่วนลด\nDiscount", 11, 'right'], ['amount', "จำนวนเงิน\nAmount (Baht)", 20, 'right'],
+            ],
+        ];
+
+        return collect($layouts[$template] ?? $layouts[QuotationTemplateCatalog::STANDARD])
+            ->map(fn (array $column): array => [
+                'id' => $column[0].'-'.substr(hash('sha1', $template.'-'.$column[0].'-'.$column[1]), 0, 8),
+                'field' => $column[0], 'label' => $column[1], 'width' => $column[2], 'align' => $column[3],
+            ])->all();
     }
 
     private function commercialBaseline(BillingRecord $bill): string
