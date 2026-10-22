@@ -28,6 +28,9 @@ const error = ref('')
 const message = ref('')
 const evidenceTypes = reactive<Record<number, 'signed_quotation' | 'customer_po'>>({})
 const evidenceFiles = reactive<Record<number, File | null>>({})
+const poNumberDialog = ref<Quotation | null>(null)
+const poNumber = ref('')
+const evidenceUploading = ref(false)
 const blockedStatuses = ['ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอแก้ไข']
 async function loadQuotes(page = 1) {
   const response = await api.get<Paginated<Quotation>>('/api/v1/quotations', { params: { page, search: search.value || undefined, per_page: preferredRowsPerPage(25) } })
@@ -171,22 +174,44 @@ function selectEvidenceFile(qt: Quotation, event: Event) {
   evidenceTypes[qt.qt_id] ||= 'signed_quotation'
 }
 async function uploadCustomerEvidence(qt: Quotation) {
+  if (evidenceTypes[qt.qt_id] === 'customer_po') {
+    poNumber.value = String(qt.billing_record?.customer_po_no || qt.customer_po_no || '')
+    poNumberDialog.value = qt
+    return
+  }
+  await storeCustomerEvidence(qt)
+}
+async function storeCustomerEvidence(qt: Quotation, customerPoNumber = '') {
   const billId = qt.billing_record?.bill_id
   const file = evidenceFiles[qt.qt_id]
   if (!billId || !file) return
+  if (evidenceTypes[qt.qt_id] === 'customer_po' && !customerPoNumber.trim()) {
+    error.value = 'กรุณาระบุเลขที่ใบ PO ของลูกค้า'
+    return
+  }
   error.value = ''
   message.value = ''
+  evidenceUploading.value = true
   try {
     const data = new FormData()
     data.append('file', file)
+    if (evidenceTypes[qt.qt_id] === 'customer_po') data.append('customer_po_no', customerPoNumber.trim())
     const endpoint = evidenceTypes[qt.qt_id] === 'customer_po' ? 'purchase-order' : 'signed-quotation'
     await api.post(`/api/v1/bills/${billId}/${endpoint}`, data)
     message.value = 'เก็บหลักฐานต้นฉบับพร้อม SHA-256 และส่งรายการต่อ Admin แล้ว'
     evidenceFiles[qt.qt_id] = null
+    poNumberDialog.value = null
+    poNumber.value = ''
     await loadQuotes(quotations.value?.current_page || 1)
   } catch (cause) {
     error.value = apiError(cause)
+  } finally {
+    evidenceUploading.value = false
   }
+}
+async function confirmPoEvidence() {
+  if (!poNumberDialog.value || !poNumber.value.trim()) return
+  await storeCustomerEvidence(poNumberDialog.value, poNumber.value)
 }
 function billPdf(bill: BillingRecord, mode: 'original' | 'copy' | 'canceled' = 'original') {
   const query = mode === 'copy' ? '?copy=1' : mode === 'canceled' ? '?canceled=1' : ''
@@ -318,6 +343,7 @@ onBeforeUnmount(() => {
     </section>
 
     <QuotationDownloadDialog v-if="quotationDownload" :quotation-id="quotationDownload.id" :bill-id="quotationDownload.billId" :mode="quotationDownload.mode" @close="closeQuotationDialog" />
+    <Teleport to="body"><div v-if="poNumberDialog" class="po-number-overlay" @click.self="!evidenceUploading && (poNumberDialog = null)"><form class="po-number-dialog" role="dialog" aria-modal="true" aria-labelledby="po-number-title" @submit.prevent="confirmPoEvidence"><header><div><strong id="po-number-title">ยืนยันด้วย PO ของลูกค้า</strong><small>กรอกเลขที่ PO ก่อนจัดเก็บไฟล์หลักฐานและส่งรายการต่อ Admin</small></div><button class="secondary-button" type="button" :disabled="evidenceUploading" @click="poNumberDialog = null">ปิด</button></header><label><span>เลขที่ใบ PO ของลูกค้า *</span><input v-model="poNumber" maxlength="255" autocomplete="off" autofocus required placeholder="เช่น PO-2026-00123"></label><footer><button class="secondary-button" type="button" :disabled="evidenceUploading" @click="poNumberDialog = null">ยกเลิก</button><button class="primary-button" type="submit" :disabled="evidenceUploading || !poNumber.trim()">{{ evidenceUploading ? 'กำลังบันทึก…' : 'ยืนยันและส่งหลักฐาน' }}</button></footer></form></div></Teleport>
     <Teleport to="body"><div v-if="authorizationPreview" class="authorization-preview-overlay" @click.self="closeAuthorizationPreview"><section class="authorization-preview-dialog" role="dialog" aria-modal="true" aria-label="ตัวอย่างหนังสือมอบอำนาจ"><header><strong>ตัวอย่างหนังสือมอบอำนาจ</strong><button class="secondary-button" type="button" @click="closeAuthorizationPreview">ปิด</button></header><iframe :src="authorizationPreview" title="ตัวอย่างหนังสือมอบอำนาจ"></iframe></section></div></Teleport>
   </AppShell>
 </template>
@@ -329,6 +355,9 @@ onBeforeUnmount(() => {
 .document-download-options { display: grid; gap: 6px; padding-top: 8px; }
 .document-download-options button { text-align: left; }
 .po-document-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.po-number-overlay{position:fixed;inset:0;z-index:2300;display:grid;place-items:center;padding:18px;background:rgba(15,23,42,.68)}
+.po-number-dialog{display:grid;gap:18px;width:min(520px,100%);padding:22px;border-radius:14px;background:#fff;box-shadow:0 24px 80px rgba(0,0,0,.3)}
+.po-number-dialog header,.po-number-dialog footer{display:flex;align-items:center;justify-content:space-between;gap:12px}.po-number-dialog header div,.po-number-dialog label{display:grid;gap:5px}.po-number-dialog header strong{font-size:20px}.po-number-dialog header small{color:#64748b}.po-number-dialog input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px}.po-number-dialog footer{justify-content:flex-end}
 .authorization-preview-overlay{position:fixed;inset:0;z-index:2200;display:grid;place-items:center;padding:16px;background:rgba(15,23,42,.72)}
 .authorization-preview-dialog{display:grid;grid-template-rows:auto minmax(0,1fr);width:min(940px,96vw);height:min(95vh,1100px);background:#fff;border-radius:12px;overflow:hidden}
 .authorization-preview-dialog header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line)}

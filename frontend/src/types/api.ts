@@ -249,6 +249,7 @@ export interface Quotation {
     bill_date: string | null
     status: string | null
     buyer_name?: string | null
+    customer_po_no?: string | null
     total_amount?: string | null
     internal_approval_exists?: boolean
     customer_acceptance_token?: string | null

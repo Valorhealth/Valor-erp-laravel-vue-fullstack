@@ -39,7 +39,20 @@ final class BillingDocumentController extends Controller
     ): JsonResponse {
         $this->authorizeRead($request, $bill);
         abort_unless(in_array($bill->status, [...BillingWorkflow::SALE_EDITABLE_STATUSES, 'รอลูกค้ายืนยัน'], true), 422, 'แนบหลักฐานได้เฉพาะ Draft รายการตีกลับ หรือรายการที่รอลูกค้ายืนยัน');
-        $file = $request->validate(['file' => ['required', 'file', 'max:10240', "mimes:{$mimes}"]])['file'];
+        $rules = ['file' => ['required', 'file', 'max:10240', "mimes:{$mimes}"]];
+        if ($documentType === 'customer_po') {
+            $rules['customer_po_no'] = ['required', 'string', 'max:255', 'regex:/^[^\x00-\x1F\x7F]+$/u'];
+        }
+        $data = $request->validate($rules);
+        $file = $data['file'];
+
+        if ($documentType === 'customer_po') {
+            $customerPoNumber = trim((string) $data['customer_po_no']);
+            $bill->forceFill(['customer_po_no' => $customerPoNumber])->save();
+            if ($bill->ref_qt_id) {
+                Quotation::query()->whereKey($bill->ref_qt_id)->update(['customer_po_no' => $customerPoNumber]);
+            }
+        }
         $document = $storage->storeUpload($bill, $documentType, $file, $request->user()->username);
 
         if ($bill->status === 'รอลูกค้ายืนยัน') {
