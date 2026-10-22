@@ -659,6 +659,7 @@ async function submitQuotation() {
       try {
         const document = new FormData();
         document.append("file", purchaseOrderFile.value);
+        document.append("customer_po_no", form.customer_po_no.trim());
         await api.post(`/api/v1/bills/${billId}/purchase-order`, document);
       } catch (cause) {
         uploadWarning = ` แต่ไฟล์ PO ยังไม่ถูกแนบ (${apiError(cause)}) กรุณาแนบซ้ำในหน้าแก้ Draft`;
@@ -710,6 +711,10 @@ async function submitPurchaseOrderDirect() {
       address_note: billingAddress,
       billing_address: billingAddress,
       delivery_address: deliveryAddress,
+      billing_address_id: form.billing_address_id,
+      delivery_address_id: form.delivery_address_id,
+      standard_show_billing_address: form.standard_show_billing_address ? 1 : 0,
+      standard_show_delivery_address: form.standard_show_delivery_address ? 1 : 0,
       shipping_type: form.shipping_type,
       shipping_text: form.shipping_text,
       bill_note: form.bill_note,
