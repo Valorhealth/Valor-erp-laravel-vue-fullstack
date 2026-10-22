@@ -21,8 +21,10 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use ZipArchive;
 
 class BillingWorkflowController extends Controller
 {
@@ -346,7 +348,7 @@ class BillingWorkflowController extends Controller
     public function readyForExport(): JsonResponse
     {
         return response()->json(['data' => BillingRecord::query()
-            ->with(['items', 'creator:id,username,first_name,last_name,phone,department'])
+            ->with(['items', 'documents', 'creator:id,username,first_name,last_name,phone,department'])
             ->whereIn('status', self::EXPORTABLE_STATUSES)
             ->orderBy('bill_id')
             ->get()]);
@@ -422,6 +424,78 @@ class BillingWorkflowController extends Controller
             'Content-Type' => 'application/pdf',
             'Content-Disposition' => $documents->attachmentDisposition('Quotations_'.now()->format('Y-m-d_His').'.pdf'),
         ]);
+    }
+
+    public function exportPurchaseOrders(Request $request): mixed
+    {
+        $data = $request->validate([
+            'bill_ids' => ['required', 'array', 'min:1', 'max:100'],
+            'bill_ids.*' => ['required', 'integer', 'distinct'],
+        ]);
+        $ids = $data['bill_ids'];
+        $bills = BillingRecord::query()
+            ->whereIn('status', self::EXPORTABLE_STATUSES)
+            ->whereIn('bill_id', $ids)
+            ->orderBy('bill_id')
+            ->get(['bill_id', 'customer_po_no']);
+        abort_if($bills->count() !== count($ids), 422, 'พบบิลที่ไม่อยู่ในสถานะพร้อม Export');
+
+        $documentsByBill = DB::table('billing_documents')
+            ->select(['bill_id', 'doc_id as document_id', 'version_no', 'file_name', 'mime_type'])
+            ->selectRaw("encode(file_bytes, 'base64') as encoded")
+            ->where('document_type', 'customer_po')
+            ->where('is_current', true)
+            ->whereIn('bill_id', $ids)
+            ->orderBy('bill_id')
+            ->orderByDesc('version_no')
+            ->orderByDesc('doc_id')
+            ->get()
+            ->unique('bill_id')
+            ->keyBy('bill_id');
+
+        $missing = $bills->reject(fn (BillingRecord $bill): bool => $documentsByBill->has($bill->bill_id))->pluck('bill_id');
+        abort_if($missing->isNotEmpty(), 422, 'Bill #'.$missing->implode(', #').' ยังไม่มีไฟล์ PO ให้ Export');
+
+        $temporaryPath = tempnam(sys_get_temp_dir(), 'valor-po-export-');
+        abort_if($temporaryPath === false, 500, 'ไม่สามารถเตรียมไฟล์ Export PO ได้');
+
+        $zip = new ZipArchive;
+        try {
+            abort_if($zip->open($temporaryPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true, 500, 'ไม่สามารถสร้างไฟล์ Export PO ได้');
+            foreach ($bills as $bill) {
+                $document = $documentsByBill->get($bill->bill_id);
+                $bytes = base64_decode((string) $document->encoded, true);
+                abort_if($bytes === false, 500, "ไฟล์ PO ของ Bill #{$bill->bill_id} ไม่สมบูรณ์");
+                $originalName = Str::of((string) $document->file_name)->replace(['\\', '/'], '_')->trim()->value();
+                $safeName = $originalName !== '' ? $originalName : 'purchase-order.bin';
+                $poNumber = Str::of((string) ($bill->customer_po_no ?: 'no-po-number'))
+                    ->replaceMatches('/[^\pL\pN._-]+/u', '_')->trim('_')->limit(80, '')->value();
+                $entryName = sprintf('Bill-%d_PO-%s_%s', $bill->bill_id, $poNumber ?: 'no-po-number', $safeName);
+                abort_unless($zip->addFromString($entryName, $bytes), 500, "ไม่สามารถเพิ่มไฟล์ PO ของ Bill #{$bill->bill_id} ได้");
+            }
+            abort_unless($zip->close(), 500, 'ไม่สามารถปิดไฟล์ Export PO ได้');
+        } catch (\Throwable $exception) {
+            if (file_exists($temporaryPath)) {
+                @unlink($temporaryPath);
+            }
+            throw $exception;
+        }
+
+        $request->attributes->set('document_audit', [
+            'type' => 'purchase_order_batch',
+            'documents' => $bills->map(fn (BillingRecord $bill) => [
+                'bill_id' => $bill->bill_id,
+                'customer_po_no' => $bill->customer_po_no,
+                'document_id' => $documentsByBill->get($bill->bill_id)->document_id,
+                'file_version' => $documentsByBill->get($bill->bill_id)->version_no,
+            ])->all(),
+        ]);
+
+        return response()->download(
+            $temporaryPath,
+            'Purchase_Orders_'.now()->format('Y-m-d_His').'.zip',
+            ['Content-Type' => 'application/zip']
+        )->deleteFileAfterSend(true);
     }
 
     public function pdf(Request $request, BillingRecord $bill, DocumentService $documents): mixed

@@ -40,6 +40,7 @@ final class AuditLogger
         'BillingWorkflowController@completeAll' => ['bill.complete_all', 'จัดเตรียมบิล', 'ปิดงานบิลทั้งหมด'],
         'BillingWorkflowController@export' => ['bill.export', 'เอกสาร', 'ส่งออกข้อมูลบิล'],
         'BillingWorkflowController@exportQuotationsPdf' => ['quotation.batch_export', 'เอกสาร', 'ส่งออกใบเสนอราคาหลายฉบับเป็น PDF เดียว'],
+        'BillingWorkflowController@exportPurchaseOrders' => ['purchase_order.batch_export', 'เอกสาร', 'ส่งออกใบ PO หลายฉบับเป็น ZIP'],
         'BillingWorkflowController@pdf' => ['bill.print', 'เอกสาร', 'ดาวน์โหลดเอกสารบิล'],
         'BillingWorkflowController@cancel' => ['bill.cancel', 'บิล', 'ยกเลิกบิลโดยเก็บเอกสารเดิม'],
         'BillingDocumentController@store' => ['bill.purchase_order_upload', 'เอกสาร', 'แนบหรือเปลี่ยนไฟล์ PO ลูกค้า'],

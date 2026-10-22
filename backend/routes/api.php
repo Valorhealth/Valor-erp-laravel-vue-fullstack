@@ -166,6 +166,7 @@ Route::prefix('v1')->middleware('web')->group(function (): void {
         Route::get('/my-document-preparation-status', [DocumentPreparationController::class, 'mine'])->middleware('ability:my_document_preparation_status');
         Route::post('/bills/export', [BillingWorkflowController::class, 'export'])->middleware('ability:system_admin');
         Route::post('/bills/export-quotations.pdf', [BillingWorkflowController::class, 'exportQuotationsPdf'])->middleware('ability:system_admin');
+        Route::post('/bills/export-purchase-orders.zip', [BillingWorkflowController::class, 'exportPurchaseOrders'])->middleware('ability:system_admin');
         Route::post('/bills/{bill}/quotation-from-po', [QuotationController::class, 'fromPurchaseOrder'])
             ->middleware('ability:sales_documents,document_center,approve_bills');
         Route::post('/bills/complete-all', [BillingWorkflowController::class, 'completeAll'])->middleware('ability:system_admin');

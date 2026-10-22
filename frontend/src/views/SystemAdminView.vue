@@ -25,6 +25,7 @@ const statusSaving = ref(false)
 const persistedStatus = ref('')
 const selectedExportIds = ref<number[]>([])
 const expandedReadyBillId = ref<number | null>(null)
+const exportingPurchaseOrders = ref(false)
 
 const statuses = ['ฉบับร่าง', 'รออนุมัติ', 'รอหัวหน้าอนุมัติ', 'รอลูกค้ายืนยัน', 'รอแอดมินส่งออก', 'รอแก้ไข', 'อนุมัติแล้ว', 'ดำเนินการเสร็จสิ้น', 'ไม่อนุมัติ', 'ยกเลิกบิล']
 const editableFields = [
@@ -64,6 +65,8 @@ const allReadySelected = computed({
 })
 const selectedReadyBills = computed(() => ready.value.filter((bill) => selectedExportIds.value.includes(bill.bill_id)))
 const canExportQuotationPdf = computed(() => selectedReadyBills.value.length > 0 && selectedReadyBills.value.every((bill) => Boolean(bill.ref_qt_id)))
+const billsWithoutPurchaseOrder = computed(() => selectedReadyBills.value.filter((bill) => !bill.documents?.some((document) => document.document_type === 'customer_po')))
+const canExportPurchaseOrders = computed(() => selectedReadyBills.value.length > 0 && billsWithoutPurchaseOrder.value.length === 0)
 
 function hasBillDetails(bill: BillingRecord): boolean {
   return [
@@ -129,6 +132,22 @@ async function exportQuotationsPdf() {
       bill_ids: selectedExportIds.value,
     }, true)
   } catch (cause) { error.value = apiError(cause, 'Export PDF ใบเสนอราคาไม่สำเร็จ') }
+}
+
+async function exportPurchaseOrders() {
+  if (!canExportPurchaseOrders.value) {
+    const billNumbers = billsWithoutPurchaseOrder.value.map((bill) => `#${bill.bill_id}`).join(', ')
+    error.value = `รายการ ${billNumbers} ยังไม่มีไฟล์ PO กรุณาเลือกเฉพาะบิลที่มี PO`
+    return
+  }
+  exportingPurchaseOrders.value = true
+  error.value = ''
+  try {
+    await downloadFile('/api/v1/bills/export-purchase-orders.zip', `Purchase_Orders_${todayIso()}.zip`, 'post', {
+      bill_ids: selectedExportIds.value,
+    }, true)
+  } catch (cause) { error.value = apiError(cause, 'Export ใบ PO ไม่สำเร็จ') }
+  finally { exportingPurchaseOrders.value = false }
 }
 
 async function complete(id: number) {
@@ -209,7 +228,7 @@ onMounted(() => load(1))
         <article class="metric-card"><span>รายการสินค้า</span><strong>{{ ready.reduce((sum, bill) => sum + (bill.items?.length || 0), 0) }}</strong></article>
       </div>
       <section class="content-card">
-        <div class="section-heading"><div><h2>Bplus Import Center</h2><p class="muted">เลือกบิลหนึ่งหรือหลายใบ แล้ว Export Excel หรือรวมใบเสนอราคาเป็น PDF เดียว</p><p v-if="selectedExportIds.length && !canExportQuotationPdf" class="form-hint">รายการที่สร้างจาก PO โดยตรงไม่มีใบเสนอราคา จึง Export ได้เฉพาะ Excel</p></div><div class="actions"><button class="secondary-button" :disabled="!selectedExportIds.length" @click="exportBills">Export Excel ({{ selectedExportIds.length }})</button><button class="secondary-button" :disabled="!canExportQuotationPdf" title="ใช้ได้เฉพาะบิลที่สร้างจากใบเสนอราคา" @click="exportQuotationsPdf">Export PDF ใบเสนอราคา ({{ selectedExportIds.length }})</button><button class="primary-button" :disabled="!ready.length" @click="completeAll">ปิดงานทั้งหมด</button></div></div>
+        <div class="section-heading"><div><h2>Bplus Import Center</h2><p class="muted">เลือกบิลหนึ่งหรือหลายใบ แล้ว Export Excel, ใบเสนอราคา PDF หรือไฟล์ PO ต้นฉบับ</p><p v-if="selectedExportIds.length && !canExportQuotationPdf" class="form-hint">รายการที่สร้างจาก PO โดยตรงไม่มีใบเสนอราคา จึง Export PDF ใบเสนอราคาไม่ได้</p><p v-if="selectedExportIds.length && !canExportPurchaseOrders" class="form-hint">Bill {{ billsWithoutPurchaseOrder.map(bill => `#${bill.bill_id}`).join(', ') }} ยังไม่มีไฟล์ PO</p></div><div class="actions"><button class="secondary-button" :disabled="!selectedExportIds.length" @click="exportBills">Export Excel ({{ selectedExportIds.length }})</button><button class="secondary-button" :disabled="!canExportQuotationPdf" title="ใช้ได้เฉพาะบิลที่สร้างจากใบเสนอราคา" @click="exportQuotationsPdf">Export PDF ใบเสนอราคา ({{ selectedExportIds.length }})</button><button class="secondary-button" :disabled="!canExportPurchaseOrders || exportingPurchaseOrders" title="รวมไฟล์ PO ต้นฉบับเป็น ZIP" @click="exportPurchaseOrders">{{ exportingPurchaseOrders ? 'กำลังรวมไฟล์ PO…' : `Export ใบ PO (${selectedExportIds.length})` }}</button><button class="primary-button" :disabled="!ready.length" @click="completeAll">ปิดงานทั้งหมด</button></div></div>
         <div class="table-wrap">
           <table>
             <thead><tr><th><input v-model="allReadySelected" type="checkbox" aria-label="เลือกบิลทั้งหมด"></th><th>Bill</th><th>ลูกค้า</th><th>Sale / แผนก</th><th>ยอดรวม</th><th>สถานะ</th><th>Export ล่าสุด</th><th>จัดการ</th></tr></thead>
