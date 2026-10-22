@@ -87,7 +87,18 @@ final class PowerOfAttorneyService
     public function pdf(QuotationPowerOfAttorneyVersion $authorization, BillingRecord $bill): string
     {
         $draft = base64_decode((string) $authorization->draft_pdf_base64, true);
-        abort_if($draft === false || ! hash_equals((string) $authorization->draft_pdf_sha256, hash('sha256', $draft)), 500, 'ไฟล์หนังสือมอบอำนาจที่จัดเก็บไม่ผ่านการตรวจสอบความถูกต้อง');
+        if ($draft === false || ! hash_equals((string) $authorization->draft_pdf_sha256, hash('sha256', $draft))) {
+            $payload = (array) $authorization->payload;
+            if ($payload === []) {
+                abort(422, 'ข้อมูล Draft หนังสือมอบอำนาจไม่สมบูรณ์ กรุณาเปิดหน้าแก้ไขและบันทึกเอกสารอีกครั้ง');
+            }
+
+            $draft = $this->documents->powerOfAttorneyPdf($payload, '');
+            $authorization->forceFill([
+                'draft_pdf_base64' => base64_encode($draft),
+                'draft_pdf_sha256' => hash('sha256', $draft),
+            ])->save();
+        }
 
         return $draft;
     }
@@ -99,6 +110,7 @@ final class PowerOfAttorneyService
     {
         $bill = $quotation->billingRecord()->firstOrFail();
         $sale = $this->saleFor($quotation);
+
         return [
             'payload' => $this->payloadFromDocument($quotation, $bill, $documentPayload, $sale),
             'sale_signature' => '',

@@ -25,7 +25,7 @@ const legacyQuotationApprovalIntent = 'ข้าพเจ้าได้ตร�
 const poDirectApprovalIntent = 'ข้าพเจ้าได้ตรวจสอบใบสั่งซื้อของลูกค้าและข้อมูลเปิดบิลรายการนี้แล้ว และอนุมัติให้บริษัทดำเนินการตามข้อมูลดังกล่าว'
 const approvalIntent = (bill: BillingRecord) => bill.workflow_type === 'customer_po_direct'
   ? poDirectApprovalIntent
-  : ((bill.submission_document_requirements || []).length ? quotationApprovalIntent : legacyQuotationApprovalIntent)
+  : ((bill.submission_document_requirements || []).includes('power_of_attorney') ? quotationApprovalIntent : legacyQuotationApprovalIntent)
 const canSignQuotation = () => Boolean(auth.user.value?.quotation_signing_authorized)
 const submissionDocumentLabels: Record<string, string> = {
   quotation: 'ใบเสนอราคา', power_of_attorney: 'Draft หนังสือมอบอำนาจ', company_affidavit: 'หนังสือรับรองบริษัท',
