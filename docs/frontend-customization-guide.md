@@ -1,5 +1,7 @@
 # คู่มือแก้หน้าตาเว็บและเอกสาร PDF
 
+> ตรวจทานล่าสุด: 29 ตุลาคม 2569
+
 คู่มือนี้รวมตำแหน่งที่แก้บ่อย เพื่อให้ปรับหน้าตาได้โดยไม่ต้องไล่อ่านทั้งโปรเจกต์
 
 ## เปลี่ยนสีและรูปแบบทั้งเว็บไซต์
@@ -54,6 +56,9 @@
 - `ApprovalsView.vue` หน้า Approve
 - `DashboardView.vue` หน้า Dashboard
 - `PublicTaxView.vue` หน้า Customer Portal
+- `QuotationEditorView.vue` หน้าแก้ไข Draft ใบเสนอราคาและ Preview PDF
+- `DocumentPreparationQueueView.vue` คิวจัดเตรียมเอกสารของ Sale COO/Admin
+- `FibroscanBookingView.vue` ตารางจองและจัดการเครื่อง FibroScan
 
 คลาสที่ใช้แบ่งฟอร์มให้อ่านง่าย:
 
@@ -69,7 +74,7 @@
 
 ## แก้หน้าตา PDF
 
-ไฟล์ `backend/app/Services/Documents/DocumentService.php` รับผิดชอบ PDF และ Excel:
+ไฟล์ `backend/app/Services/Documents/DocumentService.php` รับผิดชอบ PDF/Excel หลัก ส่วน Quotation Editor แยก Renderer และ Snapshot ตามโครงสร้างใน `backend/app/Services/Documents/`:
 
 - เมธอด `billPdf()` เตรียมข้อมูลใบกำกับภาษี
 - เมธอด `quotationPdf()` เตรียมข้อมูลใบเสนอราคา
@@ -77,6 +82,8 @@
 - เมธอด `quotationDownloadName()` และ `billDownloadName()` ตั้งชื่อไฟล์เป็น `ประเภทเอกสาร_ชื่อลูกค้า_วันที่.pdf`
 - เมธอด `documentNumber()` สร้างเลขเอกสาร
 - เมธอด `bplusWorkbook()` สร้าง Excel Bplus
+- Quotation Editor ต้องใช้ payload เดียวกันสำหรับหน้าแก้ไข Preview และ PDF จริง ห้ามเพิ่มการแปลงข้อความ/บรรทัดเฉพาะ Preview เพียงด้านเดียว
+- การแก้ Template ต้องตรวจทั้ง Template มาตรฐานและ Template โรงพยาบาล รวมถึงตำแหน่งโลโก้ หัวเรื่อง รูปสินค้า ตารางสรุปราคา ที่อยู่ และกรอบลายเซ็น
 
 ไฟล์ประกอบ PDF:
 
@@ -105,5 +112,6 @@ API ที่ส่ง PDF อยู่ใน:
 2. รัน `php artisan test` ใน `backend` หลังแก้ PHP
 3. เปิด localhost แล้วทดลองด้วย Role ที่มีสิทธิ์หน้านั้น
 4. ถ้า PDF มีปัญหา ดู `backend/storage/logs/laravel.log`
+5. ทดสอบ Preview เทียบ PDF จริงอย่างน้อยหนึ่งเอกสารต่อ Template ที่แก้ และทดสอบบนจอมือถือเมื่อเกี่ยวกับ Download
 
 อย่าแก้ไฟล์ใน `frontend/node_modules`, `frontend/dist` หรือ `backend/vendor` เพราะถูกสร้างใหม่และการแก้จะหายเมื่ออัปเดต dependencies

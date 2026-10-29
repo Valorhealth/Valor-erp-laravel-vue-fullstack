@@ -1,5 +1,7 @@
 # macOS Browser Compatibility Scope
 
+> Last reviewed: 29 October 2026
+
 ## Supported browsers
 
 - macOS: current Chrome and Edge

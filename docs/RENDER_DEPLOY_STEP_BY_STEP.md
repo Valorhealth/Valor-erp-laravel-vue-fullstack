@@ -1,4 +1,6 @@
-# Deploy Valor ERP ขึ้น Render Free แบบ Step by Step
+# Deploy Valor ERP ขึ้น Render แบบ Step by Step
+
+> ตรวจทานล่าสุด: 29 ตุลาคม 2569
 
 ไฟล์นี้ใช้กับโครงสร้าง `Laravel API + Vue + Python Budget Worker` ใน repository นี้ โดยเก็บฐานข้อมูลใน Supabase PostgreSQL, เก็บไฟล์ Budget ใน Supabase Storage และส่งอีเมลผ่าน Gmail API (HTTPS)
 
@@ -62,7 +64,7 @@ php artisan key:generate --show
 2. เข้า Render Dashboard
 3. กด `New + > Blueprint`
 4. เชื่อม GitHub และเลือก repository นี้
-5. Render จะอ่านไฟล์ `render.yaml` และสร้าง Web Service ชื่อ `valor-erp-laravel-vue`
+5. Render จะอ่านไฟล์ `render.yaml` และสร้าง Web Service ชื่อ `supportsalecoo`
 6. กรอก Secret Environment Variables ที่ Render ถามจากขั้นก่อนหน้า
 7. ใส่ `DB_URL` เป็น Supabase PostgreSQL connection string สำหรับ Server
 8. ใส่ `APP_KEY` จากขั้นที่ 3
@@ -70,6 +72,7 @@ php artisan key:generate --show
 10. ใส่ URL ของเว็บให้ `APP_URL` และ `FRONTEND_URL` เช่น `https://valor-erp-laravel-vue.onrender.com`
 11. ใส่เฉพาะ hostname ให้ `SANCTUM_STATEFUL_DOMAINS` เช่น `valor-erp-laravel-vue.onrender.com`
 12. กด Apply/Deploy และรอ Docker build เสร็จ
+13. หลัง Deploy ให้รัน migration ตามขั้นตอนของ Release และตรวจ GRANT ของตารางใหม่ด้วย `database/schema/supabase_data_api_audit.sql`
 
 ## 5. ตรวจหลัง Deploy
 
@@ -81,6 +84,9 @@ php artisan key:generate --show
 6. อัปโหลด `.xlsx` ที่หน้า Budget Analysis โดยปิด Ollama แล้วตรวจ Progress จนถึง 100%
 7. ตรวจใน Supabase Storage ว่ามีไฟล์ใต้ `budget/USER_ID/ANALYSIS_ID/`
 8. กดดาวน์โหลดผล Excel และเปิดตรวจข้อมูล
+9. ทดสอบ workflow หลักตั้งแต่ Sale สร้าง Draft, Approve อนุมัติ, Sale ยืนยันด้วย PO/เอกสารลูกค้า และ Admin Export Excel/PDF/PO
+10. ทดสอบ Quotation Editor โดยเปรียบเทียบหน้าแก้ไข Preview และ PDF จริง
+11. ตรวจ Backup รอบล่าสุดและยืนยันว่าพื้นที่บริษัทกับ Cloud ได้รับไฟล์ครบ
 
 ## 6. ข้อจำกัด Render Free ที่ต้องรู้
 
@@ -89,3 +95,5 @@ php artisan key:generate --show
 - Ollama ไม่ได้ติดตั้งใน Container; ระบบออนไลน์จะใช้ TF-IDF Vector Search ที่ประหยัด RAM และยังส่งออก Excel รูปแบบเดิม
 - เครื่อง Local ยังคงใช้ Sentence Transformer เดิมได้ด้วย `REDBOOK_EMBEDDING_BACKEND=transformer`
 - หากไฟล์ Excel ใหญ่มากจน RAM 512 MB ไม่พอ ต้องย้าย Budget Worker ไปบริการที่มี RAM มากขึ้น โดยไม่ต้องเปลี่ยนฐานข้อมูลหรือไฟล์ใน Supabase
+
+Production ต้องมี Backup ฐานข้อมูลและ Storage วันละ 2 รอบตาม `docs/BACKUP_AND_RESTORE.md`; การมี Supabase/Render เพียงอย่างเดียวไม่ถือเป็นสำเนานอกระบบ
